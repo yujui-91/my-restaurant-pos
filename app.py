@@ -563,37 +563,90 @@ with tabs[2]:
 # ==========================================
 # Tab 3 & Tab 4 & Tab 5 (微調、盤點、歷史略，維持不變)
 # ==========================================
+# ==========================================
+# Tab 3: 批次庫存調整 (升級：精準計算調整前後差異並寫入審計軌跡)
+# ==========================================
 with tabs[3]:
-    st.subheader("🛠️ 批次庫存調整")
+    st.subheader("🛠️ 批次庫存微調與報廢管理")
     conn = sqlite3.connect('inventory.db')
-    prods_df = pd.read_sql_query("SELECT prod_id, prod_name FROM products WHERE price = 0", conn)
+    prods_df = pd.read_sql_query("SELECT prod_id, prod_name, use_unit FROM products WHERE price = 0", conn)
     conn.close()
+    
     col_a1, col_a2, col_a3 = st.columns(3)
     with col_a1:
         adj_prod = st.selectbox("1. 選擇要調整的商品", prods_df['prod_id'] + " - " + prods_df['prod_name'], key="adj_p")
         ap_id = adj_prod.split(" - ")[0]
+        # 抓出該商品的廚房基本單位
+        matched_prod = prods_df[prods_df['prod_id'] == ap_id].iloc[0]
+        unit_label = matched_prod['use_unit']
+        item_name = matched_prod['prod_name']
+        
     with col_a2:
         conn = sqlite3.connect('inventory.db')
         df_adj_batches = pd.read_sql_query("SELECT batch_id, qty, expiry_date FROM stock_batches WHERE prod_id = ?", conn, params=(ap_id,))
         conn.close()
         if not df_adj_batches.empty:
-            adj_batch_options = df_adj_batches.apply(lambda r: f"批次 {int(r['batch_id'])} (庫存:{r['qty']}, 效期:{r['expiry_date']})", axis=1).tolist()
+            adj_batch_options = df_adj_batches.apply(lambda r: f"批次 {int(r['batch_id'])} (現存庫存:{r['qty']}, 效期:{r['expiry_date']})", axis=1).tolist()
             selected_adj_batch_str = st.selectbox("2. 指定要微調的批次編號", adj_batch_options)
             target_adj_batch_id = int(selected_adj_batch_str.split(" (")[0].replace("批次 ", ""))
         else:
             target_adj_batch_id = None
+            st.warning("⚠️ 該品項目前在後台沒有任何庫存批次可供調整！")
+            
     with col_a3:
-        adj_type = st.selectbox("調整原因", ["商品損壞/打翻", "過期報廢"])
-        adj_qty = st.number_input("調整數量", value=0.0)
+        # 增加「人工補登/其他變多」的選項，讓老闆操作更直覺
+        adj_type = st.selectbox("3. 調整原因/名義", ["商品損壞/打翻 (變少)", "過期報廢 (變少)", "人工補登/廠商多送 (變多)", "其他原因調整"])
+        # 提示老闆：如果是要減少庫存，請輸入負數
+        adj_qty = st.number_input(f"4. 調整數量 (輸入正數為增加，負數為減少，單位: {unit_label})", value=0.0, step=1.0)
+        
     if st.button("確認微調此特定批次庫存"):
-        if target_adj_batch_id and adj_qty != 0:
+        if target_adj_batch_id is None:
+            st.error("❌ 錯誤：沒有可調整的批次！")
+        elif adj_qty == 0:
+            st.error("❌ 錯誤：調整數量不能為 0！")
+        else:
+            # 🟢 1. 先反查該批次在「調整前」的精確數量
             conn = sqlite3.connect('inventory.db')
             cursor = conn.cursor()
-            cursor.execute("UPDATE stock_batches SET qty = qty + ? WHERE batch_id = ?", (adj_qty, target_adj_batch_id))
-            conn.commit()
-            conn.close()
-            st.success("🎉 調整成功！")
-            st.rerun()
+            cursor.execute("SELECT qty, expiry_date FROM stock_batches WHERE batch_id = ?", (target_adj_batch_id,))
+            batch_res = cursor.fetchone()
+            
+            if batch_res:
+                old_qty = float(batch_res[0])
+                expiry_str = batch_res[1]
+                new_qty = old_qty + adj_qty
+                
+                if new_qty < 0:
+                    st.error(f"❌ 錯誤：調整後的庫存量不能為負數！(當前庫存: {old_qty}, 預計扣除: {abs(adj_qty)})")
+                    conn.close()
+                else:
+                    # 🟢 2. 執行資料庫更新
+                    cursor.execute("UPDATE stock_batches SET qty = ? WHERE batch_id = ?", (new_qty, target_adj_batch_id))
+                    
+                    # 防呆：如果調整後數量剛好變為 0，直接刪除該批次以節省空間
+                    if new_qty == 0:
+                        cursor.execute("DELETE FROM stock_batches WHERE batch_id = ?", (target_adj_batch_id,))
+                        
+                    conn.commit()
+                    conn.close()
+                    
+                    # 🟢 3. 自動判斷是變多還是變少，生成對應的文字
+                    direction = "【庫存變多 ➕】" if adj_qty > 0 else "【庫存變少 ➖】"
+                    
+                    # 🟢 4. 強制寫入歷史動作審計軌跡
+                    log_details = (
+                        f"微調特定批次庫存。品項：{item_name}({ap_id}) | 指定批次: {target_adj_batch_id}號 "
+                        f"| 效期: {expiry_str if expiry_str else '無'} | 調整名義: {adj_type} | 變動方向: {direction} "
+                        f"| 調整前數量: {old_qty:,.2f} {unit_label} | 異動量: {adj_qty:+,.2f} {unit_label} " # <-- 修正為 +,.2f
+                        f"| 調整後終點庫存: {new_qty:,.2f} {unit_label}。"
+                            )
+                    log_history(current_user, f"庫存微調-{item_name}", log_details)
+                    
+                    st.success(f"🎉 批次庫存調整成功！已成功紀錄於歷史動作審計軌跡。")
+                    st.rerun()
+            else:
+                st.error("❌ 錯誤：找不到該指定的批次資料！")
+                conn.close()
 
 # ==========================================
 # Tab 4: 存貨盤點 (升級：精準計算盤盈虧並強制寫入審計軌跡)
@@ -657,162 +710,545 @@ with tabs[4]:
     else:
         st.info("💡 目前倉庫沒有任何庫存資料可供盤點。")
 
-with tabs[5]:
-    st.subheader("📜 歷史動作審計軌跡")
-    conn = sqlite3.connect('inventory.db')
-    df_hist = pd.read_sql_query("SELECT timestamp as 時間, user as 操作人, action as 動作, details as 詳細說明 FROM history ORDER BY id DESC", conn)
-    conn.close()
-    st.dataframe(df_hist, use_container_width=True)
+
+
+
+
 
 # ==========================================
-# Tab 6: 財務與綜合損益報告 (升級：新增即時毛利利潤看板、納入帳單)
+# Tab 5: 歷史動作審計軌跡 (升級：獨立時間篩選版)
+# ==========================================
+with tabs[5]:
+
+    st.subheader("📜 歷史動作審計軌跡")
+
+    # -----------------------------
+    # 時間範圍選擇
+    # -----------------------------
+    history_time_option = st.selectbox(
+        "📅 選擇查看時間區間",
+        [
+            "今天",
+            "過去 7 天",
+            "過去 30 天",
+            "指定特定日期"
+        ],
+        key="history_filter"
+    )
+
+    now = datetime.now()
+
+    # -----------------------------
+    # 自動計算起訖時間
+    # -----------------------------
+    if history_time_option == "今天":
+
+        start_dt = now.replace(
+            hour=0,
+            minute=0,
+            second=0
+        )
+
+        end_dt = now.replace(
+            hour=23,
+            minute=59,
+            second=59
+        )
+
+    elif history_time_option == "過去 7 天":
+
+        start_dt = (
+            now - timedelta(days=7)
+        ).replace(
+            hour=0,
+            minute=0,
+            second=0
+        )
+
+        end_dt = now
+
+    elif history_time_option == "過去 30 天":
+
+        start_dt = (
+            now - timedelta(days=30)
+        ).replace(
+            hour=0,
+            minute=0,
+            second=0
+        )
+
+        end_dt = now
+
+    else:
+
+        selected_date = st.date_input(
+            "請選擇日期",
+            value=now.date(),
+            key="history_date"
+        )
+
+        start_dt = datetime.combine(
+            selected_date,
+            datetime.min.time()
+        )
+
+        end_dt = datetime.combine(
+            selected_date,
+            datetime.max.time()
+        )
+
+    start_str = start_dt.strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+
+    end_str = end_dt.strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+
+    st.caption(
+        f"目前查看區間：{start_dt.strftime('%Y-%m-%d')} ～ {end_dt.strftime('%Y-%m-%d')}"
+    )
+
+    # -----------------------------
+    # 查詢歷史資料
+    # -----------------------------
+    conn = sqlite3.connect("inventory.db")
+
+    df_hist = pd.read_sql_query(
+        '''
+        SELECT
+            timestamp AS 時間,
+            user AS 操作人,
+            action AS 動作,
+            details AS 詳細說明
+        FROM history
+        WHERE timestamp BETWEEN ? AND ?
+        ORDER BY id DESC
+        ''',
+        conn,
+        params=(
+            start_str,
+            end_str
+        )
+    )
+
+    conn.close()
+
+    # -----------------------------
+    # 顯示資料
+    # -----------------------------
+    if not df_hist.empty:
+
+        st.metric(
+            "符合條件紀錄數",
+            len(df_hist)
+        )
+
+        st.dataframe(
+            df_hist,
+            use_container_width=True,
+            hide_index=True
+        )
+
+    else:
+
+        st.info(
+            "💡 此時間區間內沒有任何歷史操作紀錄。"
+        )
+
+
+
+# ==========================================
+# Tab 6: 財務與綜合損益報告（完整版）
 # ==========================================
 with tabs[6]:
-    st.subheader("📊 門市商業智能：自訂區間營收與精準損益分析")
-    
-    col_d1, col_d2 = st.columns(2)
-    with col_d1: start_date = st.date_input("選擇統計開始日期", value=datetime.now() - timedelta(days=0)) # 預設今天
-    with col_d2: end_date = st.date_input("選擇統計結束日期", value=datetime.now())
-        
-    if start_date and end_date:
-        start_str = start_date.strftime("%Y-%m-%d 00:00:00")
-        end_str = end_date.strftime("%Y-%m-%d 23:59:59")
-        day_range_str = start_date.strftime("%Y-%m-%d") # 用於撈取入庫日期
-        day_range_end_str = end_date.strftime("%Y-%m-%d")
-        
-        conn = sqlite3.connect('inventory.db')
-        # 1. 撈取區間內所有銷售紀錄
-        df_logs_range = pd.read_sql_query("SELECT details FROM history WHERE action LIKE '餐點收銀結帳-%' AND timestamp BETWEEN ? AND ?", conn, params=(start_str, end_str))
-        # 2. 撈取區間內登記的帳單費用 (C)
-        df_bills_range = pd.read_sql_query('''
-            SELECT p.prod_name, s.qty * p.cost as amount 
-            FROM stock_batches s JOIN products p ON s.prod_id = p.prod_id 
-            WHERE p.prod_id LIKE 'C%' AND s.inbound_date BETWEEN ? AND ?
-        ''', conn, params=(day_range_str, day_range_end_str))
-        conn.close()
-        
-        # 損益核心變數
-        total_revenue = 0.0      # 總營業額
-        total_food_cost = 0.0    # 食材扣料成本
-        material_usage_dict = {}
-        dish_sales_dict = {}
-        
-        # 解析銷售文字紀錄
-        for idx, row in df_logs_range.iterrows():
-            log_text = row['details']
-            
-            # 統計營業額與餐點數量
-            rev_match = re.search(r'總金額 \$(\d+[\.\d]*)', log_text)
-            if rev_match:
-                total_revenue += float(rev_match.group(1))
-                
-            dish_match = re.search(r'前台銷售「(.+?) × (\d+?) 份」', log_text)
-            if dish_match:
-                d_name = dish_match.group(1)
-                d_qty = int(dish_match.group(2))
-                dish_sales_dict[d_name] = dish_sales_dict.get(d_name, 0) + d_qty
-            
-            # 解析食材消耗與計算食材成本
-            matches = re.findall(r'([\u4e00-\u9fa5a-zA-Z0-9_]+)_(R\d+)\(([\d\.]+)([\u4e00-\u9fa5a-zA-Z]+)\)', log_text)
-            conn = sqlite3.connect('inventory.db')
-            for m_name, m_id, m_qty, m_unit in matches:
-                qty_f = float(m_qty)
-                key_lbl = f"{m_name} ({m_unit})"
-                material_usage_dict[key_lbl] = material_usage_dict.get(key_lbl, 0.0) + qty_f
-                
-                # 反查該食材的單位成本
-                cursor = conn.cursor()
-                cursor.execute("SELECT cost FROM products WHERE prod_id = ?", (m_id,))
-                res = cursor.fetchone()
-                if res:
-                    total_food_cost += qty_f * float(res[0])
-            conn.close()
-            
-        # 計算帳單總費用
-        total_bill_expense = float(df_bills_range['amount'].sum()) if not df_bills_range.empty else 0.0
-        # 計算最終純利潤
-        net_profit = total_revenue - total_food_cost - total_bill_expense
-        
-        # 🟢 頂部智能損益看板
-        st.markdown(f"#### 💰 營業損益動態看板 ({start_date} ~ {end_date})")
-        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-        with col_m1:
-            st.metric("🏪 總營業額 (A)", f"${total_revenue:,.0f} 元")
-        with col_m2:
-            st.metric("🥩 產品食材成本 (B)", f"${total_food_cost:,.2f} 元", help="根據銷售份數與配方即時扣料之食材總成本")
-        with col_m3:
-            st.metric("⚡ 帳單費用開銷 (C)", f"${total_bill_expense:,.0f} 元", help="此期間內登記的水電、瓦斯、房租等雜支")
-        with col_m4:
-            # 依利潤正負顯示不同顏色提示
-            if net_profit >= 0:
-                st.metric("🔥 本期淨利潤 (A - B - C)", f"${net_profit:,.2f} 元")
-            else:
-                st.metric("⚠️ 本期淨利潤 (虧損)", f"${net_profit:,.2f} 元")
-                
-        st.markdown("---")
-        
-        # 門市存貨與開銷價值報告
-        st.subheader("📦 門市資產與費用明細報告")
-        conn = sqlite3.connect('inventory.db')
-        
-        # 1. SQL 內將名稱改為純文字：目前數量、累計總價值
-        df_valuation = pd.read_sql_query('''
-            SELECT p.prod_id as 項目編號, 
-                   CASE 
-                     WHEN p.prod_id LIKE 'R%' THEN '食材(R)' 
-                     WHEN p.prod_id LIKE 'S%' THEN '用品(S)' 
-                     ELSE '帳單費用(C)' 
-                   END as 類別,
-                   p.prod_name as 項目名稱, 
-                   SUM(s.qty) as 目前數量, 
-                   p.cost as 單位成本, 
-                   SUM(s.qty * p.cost) as 累計總價值
-            FROM stock_batches s JOIN products p ON s.prod_id = p.prod_id 
-            WHERE p.price = 0 GROUP BY s.prod_id
-        ''', conn)
-        conn.close()
-        
-        if not df_valuation.empty:
-            # 2. 在 Python 裡面把欄位名稱修正回你希望呈現的畫面（加上斜線）
-            df_valuation = df_valuation.rename(columns={
-                "目前數量": "目前數量/次數",
-                "累計總價值": "累計總價值/金額"
-            })
-            
-            # 3. 拆分表格展示，保持即時庫存清單乾淨
-            df_assets = df_valuation[df_valuation['項目編號'].str.startswith(('R', 'S'))]
-            df_bills = df_valuation[df_valuation['項目編號'].str.startswith('C')]
-            
-            tab_asset1, tab_asset2 = st.tabs(["🛒 庫存資產價值 (食材/用品)", "🧾 歷史帳單報銷總計 (C)"])
-            with tab_asset1:
-                st.dataframe(df_assets, use_container_width=True)
-                st.metric("倉庫壓金總資產成本", f"${df_assets['累計總價值/金額'].sum():,.2f}")
-            with tab_asset2:
-                st.dataframe(df_bills, use_container_width=True)
-                st.metric("歷史累計帳單總支出", f"${df_bills['累計總價值/金額'].sum():,.2f}")
 
-        # 下方維持你原有的圓餅圖與餐點銷量大盤點
-        st.markdown("---")
-        col_report1, col_report2 = st.columns(2)
-        with col_report1:
-            st.markdown(f"##### 🍩 食材消耗佔比圓餅圖")
-            if material_usage_dict:
-                df_pie = pd.DataFrame(list(material_usage_dict.items()), columns=["食材項目", "消耗總量"])
-                st.vega_lite_chart(df_pie, {
-                    'mark': {'type': 'arc', 'innerRadius': 40, 'tooltip': True},
-                    'encoding': {
-                        'theta': {'field': '消耗總量', 'type': 'quantitative'},
-                        'color': {'field': '食材項目', 'type': 'nominal'}
+    st.subheader("📊 門市商業智能：營收、成本與損益分析")
+
+    # ==========================
+    # 時間區間
+    # ==========================
+    report_option = st.selectbox(
+        "📅 選擇統計區間",
+        [
+            "今天",
+            "過去 7 天",
+            "過去 30 天",
+            "自訂日期區間"
+        ],
+        key="finance_time"
+    )
+
+    now = datetime.now()
+
+    if report_option == "今天":
+
+        start_date = now.date()
+        end_date = now.date()
+
+    elif report_option == "過去 7 天":
+
+        start_date = (
+            now - timedelta(days=7)
+        ).date()
+
+        end_date = now.date()
+
+    elif report_option == "過去 30 天":
+
+        start_date = (
+            now - timedelta(days=30)
+        ).date()
+
+        end_date = now.date()
+
+    else:
+
+        c1, c2 = st.columns(2)
+
+        with c1:
+            start_date = st.date_input(
+                "開始日期",
+                value=now.date(),
+                key="finance_start"
+            )
+
+        with c2:
+            end_date = st.date_input(
+                "結束日期",
+                value=now.date(),
+                key="finance_end"
+            )
+
+    start_str = datetime.combine(
+        start_date,
+        datetime.min.time()
+    ).strftime("%Y-%m-%d %H:%M:%S")
+
+    end_str = datetime.combine(
+        end_date,
+        datetime.max.time()
+    ).strftime("%Y-%m-%d %H:%M:%S")
+
+    inbound_start = start_date.strftime("%Y-%m-%d")
+    inbound_end = end_date.strftime("%Y-%m-%d")
+
+    st.caption(
+        f"統計區間：{start_date} ～ {end_date}"
+    )
+
+    # ==========================
+    # 讀取資料
+    # ==========================
+    conn = sqlite3.connect(
+        "inventory.db"
+    )
+
+    df_sales = pd.read_sql_query(
+        """
+        SELECT details
+        FROM history
+        WHERE action LIKE '餐點收銀結帳-%'
+        AND timestamp BETWEEN ? AND ?
+        """,
+        conn,
+        params=(
+            start_str,
+            end_str
+        )
+    )
+
+    df_bill = pd.read_sql_query(
+        """
+        SELECT
+            p.prod_name,
+            SUM(
+                s.qty*p.cost
+            ) amount
+
+        FROM stock_batches s
+
+        JOIN products p
+        ON s.prod_id=p.prod_id
+
+        WHERE
+            p.prod_id LIKE 'C%'
+            AND s.inbound_date
+            BETWEEN ? AND ?
+
+        GROUP BY p.prod_id
+        """,
+        conn,
+        params=(
+            inbound_start,
+            inbound_end
+        )
+    )
+
+    cursor = conn.cursor()
+
+    # ==========================
+    # 分析
+    # ==========================
+    total_revenue = 0
+    total_food_cost = 0
+    total_bill = 0
+
+    material_usage = {}
+
+    dish_sales = {}
+
+    for _, row in df_sales.iterrows():
+
+        txt = row["details"]
+
+        # 營收
+        revenue_match = re.search(
+            r'總金額 \$(\d+\.?\d*)',
+            txt
+        )
+
+        if revenue_match:
+
+            total_revenue += float(
+                revenue_match.group(1)
+            )
+
+        # 餐點份數
+        dish_match = re.search(
+            r'前台銷售「(.+?) × ([\d\.]+) 份」',
+            txt
+        )
+
+        if dish_match:
+
+            dish_name = dish_match.group(1)
+
+            qty = float(
+                dish_match.group(2)
+            )
+
+            dish_sales[
+                dish_name
+            ] = (
+                dish_sales.get(
+                    dish_name,
+                    0
+                )
+                + qty
+            )
+
+        # 食材消耗
+        mats = re.findall(
+            r'([^_]+)_(R\d+)\(([\d\.]+)',
+            txt
+        )
+
+        for m_name, m_id, qty in mats:
+
+            qty = float(qty)
+
+            cursor.execute(
+                """
+                SELECT cost
+                FROM products
+                WHERE prod_id=?
+                """,
+                (
+                    m_id,
+                )
+            )
+
+            res = cursor.fetchone()
+
+            if res:
+
+                total_food_cost += (
+                    qty
+                    *
+                    float(
+                        res[0]
+                    )
+                )
+
+            material_usage[
+                m_name
+            ] = (
+                material_usage.get(
+                    m_name,
+                    0
+                )
+                +
+                qty
+            )
+
+    conn.close()
+
+    # ==========================
+    # 帳單
+    # ==========================
+    if not df_bill.empty:
+
+        total_bill = float(
+            df_bill[
+                "amount"
+            ].sum()
+        )
+
+    gross_profit = (
+        total_revenue
+        -
+        total_food_cost
+    )
+
+    net_profit = (
+        gross_profit
+        -
+        total_bill
+    )
+
+    margin = (
+        (
+            net_profit
+            /
+            total_revenue
+        )
+        *
+        100
+        if total_revenue > 0
+        else 0
+    )
+
+    # ==========================
+    # KPI
+    # ==========================
+    a, b, c, d, e = st.columns(5)
+
+    a.metric(
+        "🏪 營業額",
+        f"${total_revenue:,.0f}"
+    )
+
+    b.metric(
+        "🥩 食材成本",
+        f"${total_food_cost:,.0f}"
+    )
+
+    c.metric(
+        "⚡ 帳單支出",
+        f"${total_bill:,.0f}"
+    )
+
+    d.metric(
+        "🔥 淨利",
+        f"${net_profit:,.0f}"
+    )
+
+    e.metric(
+        "📈 毛利率",
+        f"{margin:.1f}%"
+    )
+
+    st.divider()
+
+    # ==========================
+    # 圖表
+    # ==========================
+    left, right = st.columns(2)
+
+    with left:
+
+        st.markdown(
+            "### 🍩 食材消耗占比"
+        )
+
+        if material_usage:
+
+            pie_df = pd.DataFrame(
+                material_usage.items(),
+                columns=[
+                    "食材",
+                    "數量"
+                ]
+            )
+
+            st.vega_lite_chart(
+                pie_df,
+                {
+                    "mark": "arc",
+                    "encoding": {
+
+                        "theta": {
+                            "field": "數量"
+                        },
+
+                        "color": {
+                            "field": "食材"
+                        }
                     }
-                }, use_container_width=True)
-            else:
-                st.info("💡 該時間區間內無食材消耗。")
-                
-        with col_report2:
-            st.markdown(f"##### 📈 餐點銷售總量統計表")
-            if dish_sales_dict:
-                df_dish_sales = pd.DataFrame(list(dish_sales_dict.items()), columns=["餐點名稱", "累計賣出份數"]).sort_values(by="累計賣出份數", ascending=False)
-                for _, r in df_dish_sales.iterrows():
-                    st.metric(label=f"🔥 {r['餐點名稱']} 總銷量", value=f"{r['累計賣出份數']} 份")
-            else:
-                st.info("💡 該時間區間內無結帳紀錄。")
+                },
+                use_container_width=True
+            )
+
+        else:
+
+            st.info(
+                "目前沒有消耗資料"
+            )
+
+    with right:
+
+        st.markdown(
+            "### 🏆 餐點銷售排行"
+        )
+
+        if dish_sales:
+
+            rank_df = (
+                pd.DataFrame(
+                    dish_sales.items(),
+                    columns=[
+                        "餐點",
+                        "銷售份數"
+                    ]
+                )
+                .sort_values(
+                    "銷售份數",
+                    ascending=False
+                )
+            )
+
+            st.dataframe(
+                rank_df,
+                hide_index=True,
+                use_container_width=True
+            )
+
+        else:
+
+            st.info(
+                "目前沒有銷售資料"
+            )
+
+    st.divider()
+
+    # ==========================
+    # 損益摘要
+    # ==========================
+    st.markdown(
+        "### 📌 損益摘要"
+    )
+
+    st.info(
+        f"""
+        營收：${total_revenue:,.0f}
+
+        － 食材成本：${total_food_cost:,.0f}
+
+        － 固定帳單：${total_bill:,.0f}
+
+        ＝ 最終淨利：${net_profit:,.0f}
+
+        淨利率：{margin:.1f}%
+        """
+            )
