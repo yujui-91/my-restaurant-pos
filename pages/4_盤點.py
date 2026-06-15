@@ -51,6 +51,7 @@ if not df_audit.empty:
         log_details = f"針對【{item_name}({prod_id_part})】進行庫存盤點。系統理論庫存: {theoretical_qty:,.2f} {unit_label}，現場實盤總數: {actual_qty:,.2f} {unit_label}。盤點結果: {audit_status}。"
         log_history(current_user, f"存貨盤點-{item_name}", log_details)
         
+        st.toast(f"📋 盤點覆蓋完成！品項：{item_name} | 結果：{audit_status}", icon="🔍")
         st.success(f"🎉 盤點覆蓋完成！結果為：{audit_status}")
         st.rerun()
 else:

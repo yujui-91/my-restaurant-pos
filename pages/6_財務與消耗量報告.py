@@ -9,7 +9,7 @@ st.subheader("📊 門市商業智能：營收、成本與損益分析")
 
 report_option = st.selectbox(
     "📅 選擇統計區間",
-    ["今天", "過去 7 天", "過去 30 天", "自訂日期區間"],
+    ["今天", "過去 7 天", "過去 30 天", "自訂區間 (自選起訖日期)"],
     key="finance_time"
 )
 
@@ -25,9 +25,10 @@ elif report_option == "過去 30 天":
     start_date = (now - timedelta(days=30)).date()
     end_date = now.date()
 else:
+    # 需求 4：同步改進財務報告日期自選面板
     c1, c2 = st.columns(2)
-    with c1: start_date = st.date_input("開始日期", value=now.date(), key="finance_start")
-    with c2: end_date = st.date_input("結束日期", value=now.date(), key="finance_end")
+    with c1: start_date = st.date_input("自訂開始日期", value=now.date() - timedelta(days=1), key="finance_start")
+    with c2: end_date = st.date_input("自訂結束日期", value=now.date(), key="finance_end")
 
 start_str = datetime.combine(start_date, datetime.min.time()).strftime("%Y-%m-%d %H:%M:%S")
 end_str = datetime.combine(end_date, datetime.max.time()).strftime("%Y-%m-%d %H:%M:%S")

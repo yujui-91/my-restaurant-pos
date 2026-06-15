@@ -71,6 +71,7 @@ if st.button("確認微調此特定批次庫存"):
                 )
                 log_history(current_user, f"庫存微調-{item_name}", log_details)
                 
+                st.toast(f"🛠️ 批次庫存微調完畢！品項：{item_name}，變動量：{adj_qty:+,.1f}", icon="🔧")
                 st.success(f"🎉 批次庫存調整成功！已成功紀錄於歷史動作審計軌跡。")
                 st.rerun()
         else:

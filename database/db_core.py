@@ -160,3 +160,17 @@ def update_purchase_batch(batch_id, prod_id, new_qty, new_cost, p_unit, u_unit, 
     
     conn.commit()
     conn.close()
+
+def update_dish_and_bom(dish_id, new_price, recipe_list):
+    """更新成品餐點的售價，並重新寫入配方 BOM 表"""
+    conn = sqlite3.connect('inventory.db')
+    cursor = conn.cursor()
+    # 1. 更新價格
+    cursor.execute("UPDATE products SET price = ? WHERE prod_id = ?", (new_price, dish_id))
+    # 2. 刪除舊有配方
+    cursor.execute("DELETE FROM bom WHERE parent_id = ?", (dish_id,))
+    # 3. 重新寫入新配方
+    for item in recipe_list:
+        cursor.execute("INSERT INTO bom VALUES (?, ?, ?)", (dish_id, item['食材編號'], item['單位用量']))
+    conn.commit()
+    conn.close()
