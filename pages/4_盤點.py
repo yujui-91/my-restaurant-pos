@@ -1,17 +1,21 @@
-# pages/4_盤點.py
 import streamlit as st
 import pandas as pd
 import sqlite3
 from datetime import datetime, timedelta
-from database.db_core import log_history
+from database.db_core import log_history, trigger_toast, show_pending_toast
+
+# ==========================================
+# 全域通知監聽器：置於網頁最首行，重整完畢後平穩彈出通知
+# ==========================================
+show_pending_toast()
 
 st.subheader("📋 存貨盤點核實")
 
 current_user = st.session_state.get('current_user', '老 闆')
 
-# 💡 新增分類篩選器 (R / S / C)
-audit_cate_filter = st.radio("🗂️ 請選擇盤點項目類別：", ["食材 (R)", "用品 (S)", "帳單費用 (C)"], horizontal=True)
-prefix_char = "R%" if "食材" in audit_cate_filter else ("S%" if "用品" in audit_cate_filter else "C%")
+# 💡 需求優化：將實體盤點項目選項中的 C 類別（帳單費用）徹底移除了
+audit_cate_filter = st.radio("🗂️ 請選擇盤點項目類別：", ["食材 (R)", "用品 (S)"], horizontal=True)
+prefix_char = "R%" if "食材" in audit_cate_filter else "S%"
 
 conn = sqlite3.connect('inventory.db')
 # 連同產品基準單價 p.cost 一起撈出來，並根據分類進行篩選
@@ -62,7 +66,8 @@ if not df_audit.empty:
         log_details = f"針對【{item_name}({prod_id_part})】進行庫存盤點。系統理論庫存: {theoretical_qty:,.2f} {unit_label}，現場實盤總數: {actual_qty:,.2f} {unit_label}。盤點結果: {audit_status}，繼承基準單價: ${current_base_cost:.4f}/每單位。"
         log_history(current_user, f"存貨盤點-{item_name}", log_details)
         
-        st.toast(f"📋 盤點覆蓋完成！品項：{item_name} | 結果：{audit_status}", icon="🔍")
+        # 替換為新宣告的全域通知發送器，避免隨後的 st.rerun() 把通知刷掉
+        trigger_toast(f"📋 盤點覆蓋完成！品項：{item_name} | 結果：{audit_status}", icon="🔍")
         st.success(f"🎉 盤點覆蓋完成！結果為：{audit_status}")
         st.rerun()
 else:

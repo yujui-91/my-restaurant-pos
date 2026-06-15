@@ -1,8 +1,12 @@
-# pages/3_庫存調整.py
 import streamlit as st
 import pandas as pd
 import sqlite3
-from database.db_core import log_history
+from database.db_core import log_history, trigger_toast, show_pending_toast
+
+# ==========================================
+# 全域通知監聽器：置於網頁最首行，重整完畢後平穩彈出通知
+# ==========================================
+show_pending_toast()
 
 st.subheader("🔧 庫存微調與報廢管理面板")
 
@@ -65,7 +69,8 @@ if not df_batches.empty:
                     log_details = f"庫存微調【{item_name}】(批次編號 {batch_id_part})。動作：{adj_type}，數量：{adj_qty} {unit_label}，異動後現存：{new_total_qty} {unit_label}。原因：{reason_txt.strip()}"
                     log_history(current_user, f"庫存微調-{item_name}", log_details)
                     
-                    st.toast(f"🛠️ 批次庫存微調完畢！品項：{item_name}，變動量：{final_qty_change:+,.1f}", icon="🔧")
+                    # 替換為新宣告的全域通知發送器，避免隨後的 st.rerun() 把通知刷掉
+                    trigger_toast(f"🛠️ 批次庫存微調完畢！品項：{item_name}，變動量：{final_qty_change:+,.1f}", icon="🔧")
                     st.success(f"🎉 批次庫存調整成功！已成功紀錄於歷史動作審計軌跡。")
                     st.rerun()
 else:

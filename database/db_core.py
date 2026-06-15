@@ -89,43 +89,23 @@ def log_history(user, action, details):
     conn.close()
 
 def deduct_stock_fifo(prod_id, qty_to_deduct, cursor):
-    """
-    執行 FIFO 食材扣料，並回傳此原物料在本次扣除中所產生的【總實際成本】
-    """
-    # 撈出該品項有庫存的批次，並一併取出當時進貨的成本（p.cost 紀錄在商品表，或是此處從某處推算，因產品表成本代表最新單價）
-    # 為了最精準，我們結合 products 表與 stock_batches 表
-    cursor.execute('''
-        SELECT s.batch_id, s.qty, p.cost 
-        FROM stock_batches s 
-        JOIN products p ON s.prod_id = p.prod_id 
-        WHERE s.prod_id = ? AND s.qty > 0 
-        ORDER BY s.expiry_date ASC, s.inbound_date ASC
-    ''', (prod_id,))
-    
+    cursor.execute("SELECT batch_id, qty FROM stock_batches WHERE prod_id = ? AND qty > 0 ORDER BY expiry_date ASC, inbound_date ASC", (prod_id,))
     batches = cursor.fetchall()
     total_available = sum([b[1] for b in batches])
     if total_available < qty_to_deduct:
-        return False, 0.0  # 庫存不足
+        return False, total_available
     
     remains = qty_to_deduct
-    total_deducted_cost = 0.0
-    
-    for batch_id, batch_qty, batch_cost in batches:
-        if remains <= 0: 
-            break
+    for batch_id, batch_qty in batches:
+        if remains <= 0: break
         if batch_qty >= remains:
-            # 當前批次夠扣
             cursor.execute("UPDATE stock_batches SET qty = qty - ? WHERE batch_id = ?", (remains, batch_id))
-            total_deducted_cost += remains * batch_cost
             remains = 0
         else:
-            # 當前批次不夠扣，吃乾淨這個批次
             cursor.execute("UPDATE stock_batches SET qty = 0 WHERE batch_id = ?", (batch_id,))
-            total_deducted_cost += batch_qty * batch_cost
             remains -= batch_qty
-            
     cursor.execute("DELETE FROM stock_batches WHERE qty <= 0")
-    return True, total_deducted_cost
+    return True, 0
 
 def get_next_raw_id():
     conn = sqlite3.connect('inventory.db')
@@ -194,3 +174,16 @@ def update_dish_and_bom(dish_id, new_price, recipe_list):
         cursor.execute("INSERT INTO bom VALUES (?, ?, ?)", (dish_id, item['食材編號'], item['單位用量']))
     conn.commit()
     conn.close()
+
+def trigger_toast(text, icon="🔔"):
+    """全域通知發送器：將通知暫存入 session_state，避免被 st.rerun() 刷掉"""
+    import streamlit as st
+    st.session_state.toast_queue = {"text": text, "icon": icon}
+
+def show_pending_toast():
+    """全域通知監聽器：置於各網頁最首行，重整完畢後平穩彈出通知並保留時間"""
+    import streamlit as st
+    if 'toast_queue' in st.session_state and st.session_state.toast_queue:
+        q = st.session_state.toast_queue
+        st.toast(q["text"], icon=q["icon"])
+        st.session_state.toast_queue = None

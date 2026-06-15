@@ -1,9 +1,13 @@
-# pages/2_採購進貨單.py
 import streamlit as st
 import pandas as pd
 import sqlite3
 from datetime import datetime, timedelta
-from database.db_core import log_history, get_next_raw_id, get_next_supply_id, get_next_bill_id, update_purchase_batch
+from database.db_core import log_history, get_next_raw_id, get_next_supply_id, get_next_bill_id, update_purchase_batch, trigger_toast, show_pending_toast
+
+# ==========================================
+# 全域通知監聽器：置於網頁最首行，重整完畢後平穩彈出通知
+# ==========================================
+show_pending_toast()
 
 st.subheader("📝 採購進貨與費用登記單")
 
@@ -25,14 +29,35 @@ with po_tabs[0]:
     )
     conn.close()
 
-    st.markdown("##### 🔍 1. 品項選取（二選一）：")
+    st.markdown("##### 🔍 1. 品項選取（二選一，具備智慧互斥防呆）：")
     col_choice1, col_choice2 = st.columns(2)
+    
+    # 💡 實作模式互斥狀態判定
+    # 檢查是否有在輸入框打字 (排除只有空白鍵的情況)
+    has_input_text = "clean_po_input_name" in st.session_state and st.session_state.clean_po_input_name.strip() != ""
+    
     with col_choice1:
         options_list = [f"--- 請選擇已建立的{item_type[:2]} ---"] + (existing_items_df['prod_name'].tolist())
-        chosen_select_name = st.selectbox("【重複登記】從這裡直接下拉搜尋既有品項", options_list, index=0)
-    with col_choice2:
-        chosen_input_name = st.text_input(f"【首次登記】在此直接手動打字輸入新{item_type[:2]}名稱", value="")
+        chosen_select_name = st.selectbox(
+            "【重複登記】從這裡直接下拉搜尋既有品項", 
+            options_list, 
+            index=0,
+            key="clean_po_select_box",
+            disabled=has_input_text  # 👈 如果右邊有輸入文字，左邊就鎖定
+        )
+        
+    # 檢查左邊選單是不是選了既有品項
+    has_selected_existing = chosen_select_name != f"--- 請選擇已建立的{item_type[:2]} ---"
 
+    with col_choice2:
+        chosen_input_name = st.text_input(
+            f"【首次登記】在此直接手動打字輸入新{item_type[:2]}名稱", 
+            value="",
+            key="clean_po_input_name",
+            disabled=has_selected_existing  # 👈 如果左邊有選擇品項，右邊就鎖定
+        )
+
+    # 根據最終互斥判定，決定目前要採用哪一個名字與數據基底
     if chosen_input_name.strip() != "":
         chosen_name = chosen_input_name.strip()
         conn = sqlite3.connect('inventory.db')
@@ -50,7 +75,7 @@ with po_tabs[0]:
             else: default_id = get_next_bill_id()
             default_p_unit, default_u_unit, default_c_factor, default_safety = "", "", 1.0, 0.0
             
-    elif chosen_select_name != f"--- 請選擇已建立的{item_type[:2]} ---":
+    elif has_selected_existing:
         chosen_name = chosen_select_name
         matched_item = existing_items_df[existing_items_df['prod_name'] == chosen_name].iloc[0]
         default_id = matched_item['prod_id']
@@ -118,13 +143,12 @@ with po_tabs[0]:
                 vendor_info = f" (供應商: {v_name})" if v_name else ""
                 log_history(current_user, log_action, f"新單登記：{chosen_name}，數量：{po_qty}{p_unit}，總金額：${total_invoice_amount}{vendor_info}")
                 
-                st.toast(f"📦 採購登記完成！【{chosen_name}】總金額：${total_invoice_amount}", icon="📥")
+                trigger_toast(f"採購登記完成！【{chosen_name}】總金額：${total_invoice_amount}", icon="📥")
                 st.rerun()
 
 with po_tabs[1]:
     st.markdown("##### 🔍 歷史採購單精準篩選面板：")
     
-    # 💡 篩選器 1：時間區間篩選
     col_f1, col_f2 = st.columns(2)
     with col_f1:
         time_filter = st.selectbox(
@@ -133,7 +157,6 @@ with po_tabs[1]:
             key="po_history_time_filter"
         )
     
-    # 處理時間邏輯
     now = datetime.now()
     start_date, end_date = None, None
     if time_filter == "今天":
@@ -152,7 +175,6 @@ with po_tabs[1]:
         start_date = sd.strftime("%Y-%m-%d")
         end_date = ed.strftime("%Y-%m-%d")
 
-    # 💡 篩選器 2：分類篩選 (R / S / C)
     with col_f2:
         cate_filter = st.selectbox(
             "🗂️ 篩選採購項目類別", 
@@ -160,7 +182,6 @@ with po_tabs[1]:
             key="po_history_cate_filter"
         )
     
-    # 根據篩選器動態組合 SQL 指令
     query_conditions = []
     query_params = []
     
@@ -195,7 +216,6 @@ with po_tabs[1]:
     if df_all_batches.empty:
         st.info("💡 沒有符合當前篩選條件的採購紀錄。")
     else:
-        # 產生下拉選單選項，並將進貨日期也標註進去方便老闆辨識
         batch_options = df_all_batches.apply(
             lambda r: f"【批次 {int(r['批次編號'])}】({r['進貨日期']}) {r['商品編號']}-{r['商品名稱']} (大包裝:{r['進貨大包裝數']:.1f}{r['進貨單位']}, 金額:${r['推估總金額']:.0f})", 
             axis=1
@@ -239,5 +259,6 @@ with po_tabs[1]:
 
             update_purchase_batch(target_batch_id, matched_batch_row['商品編號'], new_total_use_units, new_calculated_cost, new_p_unit, new_u_unit, new_c_factor, new_safety, new_v_name, new_v_phone, new_exp_str)
             log_history(current_user, "採購單更正", audit_trail)
-            st.toast(f"💾 批次 {target_batch_id} 資料覆蓋成功！", icon="✏️")
+            
+            trigger_toast(f"💾 批次 {target_batch_id} 資料覆蓋成功！", icon="✏️")
             st.rerun()

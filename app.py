@@ -1,10 +1,15 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import sqlite3
-from database.db_core import init_db
+from database.db_core import init_db, trigger_toast, show_pending_toast
 
 st.set_page_config(layout="wide")
+
+# ==========================================
+# 全域通知監聽器：置於最首行，確保重整完畢後平穩彈出通知
+# ==========================================
+show_pending_toast()
+
 st.title("🍳 赤山堡砂鍋 後台管理")
 
 # 執行初始化
@@ -48,7 +53,9 @@ if not all_items_for_safety.empty:
         cursor.execute("UPDATE products SET safety_stock = ? WHERE prod_id = ?", (new_safety_value, target_safety_id))
         conn.commit()
         conn.close()
-        st.toast(f"✅ 已將 【{matched_safety_row['prod_name']}】 的安全線更新為 {new_safety_value}", icon="⚙️")
+        
+        # 替換為新宣告的全域通知發送器，避免被下方的 st.rerun() 刷掉
+        trigger_toast(f"已將 【{matched_safety_row['prod_name']}】 的安全線更新為 {new_safety_value}", icon="⚙️")
         st.rerun()
 
 # --- 計算當前哪些項目低於安全庫存線 (排除已下架停用項目) ---
