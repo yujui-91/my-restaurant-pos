@@ -142,3 +142,21 @@ def get_next_bill_id():
     conn.close()
     max_num = max([int(re.findall(r'\d+', pid)[0]) for (pid,) in ids if re.findall(r'\d+', pid)] + [0])
     return f"C{max_num + 1:03d}"
+
+def update_purchase_batch(batch_id, prod_id, new_qty, new_cost, p_unit, u_unit, c_factor, s_stock, v_name, v_phone, exp_str):
+    """資深優化：允許更正歷史採購單資訊，連帶更新產品基準成本"""
+    conn = sqlite3.connect('inventory.db')
+    cursor = conn.cursor()
+    
+    # 1. 更新產品規格與單價基準
+    cursor.execute('''UPDATE products SET 
+                        cost = ?, safety_stock = ?, purchase_unit = ?, use_unit = ?, conversion_factor = ?
+                      WHERE prod_id = ?''', (new_cost, s_stock, p_unit, u_unit, c_factor, prod_id))
+    
+    # 2. 更新特定庫存批次的數量與明細
+    cursor.execute('''UPDATE stock_batches SET 
+                        qty = ?, expiry_date = ?, vendor_name = ?, vendor_phone = ?
+                      WHERE batch_id = ?''', (new_qty, exp_str, v_name, v_phone, batch_id))
+    
+    conn.commit()
+    conn.close()

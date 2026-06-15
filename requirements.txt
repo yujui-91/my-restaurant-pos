@@ -1,3 +1,2 @@
 streamlit
 pandas
-vega_lite_chart

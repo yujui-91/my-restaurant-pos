@@ -5,7 +5,7 @@ import sqlite3
 from database.db_core import init_db
 
 st.set_page_config(layout="wide")
-st.title("🍳 智能餐飲進銷存與精準成本分析系統")
+st.title("🍳 赤山堡砂鍋 後台管理")
 
 # 執行初始化
 init_db()
@@ -13,7 +13,7 @@ init_db()
 # 系統全域參數設定
 st.sidebar.header("系統參數")
 if 'current_user' not in st.session_state:
-    st.session_state.current_user = "老 闆"
+    st.session_state.current_user = "老闆"
 
 st.session_state.current_user = st.sidebar.text_input("操作人員", value=st.session_state.current_user)
 
@@ -34,7 +34,7 @@ if not df_alert_check.empty:
 # ==========================================
 # 方案 B：直接在首頁呈現即時庫存
 # ==========================================
-st.subheader("📊 目前即時庫存明細 (依批次/效期)")
+st.subheader("📊 目前庫存明細")
 
 # 新增分類篩選下拉選單
 stock_filter = st.selectbox("🔍 篩選庫存類別", ["顯示全部明細", "僅看食材 (R)", "僅看用品 (S)"], key="home_stock_filter")

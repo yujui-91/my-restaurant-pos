@@ -5,7 +5,7 @@ import sqlite3
 import re
 from database.db_core import log_history, deduct_stock_fifo, get_next_dish_id
 
-st.subheader("🛒 前台收銀結帳系統 (二合一智能點餐：支援現場任意切換台斤/公斤/公克)")
+st.subheader("🛒 收銀結帳系統")
 
 # 確保全域變數存在
 current_user = st.session_state.get('current_user', '老 闆')
@@ -26,9 +26,9 @@ with col_dish1:
     dish_options = ["--- 請選擇菜單既有餐點 ---"] + existing_dishes['prod_name'].tolist()
     selected_dish_select = st.selectbox("【既有餐點】直接下拉點餐", dish_options, index=0)
 with col_dish2:
-    selected_dish_input = st.text_input("【新創/臨時餐點】在此直接手寫品名 (例: 椒麻雞)", value="")
+    selected_dish_input = st.text_input("【新創/臨時餐點】", value="")
 with col_dish3:
-    dish_sale_price = st.number_input("這道餐點的【販售價格】($)", min_value=0.0, value=0.0, step=10.0)
+    dish_sale_price = st.number_input("販售價格", min_value=0.0, value=0.0, step=10.0)
 
 # 判定點餐與配方加載邏輯
 if selected_dish_input.strip() != "":
