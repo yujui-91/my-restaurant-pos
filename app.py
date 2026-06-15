@@ -59,13 +59,16 @@ if not all_items_for_safety.empty:
         st.rerun()
 
 # --- 計算當前哪些項目低於安全庫存線 (排除已下架停用項目) ---
+# 技術修正：改用精確子查詢，確保當批次總庫存扣到變為 0 或是無批次資料時，亦能正確計算並拉起跑馬燈警報
 conn = sqlite3.connect('inventory.db')
 df_alert_check = pd.read_sql_query('''
-    SELECT p.prod_name, COALESCE(SUM(s.qty), 0) as total_qty, p.safety_stock, p.use_unit
+    SELECT p.prod_name, 
+           COALESCE((SELECT SUM(s.qty) FROM stock_batches s WHERE s.prod_id = p.prod_id), 0) as total_qty, 
+           p.safety_stock, p.use_unit
     FROM products p 
-    LEFT JOIN stock_batches s ON s.prod_id = p.prod_id
-    WHERE p.price >= 0 AND (p.prod_id LIKE 'R%' OR p.prod_id LIKE 'S%')
-    GROUP BY p.prod_id HAVING total_qty < p.safety_stock
+    WHERE p.status = 1 AND (p.prod_id LIKE 'R%' OR p.prod_id LIKE 'S%')
+    GROUP BY p.prod_id 
+    HAVING total_qty < p.safety_stock
 ''', conn)
 conn.close()
 

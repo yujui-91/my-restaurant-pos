@@ -326,8 +326,8 @@ with pos_tabs[1]:
             td_id = matched_dish['prod_id']
             old_price = int(float(matched_dish['price']))
             
-            # 1. 確保新販售價格必須大於 0
-            new_dish_price = st.number_input("更正後的販售價格 (必須為大於 0 的整數)", min_value=1, step=1, key="edit_price_input", value=max(old_price, 1))
+            # 技術修正：移除 min_value=1，允許 Streamlit 完整獲取使用者鍵入的負數，才能正常被下方的防呆機制攔截並顯示錯誤。
+            new_dish_price = st.number_input("更正後的販售價格 (必須為大於 0 的整數)", step=1, key="edit_price_input", value=max(old_price, 1))
             
             # 初始化或更換餐點時重新載入配方到暫存器
             if 'editing_recipe_dish_id' not in st.session_state or st.session_state.editing_recipe_dish_id != td_id:
