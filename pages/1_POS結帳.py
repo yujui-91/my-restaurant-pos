@@ -8,47 +8,125 @@ st.subheader("🛒 收銀結帳系統")
 
 current_user = st.session_state.get('current_user', '老 闆')
 
-# 初始化 Session State
+# 初始化 Session State 變數
 if 'current_recipe_list' not in st.session_state:
     st.session_state.current_recipe_list = []
 if 'last_loaded_dish' not in st.session_state:
     st.session_state.last_loaded_dish = ""
 
+# 核心畫面狀態控制變數
+if 'pos_select_dish' not in st.session_state:
+    st.session_state.pos_select_dish = "--- 請選擇菜單既有餐點 ---"
+if 'pos_input_dish' not in st.session_state:
+    st.session_state.pos_input_dish = ""
+if 'pos_dish_price_val' not in st.session_state:
+    st.session_state.pos_dish_price_val = 0
+
+# 過濾掉已經下架的餐點與原物料
 conn = sqlite3.connect('inventory.db')
 existing_dishes = pd.read_sql_query("SELECT prod_id, prod_name, price FROM products WHERE price > 0", conn)
 all_raw_df = pd.read_sql_query("SELECT prod_id, prod_name, use_unit, cost FROM products WHERE price = 0", conn)
 conn.close()
 
-# 建立功能分頁：一個收銀、一個餐點參數修改
-pos_tabs = st.tabs(["💰 前台收銀結帳", "✏️ 餐點細項修改"])
+# 建立功能分頁
+pos_tabs = st.tabs(["💰 前台收銀結帳", "✏_餐點細項修改", "❌ 品項下架與管理區"])
 
 with pos_tabs[0]:
-    st.markdown("##### 🔍 1. 請選取客人點購的餐點：")
+    st.markdown("##### 🔍 1. 請選取或填寫客人點購的餐點：")
+    
+    # 建立欄位互相清除與「智慧重定向比對」的控制函數
+    def on_existing_dish_change():
+        """當下拉選單有變動時的處理"""
+        st.session_state.pos_select_dish = st.session_state.select_dish_widget
+        if st.session_state.pos_select_dish == "--- 請選擇菜單既有餐點 ---":
+            st.session_state.pos_dish_price_val = 0
+            st.session_state.pos_input_dish = ""
+        else:
+            st.session_state.pos_input_dish = ""
+            st.session_state.pos_dish_price_val = 0
+
+    def on_new_dish_change():
+        """當手動輸入新餐點時，自動比對是否已有重複餐點"""
+        input_val = st.session_state.input_dish_widget.strip()
+        
+        if input_val != "":
+            # 💡 【核心智慧防呆】：檢查這個名字是不是早就存在於既有菜單（且未下架）
+            matched_existing = existing_dishes[existing_dishes['prod_name'] == input_val]
+            
+            if not matched_existing.empty:
+                # 1. 發現重複！跳出懸浮通知提示老闆/員工
+                st.toast(f"💡 提醒：【{input_val}】已存在於既有菜單中！系統已自動為您載入配方。", icon="ℹ️")
+                
+                # 2. 自動重定向：把下拉選單切換成該既有餐點，並清空輸入框，重置價格快取
+                st.session_state.pos_select_dish = input_val
+                st.session_state.pos_input_dish = ""
+                st.session_state.pos_dish_price_val = 0
+                st.session_state.last_loaded_dish = "" # 強迫重啟 BOM 載入
+            else:
+                # 若完全是全新餐點，則走正常新創流程
+                st.session_state.pos_select_dish = "--- 請選擇菜單既有餐點 ---"
+                st.session_state.pos_input_dish = input_val
+                st.session_state.pos_dish_price_val = 0
+        else:
+            st.session_state.pos_dish_price_val = 0
+            st.session_state.pos_input_dish = ""
+
+    # 核心互斥狀態判定
+    is_new_dish_active = st.session_state.pos_input_dish.strip() != ""
+    is_existing_dish_active = st.session_state.pos_select_dish != "--- 請選擇菜單既有餐點 ---"
+
     col_dish1, col_dish2, col_dish3 = st.columns(3)
+    
     with col_dish1:
         dish_options = ["--- 請選擇菜單既有餐點 ---"] + existing_dishes['prod_name'].tolist()
-        selected_dish_select = st.selectbox("【既有餐點】直接下拉點餐", dish_options, index=0)
+        selected_dish_select = st.selectbox(
+            "【模式 A】從菜單選取既有餐點", 
+            dish_options, 
+            key="select_dish_widget",
+            index=dish_options.index(st.session_state.pos_select_dish) if st.session_state.pos_select_dish in dish_options else 0,
+            disabled=is_new_dish_active,
+            on_change=on_existing_dish_change
+        )
+        
     with col_dish2:
-        selected_dish_input = st.text_input("【新創/臨時餐點】", value="")
+        selected_dish_input = st.text_input(
+            "【模式 B】手動輸入臨時/新創餐點", 
+            key="input_dish_widget",
+            value=st.session_state.pos_input_dish,
+            disabled=is_existing_dish_active,
+            on_change=on_new_dish_change
+        )
+        
     with col_dish3:
-        # 限制只能輸入整數步長
-        dish_sale_price = st.number_input("販售價格", min_value=0, value=0, step=1)
+        # 如果選了既有餐點，且售價尚未同步時，自動從資料庫載入該餐點的預設定價
+        if is_existing_dish_active and st.session_state.pos_dish_price_val == 0:
+            matched_row = existing_dishes[existing_dishes['prod_name'] == st.session_state.pos_select_dish]
+            if not matched_row.empty:
+                st.session_state.pos_dish_price_val = int(matched_row.iloc[0]['price'])
 
-    # 判定新餐點或既有餐點加載邏輯
-    is_new_dish = selected_dish_input.strip() != ""
-    if is_new_dish:
-        final_dish_name = selected_dish_input.strip()
+        dish_sale_price = st.number_input(
+            "販售價格", 
+            min_value=0, 
+            step=1,
+            value=int(st.session_state.pos_dish_price_val),
+            disabled=is_existing_dish_active
+        )
+        st.session_state.pos_dish_price_val = dish_sale_price
+
+    # 判定新餐點或既有餐點加料/配方加載邏輯
+    if is_new_dish_active:
+        final_dish_name = st.session_state.pos_input_dish.strip()
         final_dish_id = get_next_dish_id()
         if st.session_state.last_loaded_dish != final_dish_id:
             st.session_state.current_recipe_list = [] 
             st.session_state.last_loaded_dish = final_dish_id
-    elif selected_dish_select != "--- 請選擇菜單既有餐點 ---":
-        final_dish_name = selected_dish_select
+            
+    elif is_existing_dish_active:
+        final_dish_name = st.session_state.pos_select_dish
         matched_dish_row = existing_dishes[existing_dishes['prod_name'] == final_dish_name].iloc[0]
         final_dish_id = matched_dish_row['prod_id']
-        if dish_sale_price == 0:
-            dish_sale_price = int(matched_dish_row['price'])
-            
+        
+        # 💡 自動載入並呈現對應的標準歷史配量
         if st.session_state.last_loaded_dish != final_dish_id:
             conn = sqlite3.connect('inventory.db')
             db_recipe = pd.read_sql_query('''
@@ -80,17 +158,24 @@ with pos_tabs[0]:
             else:
                 mat_info = all_raw_df[all_raw_df['prod_name'] == add_mat_name].iloc[0]
                 base_qty = add_mat_qty
-                current_input_unit = chosen_input_unit.strip()
                 
-                if "公斤" in current_input_unit or "(kg)" in current_input_unit.lower(): base_qty = add_mat_qty * 1000.0
-                elif "台斤" in current_input_unit: base_qty = add_mat_qty * 600.0
-                elif "公升" in current_input_unit or "(l)" in current_input_unit.lower(): base_qty = add_mat_qty * 1000.0
+                # 高彈性單位轉換
+                current_input_unit = chosen_input_unit.strip().lower()
+                if "公斤" in current_input_unit or "kg" in current_input_unit:
+                    base_qty = add_mat_qty * 1000.0
+                elif "台斤" in current_input_unit or "臺斤" in current_input_unit:
+                    base_qty = add_mat_qty * 600.0
+                elif "公升" in current_input_unit or "l" in current_input_unit:
+                    base_qty = add_mat_qty * 1000.0
 
                 final_converted_qty = base_qty
                 sys_unit = mat_info['use_unit'].strip().lower()
-                if sys_unit in ['kg', '公斤']: final_converted_qty = base_qty / 1000.0
-                elif sys_unit in ['台斤']: final_converted_qty = base_qty / 600.0
-                elif sys_unit in ['l', '公升']: final_converted_qty = base_qty / 1000.0
+                if sys_unit in ['kg', '公斤']: 
+                    final_converted_qty = base_qty / 1000.0
+                elif sys_unit in ['台斤', '臺斤']: 
+                    final_converted_qty = base_qty / 600.0
+                elif sys_unit in ['l', '公升']: 
+                    final_converted_qty = base_qty / 1000.0
                 
                 existing_idx = next((i for i, item in enumerate(st.session_state.current_recipe_list) if item['食材編號'] == mat_info['prod_id']), None)
                 new_item_dict = {"食材名稱": mat_info['prod_name'], "食材編號": mat_info['prod_id'], "單位用量": final_converted_qty, "單位": mat_info['use_unit']}
@@ -100,6 +185,7 @@ with pos_tabs[0]:
                     st.session_state.current_recipe_list.append(new_item_dict)
                 st.rerun()
 
+    # 💡 只要有選擇既有餐點（或被智慧重新定向過來），下方立刻直接呈現配量列表與核算面板
     if st.session_state.current_recipe_list:
         df_recipe_view = pd.DataFrame(st.session_state.current_recipe_list)
         df_recipe_view["移除"] = False
@@ -131,6 +217,7 @@ with pos_tabs[0]:
             st.toast("✏️ 配方變更已保留！")
             st.rerun()
 
+        # 計算單份總食材成本
         dish_calculated_cost_single = 0.0
         for item in st.session_state.current_recipe_list:
             c_cost = all_raw_df[all_raw_df['prod_id'] == item['食材編號']]['cost'].values[0]
@@ -138,18 +225,28 @@ with pos_tabs[0]:
             
         sale_qty = st.number_input("客人本次點購總數量 (份)", min_value=1, value=1)
         
+        # 利潤動態連動面板展示
         if final_dish_name != "":
-            st.markdown(f"> 💰 **餐點毛利核算：** **{final_dish_name}** | 單份預估成本：**${dish_calculated_cost_single:,.2f} 元** | 本次總銷售額：**${float(dish_sale_price * sale_qty):,.0f} 元**")
+            total_estimated_cost = dish_calculated_cost_single * sale_qty
+            total_estimated_revenue = float(st.session_state.pos_dish_price_val * sale_qty)
+            estimated_profit = total_estimated_revenue - total_estimated_cost
+            
+            st.markdown(f"""
+            > 💰 **餐點即時利潤核算面板（本次共 {sale_qty} 份）：**
+            > * 餐點名稱：**{final_dish_name}** ｜ 單份食材成本：**${dish_calculated_cost_single:,.2f} 元**
+            > * 本次【**總食材成本**】：**${total_estimated_cost:,.2f} 元** *(已自動 × {sale_qty} 份)*
+            > * 本次【**總銷售金額**】：**${total_estimated_revenue:,.0f} 元**
+            > * 本單【**預估純利潤**】：**${estimated_profit:,.2f} 元** (毛利率: {((estimated_profit/total_estimated_revenue)*100) if total_estimated_revenue > 0 else 0:.1f}%)
+            """)
             
         if st.button("🔥 確認送出收銀結帳（執行扣料）"):
-            # 需求 1 限制：價格必須大於 0 且為整數
-            if dish_sale_price <= 0:
+            if st.session_state.pos_dish_price_val <= 0:
                 st.error("❌ 錯誤：販售價格必須為大於 0 的整數！")
             else:
                 conn = sqlite3.connect('inventory.db')
                 cursor = conn.cursor()
                 
-                # 檢查庫存
+                # 檢查庫存是否足夠
                 insufficient = False
                 insufficient_msg = ""
                 for item in st.session_state.current_recipe_list:
@@ -165,33 +262,49 @@ with pos_tabs[0]:
                     conn.close()
                 else:
                     cursor.execute('''INSERT OR REPLACE INTO products (prod_id, prod_name, cost, price, safety_stock, purchase_unit, use_unit, conversion_factor)
-                                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (final_dish_id, final_dish_name, dish_calculated_cost_single, float(dish_sale_price), 0, '份', '份', 1.0))
+                                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (final_dish_id, final_dish_name, dish_calculated_cost_single, float(st.session_state.pos_dish_price_val), 0, '份', '份', 1.0))
                     cursor.execute("DELETE FROM bom WHERE parent_id = ?", (final_dish_id,))
                     
-                    details_log = f"前台銷售「{final_dish_name} × {sale_qty} 份」，總金額 ${dish_sale_price * sale_qty}。"
                     log_mats = []
+                    actual_bill_food_cost = 0.0
+                    
                     for item in st.session_state.current_recipe_list:
                         total_need = item['單位用量'] * sale_qty
-                        deduct_stock_fifo(item['食材編號'], total_need, cursor)
+                        success, deducted_cost = deduct_stock_fifo(item['食材編號'], total_need, cursor)
+                        actual_bill_food_cost += deducted_cost
+                        
                         log_mats.append(f"{item['食材名稱']}_{item['食材編號']}({total_need}{item['單位']})")
                         cursor.execute("INSERT INTO bom VALUES (?, ?, ?)", (final_dish_id, item['食材編號'], item['單位用量']))
                         
+                    details_log = f"前台銷售「{final_dish_name} × {sale_qty} 份」，總金額 ${st.session_state.pos_dish_price_val * sale_qty}，精準食材成本 ${actual_bill_food_cost:.2f}。"
+                    
                     conn.commit()
                     conn.close()
                     log_history(current_user, f"餐點收銀結帳-{final_dish_name}", details_log + " 消耗食材: " + ", ".join(log_mats))
                     
-                    # 需求 3：懸浮小視窗提示
-                    st.toast(f"🔔 收銀成功！已售出 {final_dish_name} × {sale_qty} 份，金額：${dish_sale_price * sale_qty}", icon="🎉")
+                    st.toast(f"🔔 收銀成功！已售出 {final_dish_name} × {sale_qty} 份，金額：${st.session_state.pos_dish_price_val * sale_qty}", icon="🎉")
+                    
+                    # 出餐完畢時，清空暫存與畫面變數
+                    st.session_state.pos_select_dish = "--- 請選擇菜單既有餐點 ---"
+                    st.session_state.pos_input_dish = ""
+                    st.session_state.pos_dish_price_val = 0
                     st.session_state.current_recipe_list = [] 
+                    st.session_state.last_loaded_dish = "" 
+                    
+                    if "select_dish_widget" in st.session_state:
+                        del st.session_state["select_dish_widget"]
+                    if "input_dish_widget" in st.session_state:
+                        del st.session_state["input_dish_widget"]
+                        
                     st.rerun()
     else:
         st.info("💡 請選取品項並添加原物料配方比例。")
 
-# 需求 1 新增：餐點係數（價格與配料）隨時修改面板
+# 後台修改與下架頁面代碼維持不變...
 with pos_tabs[1]:
     st.markdown("##### ⚙️ 調整現有餐點的售價或標準配料量：")
     if existing_dishes.empty:
-        st.info("目前尚無既有餐點可供修改。")
+        st.info("目 前 尚 無 既 有 餐 點 可 供 修 改 。")
     else:
         edit_dish_options = existing_dishes['prod_name'].tolist()
         target_dish_name = st.selectbox("🎯 請選取要修改的餐點：", edit_dish_options, key="edit_dish_box")
@@ -200,10 +313,8 @@ with pos_tabs[1]:
         td_id = matched_dish['prod_id']
         old_price = int(float(matched_dish['price']))
         
-        # 1. 修改價格
         new_dish_price = st.number_input("更正後的販售價格 (必須為大於 0 的整數)", min_value=1, value=old_price, step=1, key="edit_price_input")
         
-        # 2. 顯示並載入目前配方進 Data Editor
         conn = sqlite3.connect('inventory.db')
         current_bom_df = pd.read_sql_query('''
             SELECT p.prod_name as 食材名稱, b.child_id as 食材編號, b.qty_needed as 單位用量, p.use_unit as 單位
@@ -225,7 +336,6 @@ with pos_tabs[1]:
         )
         
         if st.button("💾 確認儲存餐點價格與配方變更"):
-            # 建立詳細歷史更動紀錄 (需求 5 核心)
             change_details = f"修改餐點【{target_dish_name}({td_id})】配置：\n"
             if new_dish_price != old_price:
                 change_details += f" * 價格：從 ${old_price} 改為 ${new_dish_price}\n"
@@ -240,7 +350,85 @@ with pos_tabs[1]:
                 
             update_dish_and_bom(td_id, float(new_dish_price), recipe_list_to_save)
             log_history(current_user, f"修正餐點參數-{target_dish_name}", change_details)
-            
-            # 需求 3：懸浮視窗通知
-            st.toast(f"💾 餐點【{target_dish_name}】參數與配方已成功覆蓋更新！", icon="✅")
+            st.toast(f"💾 餐點【{target_dish_name}】參數與配方已成功覆蓋更新！",  icon="ℹ️")
             st.rerun()
+
+with pos_tabs[2]:
+    st.markdown("##### ❌ 菜單餐點下架控制面板")
+    conn = sqlite3.connect('inventory.db')
+    all_dishes_raw = pd.read_sql_query("SELECT prod_id, prod_name, price FROM products WHERE prod_id LIKE 'P%'", conn)
+    conn.close()
+    
+    if all_dishes_raw.empty:
+        st.info("系統中尚無餐點。")
+    else:
+        all_dishes_raw['狀態'] = all_dishes_raw['price'].apply(lambda p: "🔴 已下架隱藏" if p == -1.0 else "🟢 正常販售中")
+        st.dataframe(all_dishes_raw[['prod_id', 'prod_name', 'price', '狀態']], use_container_width=True, hide_index=True)
+        
+        col_del1, col_del2 = st.columns(2)
+        with col_del1:
+            selected_del_dish = st.selectbox("🎯 選擇要【下架】或【重新上架】的餐點", all_dishes_raw['prod_id'] + " - " + all_dishes_raw['prod_name'])
+            del_dish_id = selected_del_dish.split(" - ")[0]
+            matched_del_dish = all_dishes_raw[all_dishes_raw['prod_id'] == del_dish_id].iloc[0]
+        with col_del2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if matched_del_dish['price'] == -1.0:
+                if st.button("🟢 重新上架此餐點"):
+                    conn = sqlite3.connect('inventory.db')
+                    cursor = conn.cursor()
+                    cursor.execute("UPDATE products SET price = 100.0 WHERE prod_id = ?", (del_dish_id,))
+                    conn.commit()
+                    conn.close()
+                    log_history(current_user, f"餐點重新上架", f"上架餐點：{matched_del_dish['prod_name']}")
+                    st.toast(f"🟢 餐點【{matched_del_dish['prod_name']}】已重新上架！", icon="🚀")
+                    st.rerun()
+            else:
+                if st.button("🔴 確認將此餐點下架隱藏"):
+                    conn = sqlite3.connect('inventory.db')
+                    cursor = conn.cursor()
+                    cursor.execute("UPDATE products SET price = -1.0 WHERE prod_id = ?", (del_dish_id,))
+                    conn.commit()
+                    conn.close()
+                    log_history(current_user, f"餐點下架", f"下架餐點：{matched_del_dish['prod_name']}")
+                    st.toast(f"❌ 餐點【{matched_del_dish['prod_name']}】已成功下架！", icon="🗑️")
+                    st.rerun()
+
+    st.divider()
+    st.markdown("##### ❌ 食材與用品庫存品項下架面板")
+    conn = sqlite3.connect('inventory.db')
+    all_mats_raw = pd.read_sql_query("SELECT prod_id, prod_name, price, use_unit FROM products WHERE prod_id LIKE 'R%' OR prod_id LIKE 'S%'", conn)
+    conn.close()
+    
+    if all_mats_raw.empty:
+        st.info("系統中尚無食材或用品。")
+    else:
+        all_mats_raw['狀態'] = all_mats_raw['price'].apply(lambda p: "🔴 已停用下架" if p == -2.0 else "🟢 正常進貨使用中")
+        st.dataframe(all_mats_raw[['prod_id', 'prod_name', 'use_unit', '狀態']], use_container_width=True, hide_index=True)
+        
+        col_mat_del1, col_mat_del2 = st.columns(2)
+        with col_mat_del1:
+            selected_del_mat = st.selectbox("🎯 選擇要【下架停用】或【恢復使用】的食材/用品", all_mats_raw['prod_id'] + " - " + all_mats_raw['prod_name'])
+            del_mat_id = selected_del_mat.split(" - ")[0]
+            matched_del_mat = all_mats_raw[all_mats_raw['prod_id'] == del_mat_id].iloc[0]
+        with col_mat_del2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if matched_del_mat['price'] == -2.0:
+                if st.button("🟢 恢復使用此食材/用品"):
+                    conn = sqlite3.connect('inventory.db')
+                    cursor = conn.cursor()
+                    cursor.execute("UPDATE products SET price = 0.0 WHERE prod_id = ?", (del_mat_id,))
+                    conn.commit()
+                    conn.close()
+                    log_history(current_user, f"食材恢復使用", f"恢復食材：{matched_del_mat['prod_name']}")
+                    st.toast(f"🟢 品項【{matched_del_mat['prod_name']}】已重新啟用！", icon="✅")
+                    st.rerun()
+            else:
+                if st.button("🔴 確認停用並下架此品項"):
+                    conn = sqlite3.connect('inventory.db')
+                    cursor = conn.cursor()
+                    cursor.execute("UPDATE products SET price = -2.0 WHERE prod_id = ?", (del_mat_id,))
+                    conn.commit()
+                    conn.close()
+                    log_history(current_user, f"食材停用下架", f"下架停用食材：{matched_del_mat['prod_name']}")
+                    st.toast(f"❌ 品項【{matched_del_mat['prod_name']}】已成功停用！", icon="🗑️")
+                    st.rerun()

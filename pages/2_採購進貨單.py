@@ -2,7 +2,7 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from database.db_core import log_history, get_next_raw_id, get_next_supply_id, get_next_bill_id, update_purchase_batch
 
 st.subheader("📝 採購進貨與費用登記單")
@@ -19,9 +19,8 @@ with po_tabs[0]:
     else: prefix = 'C'
 
     conn = sqlite3.connect('inventory.db')
-    # 修正需求 2：不論價格為何，精準根據品項代號首字抓取完整清單，確保選單清晰
     existing_items_df = pd.read_sql_query(
-        "SELECT prod_id, prod_name, purchase_unit, use_unit, conversion_factor, safety_stock FROM products WHERE prod_id LIKE ?", 
+        "SELECT prod_id, prod_name, purchase_unit, use_unit, conversion_factor, safety_stock FROM products WHERE prod_id LIKE ? AND price = 0.0", 
         conn, params=(f"{prefix}%",)
     )
     conn.close()
@@ -73,9 +72,9 @@ with po_tabs[0]:
         else:
             st.markdown("##### 📦 2. 確認或填寫本批次的包裝規格與單位：")
             col_spec1, col_spec2, col_spec3 = st.columns(3)
-            with col_spec1: p_unit = st.text_input("大包裝進貨單位", value=default_p_unit)
-            with col_spec2: u_unit = st.text_input("廚房基本使用小單位", value=default_u_unit)
-            with col_spec3: c_factor = st.number_input("轉換率", min_value=0.0, value=default_c_factor, step=1.0)
+            with col_spec1: p_unit = st.text_input("大包裝進貨單位 (如:台斤、箱)", value=default_p_unit)
+            with col_spec2: u_unit = st.text_input("廚房基本使用小單位 (如:g、個)", value=default_u_unit)
+            with col_spec3: c_factor = st.number_input("轉換率 (一大包等於多少小單位)", min_value=0.0, value=default_c_factor, step=1.0)
 
             st.markdown("##### 💰 3. 請填寫本次採購的實際數據與供應商資訊：")
             col_po1, col_po2, col_po3 = st.columns(3)
@@ -90,8 +89,6 @@ with po_tabs[0]:
                 expiry_input = st.date_input("請選取有效期限", value=None, key="po_exp_date")
                 exp_str = expiry_input.strftime("%Y-%m-%d") if expiry_input is not None else ""
 
-        # pages/2_採購進貨單.py (新進貨單登記送出按鈕區塊優化)
-
         total_use_units = po_qty * c_factor
         calculated_single_cost = total_invoice_amount / total_use_units if total_use_units > 0 else 0.0
         
@@ -105,16 +102,11 @@ with po_tabs[0]:
                 conn = sqlite3.connect('inventory.db')
                 cursor = conn.cursor()
                 
-                # --- 【已刪除阻擋重複登記判別式】 ---
-                # 允許同一天、進相同的蔬菜。每次進貨都視為獨立的一筆「新批次庫存」。
-                
-                # 更新品項基本資料：將此批次的單價更新為該原物料的最新參考單價，但不影響舊批次的庫存成本
                 cursor.execute('''INSERT OR REPLACE INTO products 
                                   (prod_id, prod_name, cost, price, safety_stock, purchase_unit, use_unit, conversion_factor)
                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', 
                                (default_id, chosen_name, calculated_single_cost, 0.0, s_stock, p_unit, u_unit, c_factor))
                 
-                # 寫入獨立的庫存批次表，這能確保不同供應商(v_name)與不同價格能獨立並存
                 cursor.execute('''INSERT INTO stock_batches 
                                   (prod_id, qty, expiry_date, inbound_date, vendor_name, vendor_phone) 
                                   VALUES (?, ?, ?, ?, ?, ?)''', 
@@ -130,21 +122,85 @@ with po_tabs[0]:
                 st.rerun()
 
 with po_tabs[1]:
-    st.markdown("##### ✏️ 2. 歷史採購單精準修正：")
+    st.markdown("##### 🔍 歷史採購單精準篩選面板：")
+    
+    # 💡 篩選器 1：時間區間篩選
+    col_f1, col_f2 = st.columns(2)
+    with col_f1:
+        time_filter = st.selectbox(
+            "📅 選擇歷史進貨日期區間", 
+            ["全選", "今天", "過去 7 天", "過去 1 個月", "自訂區間 (自選起訖日期)"], 
+            key="po_history_time_filter"
+        )
+    
+    # 處理時間邏輯
+    now = datetime.now()
+    start_date, end_date = None, None
+    if time_filter == "今天":
+        start_date = now.strftime("%Y-%m-%d")
+        end_date = now.strftime("%Y-%m-%d")
+    elif time_filter == "過去 7 天":
+        start_date = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+        end_date = now.strftime("%Y-%m-%d")
+    elif time_filter == "過去 1 個月":
+        start_date = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+        end_date = now.strftime("%Y-%m-%d")
+    elif time_filter == "自訂區間 (自選起訖日期)":
+        c_date1, c_date2 = st.columns(2)
+        with c_date1: sd = st.date_input("進貨開始日", value=now.date() - timedelta(days=1), key="po_f_sd")
+        with c_date2: ed = st.date_input("進貨結束日", value=now.date(), key="po_f_ed")
+        start_date = sd.strftime("%Y-%m-%d")
+        end_date = ed.strftime("%Y-%m-%d")
+
+    # 💡 篩選器 2：分類篩選 (R / S / C)
+    with col_f2:
+        cate_filter = st.selectbox(
+            "🗂️ 篩選採購項目類別", 
+            ["全部類別", "食材 (R)", "用品 (S)", "帳單費用 (C)"], 
+            key="po_history_cate_filter"
+        )
+    
+    # 根據篩選器動態組合 SQL 指令
+    query_conditions = []
+    query_params = []
+    
+    if start_date and end_date:
+        query_conditions.append("s.inbound_date BETWEEN ? AND ?")
+        query_params.extend([start_date, end_date])
+        
+    if cate_filter == "食材 (R)":
+        query_conditions.append("s.prod_id LIKE 'R%'")
+    elif cate_filter == "用品 (S)":
+        query_conditions.append("s.prod_id LIKE 'S%'")
+    elif cate_filter == "帳單費用 (C)":
+        query_conditions.append("s.prod_id LIKE 'C%'")
+        
+    where_clause = " WHERE " + " AND ".join(query_conditions) if query_conditions else ""
+
     conn = sqlite3.connect('inventory.db')
-    df_all_batches = pd.read_sql_query('''
+    df_all_batches = pd.read_sql_query(f'''
         SELECT s.batch_id as 批次編號, s.prod_id as 商品編號, p.prod_name as 商品名稱, 
                s.qty as 當前小單位庫存, p.purchase_unit as 進貨單位, p.use_unit as 使用單位,
                p.conversion_factor as 轉換率, (s.qty / p.conversion_factor) as 進貨大包裝數,
-               (s.qty * p.cost) as 推估總金額, s.expiry_date as 有效期限, s.vendor_name as 供應商, s.vendor_phone as 供應商電話
-        FROM stock_batches s JOIN products p ON s.prod_id = p.prod_id ORDER BY s.batch_id DESC
-    ''', conn)
+               (s.qty * p.cost) as 推估總金額, s.expiry_date as 有效期限, s.vendor_name as 供應商, s.vendor_phone as 供應商電話,
+               s.inbound_date as 進貨日期
+        FROM stock_batches s JOIN products p ON s.prod_id = p.prod_id 
+        {where_clause}
+        ORDER BY s.batch_id DESC
+    ''', conn, params=query_params)
     conn.close()
     
+    st.divider()
+    
     if df_all_batches.empty:
-        st.info("目前系統內尚無任何進貨批次紀錄。")
+        st.info("💡 沒有符合當前篩選條件的採購紀錄。")
     else:
-        batch_options = df_all_batches.apply(lambda r: f"【批次 {int(r['批次編號'])}】{r['商品編號']}-{r['商品名稱']} (進貨:{r['進貨大包裝數']:.1f}{r['進貨單位']}, 金額:${r['推估總金額']:.0f})", axis=1).tolist()
+        # 產生下拉選單選項，並將進貨日期也標註進去方便老闆辨識
+        batch_options = df_all_batches.apply(
+            lambda r: f"【批次 {int(r['批次編號'])}】({r['進貨日期']}) {r['商品編號']}-{r['商品名稱']} (大包裝:{r['進貨大包裝數']:.1f}{r['進貨單位']}, 金額:${r['推估總金額']:.0f})", 
+            axis=1
+        ).tolist()
+        
         selected_batch_str = st.selectbox("🎯 請選取您想要修改或補正的採購單批次：", batch_options)
         
         target_batch_id = int(selected_batch_str.split("【批次 ")[1].split("】")[0])
@@ -175,7 +231,6 @@ with po_tabs[1]:
             new_total_use_units = new_po_qty * new_c_factor
             new_calculated_cost = new_total_amount / new_total_use_units if new_total_use_units > 0 else 0.0
             
-            # 需求 5 審計歷史追蹤：細緻對比修改前後數據差異並寫入細節
             audit_trail = f"採購歷史修正【批次 {target_batch_id} - {matched_batch_row['商品名稱']}】:\n"
             if float(matched_batch_row['進貨大包裝數']) != new_po_qty:
                 audit_trail += f" * 進貨數量：自 {matched_batch_row['進貨大包裝數']} 修改為 {new_po_qty}\n"
@@ -184,7 +239,5 @@ with po_tabs[1]:
 
             update_purchase_batch(target_batch_id, matched_batch_row['商品編號'], new_total_use_units, new_calculated_cost, new_p_unit, new_u_unit, new_c_factor, new_safety, new_v_name, new_v_phone, new_exp_str)
             log_history(current_user, "採購單更正", audit_trail)
-            
-            # 需求 3：修正完畢彈出懸浮提示
             st.toast(f"💾 批次 {target_batch_id} 資料覆蓋成功！", icon="✏️")
-            st.rerun()  
+            st.rerun()

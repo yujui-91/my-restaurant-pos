@@ -8,15 +8,21 @@ st.subheader("📜 歷史動作審計軌跡")
 
 current_user = st.session_state.get('current_user', '老 闆')
 
-# 選擇查看時間區間
-history_time_option = st.selectbox(
-    "📅 選擇查看時間區間",
-    ["今天", "過去 7 天", "過去 30 天", "自訂區間 (自選起訖日期)"],
-    key="history_filter"
-)
+# ==========================================
+# 🔍 頂部複合篩選面板 (大方向動作篩選)
+# ==========================================
+col_f1, col_f2 = st.columns(2)
 
+with col_f1:
+    # 篩選器 1：時間區間篩選
+    history_time_option = st.selectbox(
+        "📅 選擇查看時間區間",
+        ["今天", "過去 7 天", "過去 30 天", "自訂區間 (自選起訖日期)"],
+        key="history_filter"
+    )
+
+# 處理時間區間邏輯
 now = datetime.now()
-
 if history_time_option == "今天":
     start_dt = now.replace(hour=0, minute=0, second=0)
     end_dt = now.replace(hour=23, minute=59, second=59)
@@ -36,19 +42,54 @@ else:
 start_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
 end_str = end_dt.strftime("%Y-%m-%d %H:%M:%S")
 
+with col_f2:
+    # 💡 篩選器 2：高度歸納的「大方向動作」選單
+    selected_main_action = st.selectbox(
+        "⚡ 篩選大方向動作類別",
+        [
+            "--- 全部動作項目 ---",
+            "🛒 餐點收銀結帳",
+            "⚙️ 餐點參數修正",
+            "📥 採購進貨登記",
+            "💰 帳單費用登記",
+            "📋 庫存微調/報廢/盤點"
+        ],
+        key="history_main_action_filter"
+    )
+
 st.caption(f"目前查看審計區間：{start_dt.strftime('%Y-%m-%d %H:%M:%S')} ～ {end_dt.strftime('%Y-%m-%d %H:%M:%S')}")
 
+# ==========================================
+# 📊 依據「大方向」條件組合 SQL 撈出最終歷史紀錄
+# ==========================================
 conn = sqlite3.connect("inventory.db")
-df_hist = pd.read_sql_query('''
-    SELECT timestamp AS 時間, user AS 操作人, action AS 動作, details AS 詳細說明
-    FROM history WHERE timestamp BETWEEN ? AND ? ORDER BY id DESC
-''', conn, params=(start_str, end_str))
+
+sql_query = "SELECT timestamp AS 時間, user AS 操作人, action AS 動作, details AS 詳細說明 FROM history WHERE timestamp BETWEEN ? AND ?"
+sql_params = [start_str, end_str]
+
+# 💡 核心技術：使用 SQL 'LIKE' 關鍵字進行大方向模糊比對
+if selected_main_action == "🛒 餐點收銀結帳":
+    sql_query += " AND action LIKE '餐點收銀結帳-%'"
+elif selected_main_action == "⚙️ 餐點參數修正":
+    sql_query += " AND action LIKE '修正餐點參數-%'"
+elif selected_main_action == "📥 採購進貨登記":
+    sql_query += " AND (action = '採購進貨' OR action = '採購單更正')"
+elif selected_main_action == "💰 帳單費用登記":
+    sql_query += " AND action = '帳單支出登記'"
+elif selected_main_action == "📋 庫存微調/報廢/盤點":
+    sql_query += " AND (action LIKE '庫存微調-%' OR action LIKE '存貨盤點-%')"
+
+sql_query += " ORDER BY id DESC"
+
+df_hist = pd.read_sql_query(sql_query, conn, params=sql_params)
 conn.close()
 
+# ==========================================
+# 📱 畫面呈現區 (細項與詳細說明在此輸出)
+# ==========================================
 if not df_hist.empty:
     st.metric("符合條件紀錄數", len(df_hist))
     
-    # 📱 為手機/平板新增優化閱讀切換開關
     use_mobile_view = st.toggle("📱 切換為手機/平板專用排版（防止長文字被遮擋）", value=False)
     
     if not use_mobile_view:
@@ -67,12 +108,13 @@ if not df_hist.empty:
             key="history_view_table"
         )
     else:
-        # 手機/平板版檢視：直式卡片清單（文字會自動換行，絕對不會被看漏）
+        # 手機/平板版檢視：直式卡片清單，點開卡片即會輸出所有細項文字
         st.markdown("---")
         for idx, row in df_hist.iterrows():
+            # 標題輸出動態細項動作 (如：餐點收銀結帳-招牌牛肉麵)
             with st.expander(f"⏰ {row['時間']} | {row['動作']} ({row['操作人']})"):
                 st.markdown("**📄 詳細更動軌跡說明：**")
-                # 使用 code 區塊或是一般 markdown 確保冗長文字在小螢幕也能完美呈現
+                # 內部直接輸出最完整的冗長細節
                 st.info(row['詳細說明'])
 else:
-    st.info("💡 此時間區間內沒有任何歷史操作紀錄。")
+    st.info("💡 目前此大方向篩選條件與時間區間內，沒有任何歷史操作紀錄。")
