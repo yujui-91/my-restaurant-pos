@@ -1,0 +1,144 @@
+# database/db_core.py
+import sqlite3
+import re
+from datetime import datetime, timedelta
+
+def init_db():
+    conn = sqlite3.connect('inventory.db')
+    cursor = conn.cursor()
+    
+    # 1. 商品/物料資料表
+    cursor.execute('''CREATE TABLE IF NOT EXISTS products (
+                        prod_id TEXT PRIMARY KEY, 
+                        prod_name TEXT, 
+                        cost REAL, 
+                        price REAL,
+                        safety_stock REAL DEFAULT 0,
+                        purchase_unit TEXT DEFAULT '',
+                        use_unit TEXT DEFAULT '',
+                        conversion_factor REAL DEFAULT 1.0)''')
+    
+    # 2. 庫存批次明細表
+    cursor.execute('''CREATE TABLE IF NOT EXISTS stock_batches (
+                        batch_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        prod_id TEXT, 
+                        qty REAL, 
+                        expiry_date TEXT,
+                        inbound_date TEXT,
+                        vendor_name TEXT DEFAULT '',
+                        vendor_phone TEXT DEFAULT '')''')
+    
+    # 3. BOM 組裝配方表
+    cursor.execute('''CREATE TABLE IF NOT EXISTS bom (
+                        parent_id TEXT, 
+                        child_id TEXT, 
+                        qty_needed REAL,
+                        PRIMARY KEY (parent_id, child_id))''')
+    
+    # 4. 歷史紀錄表
+    cursor.execute('''CREATE TABLE IF NOT EXISTS history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                        timestamp TEXT, 
+                        user TEXT, 
+                        action TEXT, 
+                        details TEXT)''')
+    
+    # 預設測試資料 (自動建立基準物料)
+    cursor.execute("SELECT COUNT(*) FROM products")
+    if cursor.fetchone()[0] == 0:
+        today = datetime.now().strftime("%Y-%m-%d")
+        exp_1 = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
+        exp_2 = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+        
+        cursor.executemany("INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [
+            ('R001', '澳洲牛肉', 0.5, 0.0, 1000, '箱(20kg)', 'g', 20000.0),
+            ('R002', '麵條', 5.0, 0.0, 50, '箱(100份)', '份', 100.0),
+            ('R003', '高湯', 0.02, 0.0, 5000, '桶(20L)', 'ml', 20000.0),
+            ('R004', '蔥花', 0.1, 0.0, 200, '袋(1kg)', 'g', 1000.0),
+            ('S001', '外帶紙盒', 3.5, 0.0, 100, '束(50個)', '個', 50.0),
+            ('S002', '免洗筷', 0.5, 0.0, 200, '包(100雙)', '雙', 100.0),
+            ('P001', '招牌牛肉麵(成品)', 0.0, 180.0, 0, '碗', '碗', 1.0)
+        ])
+        
+        cursor.executemany("INSERT INTO stock_batches (prod_id, qty, expiry_date, inbound_date, vendor_name, vendor_phone) VALUES (?, ?, ?, ?, ?, ?)", [
+            ('R001', 500, exp_1, today, '豪好吃肉品批發', '0912-345678'),   
+            ('R001', 2000, exp_2, today, '豪好吃肉品批發', '0912-345678'),  
+            ('R002', 60, exp_2, today, '大豐製麵廠', ''), 
+            ('R003', 10000, exp_2, today, '', ''),         
+            ('R004', 150, exp_1, today, '全聯農產', '02-22334455'),
+            ('S001', 100, '', today, '大同包裝材料行', '0988-111222'), 
+            ('S002', 200, '', today, '大同包裝材料行', '0988-111222')
+        ])
+        
+        cursor.executemany("INSERT INTO bom VALUES (?, ?, ?)", [
+            ('P001', 'R001', 150.0),
+            ('P001', 'R002', 1.0),
+            ('P001', 'R003', 300.0),
+            ('P001', 'R004', 5.0)
+        ])
+        
+    conn.commit()
+    conn.close()
+
+def log_history(user, action, details):
+    conn = sqlite3.connect('inventory.db')
+    cursor = conn.cursor()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute("INSERT INTO history (timestamp, user, action, details) VALUES (?, ?, ?, ?)", (now, user, action, details))
+    conn.commit()
+    conn.close()
+
+def deduct_stock_fifo(prod_id, qty_to_deduct, cursor):
+    cursor.execute("SELECT batch_id, qty FROM stock_batches WHERE prod_id = ? AND qty > 0 ORDER BY expiry_date ASC, inbound_date ASC", (prod_id,))
+    batches = cursor.fetchall()
+    total_available = sum([b[1] for b in batches])
+    if total_available < qty_to_deduct:
+        return False, total_available
+    
+    remains = qty_to_deduct
+    for batch_id, batch_qty in batches:
+        if remains <= 0: break
+        if batch_qty >= remains:
+            cursor.execute("UPDATE stock_batches SET qty = qty - ? WHERE batch_id = ?", (remains, batch_id))
+            remains = 0
+        else:
+            cursor.execute("UPDATE stock_batches SET qty = 0 WHERE batch_id = ?", (batch_id,))
+            remains -= batch_qty
+    cursor.execute("DELETE FROM stock_batches WHERE qty <= 0")
+    return True, 0
+
+def get_next_raw_id():
+    conn = sqlite3.connect('inventory.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT prod_id FROM products WHERE prod_id LIKE 'R%'")
+    ids = cursor.fetchall()
+    conn.close()
+    max_num = max([int(re.findall(r'\d+', pid)[0]) for (pid,) in ids if re.findall(r'\d+', pid)] + [0])
+    return f"R{max_num + 1:03d}"
+
+def get_next_dish_id():
+    conn = sqlite3.connect('inventory.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT prod_id FROM products WHERE prod_id LIKE 'P%'")
+    ids = cursor.fetchall()
+    conn.close()
+    max_num = max([int(re.findall(r'\d+', pid)[0]) for (pid,) in ids if re.findall(r'\d+', pid)] + [0])
+    return f"P{max_num + 1:03d}"
+
+def get_next_supply_id():
+    conn = sqlite3.connect('inventory.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT prod_id FROM products WHERE prod_id LIKE 'S%'")
+    ids = cursor.fetchall()
+    conn.close()
+    max_num = max([int(re.findall(r'\d+', pid)[0]) for (pid,) in ids if re.findall(r'\d+', pid)] + [0])
+    return f"S{max_num + 1:03d}"
+
+def get_next_bill_id():
+    conn = sqlite3.connect('inventory.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT prod_id FROM products WHERE prod_id LIKE 'C%'")
+    ids = cursor.fetchall()
+    conn.close()
+    max_num = max([int(re.findall(r'\d+', pid)[0]) for (pid,) in ids if re.findall(r'\d+', pid)] + [0])
+    return f"C{max_num + 1:03d}"
