@@ -28,7 +28,7 @@ existing_dishes = pd.read_sql_query("SELECT prod_id, prod_name, price FROM produ
 all_raw_df = pd.read_sql_query("SELECT prod_id, prod_name, use_unit, cost FROM products WHERE status = 1 AND (prod_id LIKE 'R%' OR prod_id LIKE 'S%')", conn)
 conn.close()
 
-pos_tabs = st.tabs(["💰 前台收銀結帳", "✏_餐點細項修改", "❌ 品項下架與管理區"])
+pos_tabs = st.tabs(["💰 前台收銀結帳", "✏️ 餐點細項修改", "❌ 品項下架與管理區"])
 
 with pos_tabs[0]:
     st.markdown("##### 🔍 1. 請選取或填寫客人點購的餐點：")
@@ -47,8 +47,8 @@ with pos_tabs[0]:
         if input_val != "":
             matched_existing = existing_dishes[existing_dishes['prod_name'] == input_val]
             if not matched_existing.empty:
-                trigger_toast(f"💡 提醒：【{input_val}】已存在於既有菜單中！系統已自動為您載入配方。", icon="ℹ️")
-                st.session_state.pos_select_dish = input_val
+                st.error(f"❌ 錯誤：【{input_val}】已存在於既有菜單中！請改用【模式 A】從菜單選取，不可用打字的。")
+                st.session_state.pos_select_dish = "--- 請選擇菜單既有餐點 ---"
                 st.session_state.pos_input_dish = ""
                 st.session_state.pos_dish_price_val = 0
                 st.session_state.last_loaded_dish = "" 
@@ -188,7 +188,7 @@ with pos_tabs[0]:
             column_config={
                 "食材編號": st.column_config.TextColumn("食材編號", disabled=True),
                 "食材名稱": st.column_config.TextColumn("食材名稱", disabled=True),
-                "單位用量": st.column_config.NumberColumn("單位用量 (可雙擊修改)", min_value=0.0001, format="%.4f"),
+                "單位用量": st.column_config.NumberColumn("單位用量 (可雙擊修改)", format="%.4f"),
                 "移除": st.column_config.CheckboxColumn("勾選移除", default=False)
             },
             disabled=["食材編號", "食材名稱", "單位"],
@@ -314,7 +314,7 @@ with pos_tabs[0]:
 with pos_tabs[1]:
     st.markdown("##### ⚙️ 調整現有餐點的售價或標準配料量：")
     if existing_dishes.empty:
-        st.info("目 前 尚 無 既 有 餐 點 可 供 修 改 。")
+        st.info("目 前 尚 無 既 有 餐 點 可 供 修 修改 。")
     else:
         edit_dish_options = existing_dishes['prod_name'].tolist()
         target_dish_name = st.selectbox("🎯 請選取要修改的餐點：", edit_dish_options, key="edit_dish_box")
@@ -326,7 +326,7 @@ with pos_tabs[1]:
             td_id = matched_dish['prod_id']
             old_price = int(float(matched_dish['price']))
             
-            new_dish_price = st.number_input("更正後的販售價格 (必須為大於 0 的整數)", min_value=1, value=old_price, step=1, key="edit_price_input")
+            new_dish_price = st.number_input("更正後的販售價格 (必須為大於 0 的整數)", step=1, key="edit_price_input", value=old_price)
             
             conn = sqlite3.connect('inventory.db')
             current_bom_df = pd.read_sql_query('''
@@ -341,31 +341,39 @@ with pos_tabs[1]:
                 column_config={
                     "食材編號": st.column_config.TextColumn("食材編號", disabled=True),
                     "食材名稱": st.column_config.TextColumn("食材名稱", disabled=True),
-                    "單位用量": st.column_config.NumberColumn("單份用量調整", min_value=0.0, format="%.4f"),
+                    "單位用量": st.column_config.NumberColumn("單份用量調整", format="%.4f"),
                     "單位": st.column_config.TextColumn("單位", disabled=True)
                 },
                 key="bom_editor",
                 use_container_width=True
             )
             
+            # 【核心功能改善】：送出前全面檢查價格與用量是否合法，防止偷輸入負數
+            recipe_has_negative = any(float(row["單位用量"]) < 0 for _, row in edited_bom_df.iterrows())
+            
             if st.button("💾 確認儲存餐點價格與配方變更"):
-                change_details = f"修改餐點【{target_dish_name}({td_id})】配置：\n"
-                if new_dish_price != old_price:
-                    change_details += f" * 價格：從 ${old_price} 改為 ${new_dish_price}\n"
+                if new_dish_price <= 0:
+                    st.error("❌ 錯誤變更：販售價格必須為大於 0 的整數！儲存失敗。")
+                elif recipe_has_negative:
+                    st.error("❌ 錯誤變更：配方用量不能出現負數數值！儲存失敗。")
+                else:
+                    change_details = f"修改餐點【{target_dish_name}({td_id})】配置：\n"
+                    if new_dish_price != old_price:
+                        change_details += f" * 價格：從 ${old_price} 改為 ${new_dish_price}\n"
+                        
+                    recipe_list_to_save = []
+                    for idx, row in edited_bom_df.iterrows():
+                        orig_qty = current_bom_df.iloc[idx]["單位用量"]
+                        new_qty = float(row["單位用量"])
+                        if orig_qty != new_qty:
+                            change_details += f" * 食材【{row['食材名稱']}】用量：從 {orig_qty} 改為 {new_qty} {row['單位']}\n"
+                        recipe_list_to_save.append({"食材編號": row["食材編號"], "單位用量": new_qty})
+                        
+                    update_dish_and_bom(td_id, float(new_dish_price), recipe_list_to_save)
+                    log_history(current_user, f"修正餐點參數-{target_dish_name}", change_details)
                     
-                recipe_list_to_save = []
-                for idx, row in edited_bom_df.iterrows():
-                    orig_qty = current_bom_df.iloc[idx]["單位用量"]
-                    new_qty = float(row["單位用量"])
-                    if orig_qty != new_qty:
-                        change_details += f" * 食材【{row['食材名稱']}】用量：從 {orig_qty} 改為 {new_qty} {row['單位']}\n"
-                    recipe_list_to_save.append({"食材編號": row["食材編號"], "單位用量": new_qty})
-                    
-                update_dish_and_bom(td_id, float(new_dish_price), recipe_list_to_save)
-                log_history(current_user, f"修正餐點參數-{target_dish_name}", change_details)
-                
-                trigger_toast(f"餐點【{target_dish_name}】參數與配方已成功覆蓋更新！", icon="⚙️")
-                st.rerun()
+                    trigger_toast(f"餐點【{target_dish_name}】參數與配方已成功覆蓋更新！", icon="⚙️")
+                    st.rerun()
         else:
             st.error("❌ 找不到該餐點資料，可能剛已被下架！")
 

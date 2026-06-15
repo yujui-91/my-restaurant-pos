@@ -118,13 +118,20 @@ with po_tabs[0]:
         
         submit_po = st.form_submit_button("📥 確認無誤，送出登記")
         
+        # 【核心功能改善】：全面的必填欄位防呆檢查機制
         if submit_po:
-            if not chosen_name or total_invoice_amount <= 0 or (prefix != 'C' and po_qty <= 0):
-                st.error("❌ 錯誤：請確認品名、數量與金額皆已正確填寫且大於 0！")
-            elif prefix != 'C' and (p_unit == "" or u_unit == ""):
-                st.error("❌ 錯誤：進貨包裝大單位與廚房使用小單位皆為必填項目，不能空白！")
+            if not chosen_name:
+                st.error("❌ 錯誤：請選取重複登記項目或輸入首次登記項目名稱！")
+            elif prefix != 'C' and p_unit == "":
+                st.error("❌ 錯誤：【大包裝進貨單位】為必填欄位，請勿留空！")
+            elif prefix != 'C' and u_unit == "":
+                st.error("❌ 錯誤：【廚房基本使用小單位】為必填欄位，請勿留空！")
             elif prefix != 'C' and c_factor <= 0:
-                st.error("❌ 錯誤：轉換率必須為大於 0 的數值！")
+                st.error("❌ 錯誤：【轉換率】必須為大於 0 的有效數值！")
+            elif prefix != 'C' and po_qty <= 0:
+                st.error("❌ 錯誤：【進貨大包裝總數量】必須大於 0！")
+            elif total_invoice_amount <= 0:
+                st.error("❌ 錯誤：【本次進貨採購總金額】必須大於 0！")
             else:
                 today_str = datetime.now().strftime("%Y-%m-%d")
                 conn = sqlite3.connect('inventory.db')
@@ -202,9 +209,10 @@ with po_tabs[1]:
     where_clause = " WHERE " + " AND ".join(query_conditions) if query_conditions else ""
 
     conn = sqlite3.connect('inventory.db')
+    # 💡 核心技術 Bug 修復：將原本黏在一起的 `as進貨單位` 補上空格改為 `as 進貨單位`，徹底解決 KeyError 的致命問題
     df_all_batches = pd.read_sql_query(f'''
         SELECT s.batch_id as 批次編號, s.prod_id as 商品編號, p.prod_name as 商品名稱, 
-               s.qty as 當前小單位庫存, p.purchase_unit as進貨單位, p.use_unit as 使用單位,
+               s.qty as 當前小單位庫存, p.purchase_unit as 進貨單位, p.use_unit as 使用單位,
                p.conversion_factor as 轉換率, (s.qty / p.conversion_factor) as 進貨大包裝數,
                (s.qty * p.cost) as 推估總金額, s.expiry_date as 有效期限, s.vendor_name as 供應商, s.vendor_phone as 供應商電話,
                s.inbound_date as 進貨日期
@@ -233,10 +241,10 @@ with po_tabs[1]:
         col_edit1, col_edit2, col_edit3 = st.columns(3)
         with col_edit1:
             new_p_unit = st.text_input("修正大包裝單位", value=str(matched_batch_row['進貨單位'])).strip()
-            new_po_qty = st.number_input("更正後的【進貨大包裝數量】", min_value=0.0001, value=float(max(matched_batch_row['進貨大包裝數'], 0.0001)), step=1.0)
+            new_po_qty = st.number_input("更正後的【進貨大包裝數量】", min_value=0.0, value=float(max(matched_batch_row['進貨大包裝數'], 0.0)), step=1.0)
         with col_edit2:
             new_u_unit = st.text_input("修正廚房使用單位", value=str(matched_batch_row['使用單位'])).strip()
-            new_total_amount = st.number_input("更正後的【採購總金額】($)", min_value=0.01, value=float(max(matched_batch_row['推估總金額'], 0.01)), step=10.0)
+            new_total_amount = st.number_input("更正後的【採購總金額】($)", min_value=0.0, value=float(max(matched_batch_row['推估總金額'], 0.0)), step=10.0)
         with col_edit3:
             new_c_factor = st.number_input("修正轉換率", min_value=0.0001, value=float(max(matched_batch_row['轉換率'], 0.0001)), step=1.0)
             new_safety = st.number_input("修正最低安全預警量", min_value=0.0, value=0.0, step=1.0)
@@ -251,10 +259,21 @@ with po_tabs[1]:
             new_exp_str = new_exp_input.strftime("%Y-%m-%d") if new_exp_input is not None else ""
             
         if st.button("💾 確認覆蓋並修正此筆採購資料"):
-            if new_p_unit == "" or new_u_unit == "":
-                st.error("❌ 錯誤：大包裝單位與使用單位均不能空白！")
+            is_bill = str(matched_batch_row['商品編號']).startswith('C')
+            
+            # 【功能改善】：修正歷史採購資料時同步納入必填防呆機制
+            if not is_bill and new_p_unit == "":
+                st.error("❌ 錯誤：【大包裝單位】為必填項目，不能留空！")
+            elif not is_bill and new_u_unit == "":
+                st.error("❌ 錯誤：【廚房使用單位】為必填項目，不能留空！")
+            elif not is_bill and new_po_qty <= 0:
+                st.error("❌ 錯誤：【更正後的進貨大包裝數量】必須大於 0！")
+            elif not is_bill and new_c_factor <= 0:
+                st.error("❌ 錯誤：【修正轉換率】必須大於 0！")
+            elif new_total_amount <= 0:
+                st.error("❌ 錯誤：【更正後的採購總金額】必須大於 0！")
             else:
-                new_total_use_units = new_po_qty * new_c_factor
+                new_total_use_units = new_po_qty * new_c_factor if not is_bill else 1.0
                 new_calculated_cost = new_total_amount / new_total_use_units if new_total_use_units > 0 else 0.0
                 
                 audit_trail = f"採購歷史修正【批次 {target_batch_id} - {matched_batch_row['商品名稱']}】:\n"
