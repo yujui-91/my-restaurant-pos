@@ -314,7 +314,7 @@ with pos_tabs[0]:
 with pos_tabs[1]:
     st.markdown("##### ⚙️ 調整現有餐點的售價或標準配料量：")
     if existing_dishes.empty:
-        st.info("目 前 尚 無 既 有 餐 點 可 供 修 修改 。")
+        st.info("目前尚無既有餐點可供修改。")
     else:
         edit_dish_options = existing_dishes['prod_name'].tolist()
         target_dish_name = st.selectbox("🎯 請選取要修改的餐點：", edit_dish_options, key="edit_dish_box")
@@ -326,53 +326,120 @@ with pos_tabs[1]:
             td_id = matched_dish['prod_id']
             old_price = int(float(matched_dish['price']))
             
-            new_dish_price = st.number_input("更正後的販售價格 (必須為大於 0 的整數)", step=1, key="edit_price_input", value=old_price)
+            # 1. 確保新販售價格必須大於 0
+            new_dish_price = st.number_input("更正後的販售價格 (必須為大於 0 的整數)", min_value=1, step=1, key="edit_price_input", value=max(old_price, 1))
             
-            conn = sqlite3.connect('inventory.db')
-            current_bom_df = pd.read_sql_query('''
-                SELECT p.prod_name as 食材名稱, b.child_id as 食材編號, b.qty_needed as 單位用量, p.use_unit as 單位
-                FROM bom b JOIN products p ON b.child_id = p.prod_id WHERE b.parent_id = ?
-            ''', conn, params=(td_id,))
-            conn.close()
-            
-            st.markdown("###### 📋 該餐點的標準配方明細：")
-            edited_bom_df = st.data_editor(
-                current_bom_df,
-                column_config={
-                    "食材編號": st.column_config.TextColumn("食材編號", disabled=True),
-                    "食材名稱": st.column_config.TextColumn("食材名稱", disabled=True),
-                    "單位用量": st.column_config.NumberColumn("單份用量調整", format="%.4f"),
-                    "單位": st.column_config.TextColumn("單位", disabled=True)
-                },
-                key="bom_editor",
-                use_container_width=True
-            )
-            
-            # 【核心功能改善】：送出前全面檢查價格與用量是否合法，防止偷輸入負數
-            recipe_has_negative = any(float(row["單位用量"]) < 0 for _, row in edited_bom_df.iterrows())
+            # 初始化或更換餐點時重新載入配方到暫存器
+            if 'editing_recipe_dish_id' not in st.session_state or st.session_state.editing_recipe_dish_id != td_id:
+                conn = sqlite3.connect('inventory.db')
+                db_recipe = pd.read_sql_query('''
+                    SELECT p.prod_name as 食材名稱, b.child_id as 食材編號, b.qty_needed as 單位用量, p.use_unit as 單位
+                    FROM bom b JOIN products p ON b.child_id = p.prod_id WHERE b.parent_id = ?
+                ''', conn, params=(td_id,))
+                conn.close()
+                st.session_state.editing_recipe_list = db_recipe.to_dict(orient='records')
+                st.session_state.editing_recipe_dish_id = td_id
+
+            # 🌟 新增功能：允許在修改餐點時「加入其他原物料」 🌟
+            st.markdown("----")
+            st.markdown("##### ➕ 追加新原物料至此餐點標準配方：")
+            col_add_e1, col_add_e2, col_add_e3 = st.columns([2, 1, 1])
+            with col_add_e1:
+                # 僅篩選正常啟用的原物料與用品
+                add_edit_mat_name = st.selectbox("選擇要追加的食材/用品", ["--- 請選擇食材 ---"] + all_raw_df['prod_name'].tolist(), key="add_edit_mat_select")
+            with col_add_e2:
+                add_edit_mat_qty = st.number_input("單份標準用量", min_value=0.0001, value=1.0, step=1.0, key="add_edit_mat_qty_input")
+            with col_add_e3:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("➕ 追加至此餐點配方", key="add_now_btn"):
+                    if add_edit_mat_name != "--- 請選擇食材 ---" and add_edit_mat_qty > 0:
+                        matched_mats = all_raw_df[all_raw_df['prod_name'] == add_edit_mat_name]
+                        if not matched_mats.empty:
+                            mat_info = matched_mats.iloc[0]
+                            # 檢查是否已存在於配方中
+                            existing_idx = next((i for i, item in enumerate(st.session_state.editing_recipe_list) if item['食材編號'] == mat_info['prod_id']), None)
+                            
+                            new_item_dict = {
+                                "食材名稱": mat_info['prod_name'], 
+                                "食材編號": mat_info['prod_id'], 
+                                "單位用量": float(add_edit_mat_qty), 
+                                "單位": mat_info['use_unit']
+                            }
+                            
+                            if existing_idx is not None:
+                                st.session_state.editing_recipe_list[existing_idx] = new_item_dict
+                            else:
+                                st.session_state.editing_recipe_list.append(new_item_dict)
+                            trigger_toast(f"已追加 {mat_info['prod_name']} 到暫存配方清單", icon="➕")
+                            st.rerun()
+
+            st.markdown("###### 📋 該餐點的標準配方明細（可雙擊直接修改數量或勾選移除）：")
+            if st.session_state.editing_recipe_list:
+                df_recipe_view = pd.DataFrame(st.session_state.editing_recipe_list)
+                df_recipe_view["移除"] = False
+                
+                edited_df = st.data_editor(
+                    df_recipe_view,
+                    column_config={
+                        "食材編號": st.column_config.TextColumn("食材編號", disabled=True),
+                        "食材名稱": st.column_config.TextColumn("食材名稱", disabled=True),
+                        "單位用量": st.column_config.NumberColumn("單份用量調整", format="%.4f", min_value=0.0001),
+                        "單位": st.column_config.TextColumn("單位", disabled=True),
+                        "移除": st.column_config.CheckboxColumn("勾選移除", default=False)
+                    },
+                    disabled=["食材編號", "食材名稱", "單位"],
+                    key="bom_editor",
+                    use_container_width=True
+                )
+                
+                # 同步 data_editor 的異動回 session_state
+                has_changes = False
+                updated_recipe_list = []
+                for idx, row in edited_df.iterrows():
+                    if row["移除"]:
+                        has_changes = True
+                        continue
+                    if row["單位用量"] != st.session_state.editing_recipe_list[idx]["單位用量"]:
+                        has_changes = True
+                    updated_recipe_list.append({
+                        "食材名稱": row["食材名稱"], 
+                        "食材編號": row["食材編號"], 
+                        "單位用量": float(row["單位用量"]), 
+                        "單位": row["單位"]
+                    })
+                    
+                if has_changes:
+                    st.session_state.editing_recipe_list = updated_recipe_list
+                    trigger_toast("✏️ 暫存配方變更已保留！", icon="📝")
+                    st.rerun()
+            else:
+                st.info("此餐點目前沒有任何配方物料，請從上方選單追加。")
+
+            # 儲存到資料庫
+            recipe_has_negative = any(float(item["單位用量"]) <= 0 for item in st.session_state.editing_recipe_list)
             
             if st.button("💾 確認儲存餐點價格與配方變更"):
                 if new_dish_price <= 0:
                     st.error("❌ 錯誤變更：販售價格必須為大於 0 的整數！儲存失敗。")
                 elif recipe_has_negative:
-                    st.error("❌ 錯誤變更：配方用量不能出現負數數值！儲存失敗。")
+                    st.error("❌ 錯誤變更：配方用量必須大於 0！儲存失敗。")
                 else:
                     change_details = f"修改餐點【{target_dish_name}({td_id})】配置：\n"
                     if new_dish_price != old_price:
                         change_details += f" * 價格：從 ${old_price} 改為 ${new_dish_price}\n"
                         
                     recipe_list_to_save = []
-                    for idx, row in edited_bom_df.iterrows():
-                        orig_qty = current_bom_df.iloc[idx]["單位用量"]
-                        new_qty = float(row["單位用量"])
-                        if orig_qty != new_qty:
-                            change_details += f" * 食材【{row['食材名稱']}】用量：從 {orig_qty} 改為 {new_qty} {row['單位']}\n"
-                        recipe_list_to_save.append({"食材編號": row["食材編號"], "單位用量": new_qty})
+                    for item in st.session_state.editing_recipe_list:
+                        recipe_list_to_save.append({"食材編號": item["食材編號"], "單位用量": item["單位用量"]})
+                        change_details += f" * 食材【{item['食材名稱']}】用量設定為 {item['單位用量']} {item['單位']}\n"
                         
                     update_dish_and_bom(td_id, float(new_dish_price), recipe_list_to_save)
                     log_history(current_user, f"修正餐點參數-{target_dish_name}", change_details)
                     
-                    trigger_toast(f"餐點【{target_dish_name}】參數與配方已成功覆蓋更新！", icon="⚙️")
+                    trigger_toast(f"餐點【{target_dish_name}】參數與全新配方已成功覆蓋更新！", icon="⚙️")
+                    # 清除暫存
+                    del st.session_state.editing_recipe_list
+                    del st.session_state.editing_recipe_dish_id
                     st.rerun()
         else:
             st.error("❌ 找不到該餐點資料，可能剛已被下架！")
