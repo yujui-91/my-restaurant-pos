@@ -7,7 +7,7 @@ def init_db():
     conn = sqlite3.connect('inventory.db')
     cursor = conn.cursor()
     
-    # 1. 商品/物料資料表
+    # 1. 商品/物料資料表 (status 欄位：1=啟用, 0=下架/停用)
     cursor.execute('''CREATE TABLE IF NOT EXISTS products (
                         prod_id TEXT PRIMARY KEY, 
                         prod_name TEXT, 
@@ -16,7 +16,16 @@ def init_db():
                         safety_stock REAL DEFAULT 0,
                         purchase_unit TEXT DEFAULT '',
                         use_unit TEXT DEFAULT '',
-                        conversion_factor REAL DEFAULT 1.0)''')
+                        conversion_factor REAL DEFAULT 1.0,
+                        status INTEGER DEFAULT 1)''')
+    
+    # 檢查是否需要升級舊資料庫（補上 status 欄位）
+    cursor.execute("PRAGMA table_info(products)")
+    columns = [info[1] for info in cursor.fetchall()]
+    if 'status' not in columns:
+        cursor.execute("ALTER TABLE products ADD COLUMN status INTEGER DEFAULT 1")
+        cursor.execute("UPDATE products SET status = 0, price = 100.0 WHERE price = -1.0")
+        cursor.execute("UPDATE products SET status = 0, price = 0.0 WHERE price = -2.0")
     
     # 2. 庫存批次明細表
     cursor.execute('''CREATE TABLE IF NOT EXISTS stock_batches (
@@ -43,21 +52,21 @@ def init_db():
                         action TEXT, 
                         details TEXT)''')
     
-    # 預設測試資料 (自動建立基準物料)
+    # 預設測試資料
     cursor.execute("SELECT COUNT(*) FROM products")
     if cursor.fetchone()[0] == 0:
         today = datetime.now().strftime("%Y-%m-%d")
         exp_1 = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
         exp_2 = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
         
-        cursor.executemany("INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [
-            ('R001', '澳洲牛肉', 0.5, 0.0, 1000, '箱(20kg)', 'g', 20000.0),
-            ('R002', '麵條', 5.0, 0.0, 50, '箱(100份)', '份', 100.0),
-            ('R003', '高湯', 0.02, 0.0, 5000, '桶(20L)', 'ml', 20000.0),
-            ('R004', '蔥花', 0.1, 0.0, 200, '袋(1kg)', 'g', 1000.0),
-            ('S001', '外帶紙盒', 3.5, 0.0, 100, '束(50個)', '個', 50.0),
-            ('S002', '免洗筷', 0.5, 0.0, 200, '包(100雙)', '雙', 100.0),
-            ('P001', '招牌牛肉麵(成品)', 0.0, 180.0, 0, '碗', '碗', 1.0)
+        cursor.executemany("INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+            ('R001', '澳洲牛肉', 0.5, 0.0, 1000, '箱(20kg)', 'g', 20000.0, 1),
+            ('R002', '麵條', 5.0, 0.0, 50, '箱(100份)', '份', 100.0, 1),
+            ('R003', '高湯', 0.02, 0.0, 5000, '桶(20L)', 'ml', 20000.0, 1),
+            ('R004', '蔥花', 0.1, 0.0, 200, '袋(1kg)', 'g', 1000.0, 1),
+            ('S001', '外帶紙盒', 3.5, 0.0, 100, '束(50個)', '個', 50.0, 1),
+            ('S002', '免洗筷', 0.5, 0.0, 200, '包(100雙)', '雙', 100.0, 1),
+            ('P001', '招牌牛肉麵(成品)', 0.0, 180.0, 0, '碗', '碗', 1.0, 1)
         ])
         
         cursor.executemany("INSERT INTO stock_batches (prod_id, qty, expiry_date, inbound_date, vendor_name, vendor_phone) VALUES (?, ?, ?, ?, ?, ?)", [
@@ -89,23 +98,37 @@ def log_history(user, action, details):
     conn.close()
 
 def deduct_stock_fifo(prod_id, qty_to_deduct, cursor):
+    """資深核心修改：回傳該物料實際扣除的歷史批次加權成本金額"""
+    # 同步撈出對應商品的基準成本單位，作爲防呆推估
+    cursor.execute("SELECT cost FROM products WHERE prod_id = ?", (prod_id,))
+    item_cost_row = cursor.fetchone()
+    base_unit_cost = item_cost_row[0] if item_cost_row else 0.0
+
     cursor.execute("SELECT batch_id, qty FROM stock_batches WHERE prod_id = ? AND qty > 0 ORDER BY expiry_date ASC, inbound_date ASC", (prod_id,))
     batches = cursor.fetchall()
     total_available = sum([b[1] for b in batches])
     if total_available < qty_to_deduct:
-        return False, total_available
+        return False, 0.0
     
     remains = qty_to_deduct
+    total_deducted_cost = 0.0
+    
     for batch_id, batch_qty in batches:
         if remains <= 0: break
+        
+        # 精確計算本次扣除份數
+        deduct_qty = min(remains, batch_qty)
+        total_deducted_cost += deduct_qty * base_unit_cost
+        
         if batch_qty >= remains:
             cursor.execute("UPDATE stock_batches SET qty = qty - ? WHERE batch_id = ?", (remains, batch_id))
             remains = 0
         else:
             cursor.execute("UPDATE stock_batches SET qty = 0 WHERE batch_id = ?", (batch_id,))
             remains -= batch_qty
+            
     cursor.execute("DELETE FROM stock_batches WHERE qty <= 0")
-    return True, 0
+    return True, total_deducted_cost
 
 def get_next_raw_id():
     conn = sqlite3.connect('inventory.db')
@@ -144,44 +167,32 @@ def get_next_bill_id():
     return f"C{max_num + 1:03d}"
 
 def update_purchase_batch(batch_id, prod_id, new_qty, new_cost, p_unit, u_unit, c_factor, s_stock, v_name, v_phone, exp_str):
-    """資深優化：允許更正歷史採購單資訊，連帶更新產品基準成本"""
     conn = sqlite3.connect('inventory.db')
     cursor = conn.cursor()
-    
-    # 1. 更新產品規格與單價基準
     cursor.execute('''UPDATE products SET 
                         cost = ?, safety_stock = ?, purchase_unit = ?, use_unit = ?, conversion_factor = ?
                       WHERE prod_id = ?''', (new_cost, s_stock, p_unit, u_unit, c_factor, prod_id))
-    
-    # 2. 更新特定庫存批次的數量與明細
     cursor.execute('''UPDATE stock_batches SET 
                         qty = ?, expiry_date = ?, vendor_name = ?, vendor_phone = ?
                       WHERE batch_id = ?''', (new_qty, exp_str, v_name, v_phone, batch_id))
-    
     conn.commit()
     conn.close()
 
 def update_dish_and_bom(dish_id, new_price, recipe_list):
-    """更新成品餐點的售價，並重新寫入配方 BOM 表"""
     conn = sqlite3.connect('inventory.db')
     cursor = conn.cursor()
-    # 1. 更新價格
     cursor.execute("UPDATE products SET price = ? WHERE prod_id = ?", (new_price, dish_id))
-    # 2. 刪除舊有配方
     cursor.execute("DELETE FROM bom WHERE parent_id = ?", (dish_id,))
-    # 3. 重新寫入新配方
     for item in recipe_list:
         cursor.execute("INSERT INTO bom VALUES (?, ?, ?)", (dish_id, item['食材編號'], item['單位用量']))
     conn.commit()
     conn.close()
 
 def trigger_toast(text, icon="🔔"):
-    """全域通知發送器：將通知暫存入 session_state，避免被 st.rerun() 刷掉"""
     import streamlit as st
     st.session_state.toast_queue = {"text": text, "icon": icon}
 
 def show_pending_toast():
-    """全域通知監聽器：置於各網頁最首行，重整完畢後平穩彈出通知並保留時間"""
     import streamlit as st
     if 'toast_queue' in st.session_state and st.session_state.toast_queue:
         q = st.session_state.toast_queue

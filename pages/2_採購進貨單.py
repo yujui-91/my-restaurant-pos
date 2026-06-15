@@ -1,12 +1,10 @@
+# pages/2_採購進貨單.py
 import streamlit as st
 import pandas as pd
 import sqlite3
 from datetime import datetime, timedelta
 from database.db_core import log_history, get_next_raw_id, get_next_supply_id, get_next_bill_id, update_purchase_batch, trigger_toast, show_pending_toast
 
-# ==========================================
-# 全域通知監聽器：置於網頁最首行，重整完畢後平穩彈出通知
-# ==========================================
 show_pending_toast()
 
 st.subheader("📝 採購進貨與費用登記單")
@@ -23,17 +21,18 @@ with po_tabs[0]:
     else: prefix = 'C'
 
     conn = sqlite3.connect('inventory.db')
+    # 💡 核心安全邏輯 1 & 2 修正：移除 status=1 的限制！已下架的原物料也要能採購進貨！
     existing_items_df = pd.read_sql_query(
-        "SELECT prod_id, prod_name, purchase_unit, use_unit, conversion_factor, safety_stock FROM products WHERE prod_id LIKE ? AND price = 0.0", 
+        "SELECT prod_id, prod_name, purchase_unit, use_unit, conversion_factor, safety_stock FROM products WHERE prod_id LIKE ?", 
         conn, params=(f"{prefix}%",)
     )
     conn.close()
 
     st.markdown("##### 🔍 1. 品項選取（二選一，具備智慧互斥防呆）：")
+    if prefix in ['R', 'S']:
+        st.caption("💡 知識庫：不同供應商的同名品項（例如：紙盒）建議分開建立為獨立項目，命名如 `[A廠商] 紙盒` 與 `[B廠商] 紙盒`。")
+
     col_choice1, col_choice2 = st.columns(2)
-    
-    # 💡 實作模式互斥狀態判定
-    # 檢查是否有在輸入框打字 (排除只有空白鍵的情況)
     has_input_text = "clean_po_input_name" in st.session_state and st.session_state.clean_po_input_name.strip() != ""
     
     with col_choice1:
@@ -43,10 +42,9 @@ with po_tabs[0]:
             options_list, 
             index=0,
             key="clean_po_select_box",
-            disabled=has_input_text  # 👈 如果右邊有輸入文字，左邊就鎖定
+            disabled=has_input_text  
         )
         
-    # 檢查左邊選單是不是選了既有品項
     has_selected_existing = chosen_select_name != f"--- 請選擇已建立的{item_type[:2]} ---"
 
     with col_choice2:
@@ -54,10 +52,9 @@ with po_tabs[0]:
             f"【首次登記】在此直接手動打字輸入新{item_type[:2]}名稱", 
             value="",
             key="clean_po_input_name",
-            disabled=has_selected_existing  # 👈 如果左邊有選擇品項，右邊就鎖定
+            disabled=has_selected_existing  
         )
 
-    # 根據最終互斥判定，決定目前要採用哪一個名字與數據基底
     if chosen_input_name.strip() != "":
         chosen_name = chosen_input_name.strip()
         conn = sqlite3.connect('inventory.db')
@@ -76,8 +73,8 @@ with po_tabs[0]:
             default_p_unit, default_u_unit, default_c_factor, default_safety = "", "", 1.0, 0.0
             
     elif has_selected_existing:
+        matched_item = existing_items_df[existing_items_df['prod_name'] == chosen_select_name].iloc[0]
         chosen_name = chosen_select_name
-        matched_item = existing_items_df[existing_items_df['prod_name'] == chosen_name].iloc[0]
         default_id = matched_item['prod_id']
         default_p_unit = matched_item['purchase_unit']
         default_u_unit = matched_item['use_unit']
@@ -95,17 +92,19 @@ with po_tabs[0]:
             p_unit, u_unit, c_factor, po_qty, s_stock = "次", "次", 1.0, 1.0, 0.0
             v_name, v_phone, exp_str = "公共事業/其他", "", ""
         else:
-            st.markdown("##### 📦 2. 確認或填寫本批次的包裝規格與單位：")
+            st.markdown("##### 📦 2. 確認或填寫本批次的包裝規格與單位（皆為必填）：")
             col_spec1, col_spec2, col_spec3 = st.columns(3)
-            with col_spec1: p_unit = st.text_input("大包裝進貨單位 (如:台斤、箱)", value=default_p_unit)
-            with col_spec2: u_unit = st.text_input("廚房基本使用小單位 (如:g、個)", value=default_u_unit)
-            with col_spec3: c_factor = st.number_input("轉換率 (一大包等於多少小單位)", min_value=0.0, value=default_c_factor, step=1.0)
+            with col_spec1: p_unit = st.text_input("大包裝進貨單位 (如:台斤、箱)", value=default_p_unit).strip()
+            with col_spec2: u_unit = st.text_input("廚房基本使用小單位 (如:g、個)", value=default_u_unit).strip()
+            
+            # 💡 核心安全邏輯 2 修正：利用 max(..., 0.0001) 確保預設帶入的值絕對不會低於最小值限制，解決噴錯與 Submit 按鈕消失
+            with col_spec3: c_factor = st.number_input("轉換率 (一大包等於多少小單位)", min_value=0.0001, value=float(max(default_c_factor, 0.0001)), step=1.0)
 
             st.markdown("##### 💰 3. 請填寫本次採購的實際數據與供應商資訊：")
             col_po1, col_po2, col_po3 = st.columns(3)
             with col_po1: po_qty = st.number_input(f"進貨大包裝總數量", min_value=0.0, value=0.0, step=1.0)
             with col_po2: total_invoice_amount = st.number_input("本次進貨【採購總金額】($)", min_value=0.0, value=0.0, step=10.0)
-            with col_po3: s_stock = st.number_input(f"設定最低安全預警量", min_value=0.0, value=default_safety, step=1.0)
+            with col_po3: s_stock = st.number_input(f"設定最低安全預警量", min_value=0.0, value=float(default_safety), step=1.0)
                 
             col_vendor1, col_vendor2, col_vendor3 = st.columns(3)
             with col_vendor1: v_name = st.text_input("供應商店名 (選填)", value="")
@@ -121,15 +120,19 @@ with po_tabs[0]:
         
         if submit_po:
             if not chosen_name or total_invoice_amount <= 0 or (prefix != 'C' and po_qty <= 0):
-                st.error("❌ 錯誤：請確認品名、數量與金額皆已填寫！")
+                st.error("❌ 錯誤：請確認品名、數量與金額皆已正確填寫且大於 0！")
+            elif prefix != 'C' and (p_unit == "" or u_unit == ""):
+                st.error("❌ 錯誤：進貨包裝大單位與廚房使用小單位皆為必填項目，不能空白！")
+            elif prefix != 'C' and c_factor <= 0:
+                st.error("❌ 錯誤：轉換率必須為大於 0 的數值！")
             else:
                 today_str = datetime.now().strftime("%Y-%m-%d")
                 conn = sqlite3.connect('inventory.db')
                 cursor = conn.cursor()
                 
                 cursor.execute('''INSERT OR REPLACE INTO products 
-                                  (prod_id, prod_name, cost, price, safety_stock, purchase_unit, use_unit, conversion_factor)
-                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', 
+                                  (prod_id, prod_name, cost, price, safety_stock, purchase_unit, use_unit, conversion_factor, status)
+                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)''', 
                                (default_id, chosen_name, calculated_single_cost, 0.0, s_stock, p_unit, u_unit, c_factor))
                 
                 cursor.execute('''INSERT INTO stock_batches 
@@ -201,7 +204,7 @@ with po_tabs[1]:
     conn = sqlite3.connect('inventory.db')
     df_all_batches = pd.read_sql_query(f'''
         SELECT s.batch_id as 批次編號, s.prod_id as 商品編號, p.prod_name as 商品名稱, 
-               s.qty as 當前小單位庫存, p.purchase_unit as 進貨單位, p.use_unit as 使用單位,
+               s.qty as 當前小單位庫存, p.purchase_unit as進貨單位, p.use_unit as 使用單位,
                p.conversion_factor as 轉換率, (s.qty / p.conversion_factor) as 進貨大包裝數,
                (s.qty * p.cost) as 推估總金額, s.expiry_date as 有效期限, s.vendor_name as 供應商, s.vendor_phone as 供應商電話,
                s.inbound_date as 進貨日期
@@ -229,13 +232,13 @@ with po_tabs[1]:
         st.markdown("---")
         col_edit1, col_edit2, col_edit3 = st.columns(3)
         with col_edit1:
-            new_p_unit = st.text_input("修正大包裝單位", value=str(matched_batch_row['進貨單位']))
-            new_po_qty = st.number_input("更正後的【進貨大包裝數量】", min_value=0.1, value=float(matched_batch_row['進貨大包裝數']), step=1.0)
+            new_p_unit = st.text_input("修正大包裝單位", value=str(matched_batch_row['進貨單位'])).strip()
+            new_po_qty = st.number_input("更正後的【進貨大包裝數量】", min_value=0.0001, value=float(max(matched_batch_row['進貨大包裝數'], 0.0001)), step=1.0)
         with col_edit2:
-            new_u_unit = st.text_input("修正廚房使用單位", value=str(matched_batch_row['使用單位']))
-            new_total_amount = st.number_input("更正後的【採購總金額】($)", min_value=0.0, value=float(matched_batch_row['推估總金額']), step=10.0)
+            new_u_unit = st.text_input("修正廚房使用單位", value=str(matched_batch_row['使用單位'])).strip()
+            new_total_amount = st.number_input("更正後的【採購總金額】($)", min_value=0.01, value=float(max(matched_batch_row['推估總金額'], 0.01)), step=10.0)
         with col_edit3:
-            new_c_factor = st.number_input("修正轉換率", min_value=1.0, value=float(matched_batch_row['轉換率']), step=1.0)
+            new_c_factor = st.number_input("修正轉換率", min_value=0.0001, value=float(max(matched_batch_row['轉換率'], 0.0001)), step=1.0)
             new_safety = st.number_input("修正最低安全預警量", min_value=0.0, value=0.0, step=1.0)
             
         col_edit4, col_edit5, col_edit6 = st.columns(3)
@@ -248,17 +251,20 @@ with po_tabs[1]:
             new_exp_str = new_exp_input.strftime("%Y-%m-%d") if new_exp_input is not None else ""
             
         if st.button("💾 確認覆蓋並修正此筆採購資料"):
-            new_total_use_units = new_po_qty * new_c_factor
-            new_calculated_cost = new_total_amount / new_total_use_units if new_total_use_units > 0 else 0.0
-            
-            audit_trail = f"採購歷史修正【批次 {target_batch_id} - {matched_batch_row['商品名稱']}】:\n"
-            if float(matched_batch_row['進貨大包裝數']) != new_po_qty:
-                audit_trail += f" * 進貨數量：自 {matched_batch_row['進貨大包裝數']} 修改為 {new_po_qty}\n"
-            if float(matched_batch_row['推估總金額']) != new_total_amount:
-                audit_trail += f" * 採購總額：自 ${matched_batch_row['推估總金額']:.0f} 修改為 ${new_total_amount:.0f}\n"
+            if new_p_unit == "" or new_u_unit == "":
+                st.error("❌ 錯誤：大包裝單位與使用單位均不能空白！")
+            else:
+                new_total_use_units = new_po_qty * new_c_factor
+                new_calculated_cost = new_total_amount / new_total_use_units if new_total_use_units > 0 else 0.0
+                
+                audit_trail = f"採購歷史修正【批次 {target_batch_id} - {matched_batch_row['商品名稱']}】:\n"
+                if float(matched_batch_row['進貨大包裝數']) != new_po_qty:
+                    audit_trail += f" * 進貨數量：自 {matched_batch_row['進貨大包裝數']} 修改為 {new_po_qty}\n"
+                if float(matched_batch_row['推估總金額']) != new_total_amount:
+                    audit_trail += f" * 採購總額：自 ${matched_batch_row['推估總金額']:.0f} 修改為 ${new_total_amount:.0f}\n"
 
-            update_purchase_batch(target_batch_id, matched_batch_row['商品編號'], new_total_use_units, new_calculated_cost, new_p_unit, new_u_unit, new_c_factor, new_safety, new_v_name, new_v_phone, new_exp_str)
-            log_history(current_user, "採購單更正", audit_trail)
-            
-            trigger_toast(f"💾 批次 {target_batch_id} 資料覆蓋成功！", icon="✏️")
-            st.rerun()
+                update_purchase_batch(target_batch_id, matched_batch_row['商品編號'], new_total_use_units, new_calculated_cost, new_p_unit, new_u_unit, new_c_factor, new_safety, new_v_name, new_v_phone, new_exp_str)
+                log_history(current_user, "採購單更正", audit_trail)
+                
+                trigger_toast(f"💾 批次 {target_batch_id} 資料覆蓋成功！", icon="✏️")
+                st.rerun()
