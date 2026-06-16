@@ -27,7 +27,7 @@ def init_db():
         cursor.execute("UPDATE products SET status = 0, price = 100.0 WHERE price = -1.0")
         cursor.execute("UPDATE products SET status = 0, price = 0.0 WHERE price = -2.0")
     
-    # 2. 庫存批次明細表 (已補上 cost 欄位以記錄該批次進貨原始單價)
+    # 2. 庫存批次明細表 (引進 original_qty 欄位防止庫存憑空復活)
     cursor.execute('''CREATE TABLE IF NOT EXISTS stock_batches (
                         batch_id INTEGER PRIMARY KEY AUTOINCREMENT,
                         prod_id TEXT, 
@@ -36,14 +36,18 @@ def init_db():
                         inbound_date TEXT,
                         vendor_name TEXT DEFAULT '',
                         vendor_phone TEXT DEFAULT '',
-                        cost REAL DEFAULT 0.0)''')
+                        cost REAL DEFAULT 0.0,
+                        original_qty REAL DEFAULT 0.0)''')
     
-    # 檢查是否需要升級舊資料庫（補上 stock_batches 的 cost 欄位）
+    # 檢查是否需要升級舊資料庫（補上 stock_batches 的 cost 與 original_qty 欄位）
     cursor.execute("PRAGMA table_info(stock_batches)")
     sb_columns = [info[1] for info in cursor.fetchall()]
     if 'cost' not in sb_columns:
         cursor.execute("ALTER TABLE stock_batches ADD COLUMN cost REAL DEFAULT 0.0")
         cursor.execute("UPDATE stock_batches SET cost = COALESCE((SELECT cost FROM products WHERE products.prod_id = stock_batches.prod_id), 0.0)")
+    if 'original_qty' not in sb_columns:
+        cursor.execute("ALTER TABLE stock_batches ADD COLUMN original_qty REAL DEFAULT 0.0")
+        cursor.execute("UPDATE stock_batches SET original_qty = qty")
     
     # 3. BOM 組裝配方表
     cursor.execute('''CREATE TABLE IF NOT EXISTS bom (
@@ -77,14 +81,14 @@ def init_db():
             ('P001', '招牌牛肉麵(成品)', 0.0, 180.0, 0, '碗', '碗', 1.0, 1)
         ])
         
-        cursor.executemany("INSERT INTO stock_batches (prod_id, qty, expiry_date, inbound_date, vendor_name, vendor_phone, cost) VALUES (?, ?, ?, ?, ?, ?, ?)", [
-            ('R001', 500, exp_1, today, '豪好吃肉品批發', '0912-345678', 0.5),   
-            ('R001', 2000, exp_2, today, '豪好吃肉品批發', '0912-345678', 0.5),  
-            ('R002', 60, exp_2, today, '大豐製麵廠', '', 5.0), 
-            ('R003', 10000, exp_2, today, '', '', 0.02),         
-            ('R004', 150, exp_1, today, '全聯農產', '02-22334455', 0.1),
-            ('S001', 100, '', today, '大同包裝材料行', '0988-111222', 3.5), 
-            ('S002', 200, '', today, '大同包裝材料行', '0988-111222', 0.5)
+        cursor.executemany("INSERT INTO stock_batches (prod_id, qty, expiry_date, inbound_date, vendor_name, vendor_phone, cost, original_qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [
+            ('R001', 500, exp_1, today, '豪好吃肉品批發', '0912-345678', 0.5, 500.0),   
+            ('R001', 2000, exp_2, today, '豪好吃肉品批發', '0912-345678', 0.5, 2000.0),  
+            ('R002', 60, exp_2, today, '大豐製麵廠', '', 5.0, 60.0), 
+            ('R003', 10000, exp_2, today, '', '', 0.02, 10000.0),         
+            ('R004', 150, exp_1, today, '全聯農產', '02-22334455', 0.1, 150.0),
+            ('S001', 100, '', today, '大同包裝材料行', '0988-111222', 3.5, 100.0), 
+            ('S002', 200, '', today, '大同包裝材料行', '0988-111222', 0.5, 200.0)
         ])
         
         cursor.executemany("INSERT INTO bom VALUES (?, ?, ?)", [
@@ -166,11 +170,28 @@ def get_next_bill_id():
     max_num = max([int(re.findall(r'\d+', pid)[0]) for (pid,) in ids if re.findall(r'\d+', pid)] + [0])
     return f"C{max_num + 1:03d}"
 
-def update_purchase_batch(batch_id, prod_id, new_qty, new_cost, p_unit, u_unit, c_factor, s_stock, v_name, v_phone, exp_str):
+def update_purchase_batch(batch_id, prod_id, new_original_qty, new_cost, p_unit, u_unit, c_factor, s_stock, v_name, v_phone, exp_str):
     conn = sqlite3.connect('inventory.db')
     cursor = conn.cursor()
     
-    # 核心修正：計算該物料「其餘所有批次」的在庫總價值與數量，重新計算真正的移動平均成本
+    # 核心修正邏輯：先撈取該批次目前的「舊原始數量」與「舊剩餘數量」
+    cursor.execute("SELECT qty, original_qty FROM stock_batches WHERE batch_id = ?", (batch_id,))
+    batch_info = cursor.fetchone()
+    
+    if batch_info:
+        old_qty = batch_info[0]
+        old_orig_qty = batch_info[1] if batch_info[1] > 0 else old_qty
+        
+        # 計算已消耗數量
+        consumed_qty = max(0.0, old_orig_qty - old_qty)
+        
+        # 智慧比例換算：新在庫剩餘量 = 新原始進貨總量 - 依新轉換率折算或維持的已消耗數量
+        # 如果新調整的進貨總量小於已消耗量，則剩餘量歸 0 (防呆)，否則按差額精準扣除已消耗
+        new_qty = max(0.0, new_original_qty - consumed_qty)
+    else:
+        new_qty = new_original_qty
+    
+    # 重新計算該物料「其餘所有批次」的在庫總價值與數量，以同步更新移動平均成本
     cursor.execute("SELECT SUM(qty), SUM(qty * cost) FROM stock_batches WHERE prod_id = ? AND batch_id != ? AND qty > 0", (prod_id, batch_id))
     other_stock_info = cursor.fetchone()
     other_qty = other_stock_info[0] if (other_stock_info and other_stock_info[0]) else 0.0
@@ -184,8 +205,8 @@ def update_purchase_batch(batch_id, prod_id, new_qty, new_cost, p_unit, u_unit, 
                       WHERE prod_id = ?''', (final_moving_avg_cost, s_stock, p_unit, u_unit, c_factor, prod_id))
                       
     cursor.execute('''UPDATE stock_batches SET 
-                        qty = ?, expiry_date = ?, vendor_name = ?, vendor_phone = ?, cost = ?
-                      WHERE batch_id = ?''', (new_qty, exp_str, v_name, v_phone, new_cost, batch_id))
+                        qty = ?, original_qty = ?, expiry_date = ?, vendor_name = ?, vendor_phone = ?, cost = ?
+                      WHERE batch_id = ?''', (new_qty, new_original_qty, exp_str, v_name, v_phone, new_cost, batch_id))
     conn.commit()
     conn.close()
 
