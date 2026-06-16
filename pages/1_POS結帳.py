@@ -259,7 +259,8 @@ with pos_tabs[0]:
                     insufficient_msg = ""
                     for item in st.session_state.current_recipe_list:
                         total_need = item['單位用量'] * sale_qty
-                        cursor.execute("SELECT SUM(qty) FROM stock_batches WHERE prod_id = ?", (item['食材編號'],))
+                        # 核心優化：盤查庫存量時，僅篩選有效的 qty > 0 批次
+                        cursor.execute("SELECT SUM(qty) FROM stock_batches WHERE prod_id = ? AND qty > 0", (item['食材編號'],))
                         current_stock = cursor.fetchone()[0] or 0
                         if current_stock < total_need:
                             insufficient = True
@@ -292,16 +293,12 @@ with pos_tabs[0]:
                         
                         trigger_toast(f"收銀成功！已售出 {final_dish_name} × {sale_qty} 份，金額：${st.session_state.pos_dish_price_val * sale_qty}", icon="🎉")
                         
-                        # ==========================================================
-                        # 💡 核心修正：除了清洗後台參數外，同步徹底刪除 UI 元件在快取區的記憶 Key
-                        # ==========================================================
                         st.session_state.pos_select_dish = "--- 請選擇菜單既有餐點 ---"
                         st.session_state.pos_input_dish = ""
                         st.session_state.pos_dish_price_val = 0
                         st.session_state.current_recipe_list = [] 
                         st.session_state.last_loaded_dish = "" 
                         
-                        # 徹底斬斷 Streamlit 畫面元件的內部記憶，強迫重新整理後直接跳回預設初始狀態
                         if "select_dish_widget" in st.session_state:
                             del st.session_state["select_dish_widget"]
                         if "input_dish_widget" in st.session_state:
@@ -489,7 +486,7 @@ with pos_tabs[2]:
     conn.close()
     
     if all_mats_raw.empty:
-        st.info("系統中尚無食材或用品。")
+        st.info("系統中尚無食材或用品. ")
     else:
         all_mats_raw['狀態'] = all_mats_raw['status'].apply(lambda s: "🔴 已停用下架" if s == 0 else "🟢 正常進貨使用中")
         st.dataframe(all_mats_raw[['prod_id', 'prod_name', 'use_unit', '狀態']], use_container_width=True, hide_index=True)

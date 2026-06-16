@@ -91,9 +91,8 @@ with po_tabs[0]:
             with col_bill1:
                 total_invoice_amount = st.number_input("本次帳單【繳費總金額】($)", min_value=0.0, value=0.0, step=10.0)
             with col_bill2:
-                # 💡 保留功能：指定特定月份選單 (1月 ~ 12月)
                 bill_months_options = [f"{i}月" for i in range(1, 13)]
-                current_month_idx = datetime.now().month - 1
+                current_month_idx = max(0, min(datetime.now().month - 1, 11))
                 selected_month_str = st.selectbox("請選擇此費用【所屬月份】(必填)", bill_months_options, index=current_month_idx)
                 
             p_unit, u_unit, c_factor, po_qty, s_stock = "次", "次", 1.0, 1.0, 0.0
@@ -147,9 +146,9 @@ with po_tabs[0]:
                                (default_id, chosen_name, calculated_single_cost, 0.0, s_stock, p_unit, u_unit, c_factor))
                 
                 cursor.execute('''INSERT INTO stock_batches 
-                                  (prod_id, qty, expiry_date, inbound_date, vendor_name, vendor_phone) 
-                                  VALUES (?, ?, ?, ?, ?, ?)''', 
-                               (default_id, total_use_units, exp_str, today_str, v_name, v_phone))
+                                  (prod_id, qty, expiry_date, inbound_date, vendor_name, vendor_phone, cost) 
+                                  VALUES (?, ?, ?, ?, ?, ?, ?)''', 
+                               (default_id, total_use_units, exp_str, today_str, v_name, v_phone, calculated_single_cost))
                 conn.commit()
                 conn.close()
                 
@@ -218,12 +217,11 @@ with po_tabs[1]:
     where_clause = " WHERE " + " AND ".join(query_conditions) if query_conditions else ""
 
     conn = sqlite3.connect('inventory.db')
-    # 💡 核心 Bug 已修復：將原本黏在一起的 `as進貨單位` 補上空格改為 `as 進貨單位`
     df_all_batches = pd.read_sql_query(f'''
         SELECT s.batch_id as 批次編號, s.prod_id as 商品編號, p.prod_name as 商品名稱, 
                s.qty as 當前小單位庫存, p.purchase_unit as 進貨單位, p.use_unit as 使用單位,
                p.conversion_factor as 轉換率, (s.qty / p.conversion_factor) as 進貨大包裝數,
-               (s.qty * p.cost) as 推估總金額, s.expiry_date as 有效期限, s.vendor_name as 供應商, s.vendor_phone as 供應商電話,
+               (s.qty * s.cost) as 推估總金額, s.expiry_date as 有效期限, s.vendor_name as 供應商, s.vendor_phone as 供應商電話,
                s.inbound_date as 進貨日期
         FROM stock_batches s JOIN products p ON s.prod_id = p.prod_id 
         {where_clause}
@@ -236,62 +234,120 @@ with po_tabs[1]:
     if df_all_batches.empty:
         st.info("💡 沒有符合當前篩選條件的採購紀錄。")
     else:
-        batch_options = df_all_batches.apply(
-            lambda r: f"【批次 {int(r['批次編號'])}】({r['進貨日期']}) {r['商品編號']}-{r['商品名稱']} (大包裝:{r['進貨大包裝數']:.1f}{r['進貨單位']}, 金額:${r['推估總金額']:.0f})", 
-            axis=1
-        ).tolist()
-        
+        def format_batch_option(r):
+            if str(r['商品編號']).startswith('C'):
+                return f"【帳單費用】({r['進貨日期']}) {r['商品編號']}-{r['商品名稱']} (總金額:${r['推估總金額']:.0f}) — [編號:{int(r['批次編號'])}]"
+            else:
+                return f"【批次 {int(r['批次編號'])}】({r['進貨日期']}) {r['商品編號']}-{r['商品名稱']} (大包裝:{r['進貨大包裝數']:.1f}{r['進貨單位']}, 估值:${r['推估總金額']:.0f})"
+                
+        batch_options = df_all_batches.apply(format_batch_option, axis=1).tolist()
         selected_batch_str = st.selectbox("🎯 請選取您想要修改或補正的採購單批次：", batch_options)
         
-        target_batch_id = int(selected_batch_str.split("【批次 ")[1].split("】")[0])
+        if " — [編號:" in selected_batch_str:
+            target_batch_id = int(selected_batch_str.split(" — [編號:")[1].split("]")[0])
+        else:
+            target_batch_id = int(selected_batch_str.split("【批次 ")[1].split("】")[0])
+            
         matched_batch_row = df_all_batches[df_all_batches['批次編號'] == target_batch_id].iloc[0]
+        is_bill = str(matched_batch_row['商品編號']).startswith('C')
         
         st.markdown("---")
-        col_edit1, col_edit2, col_edit3 = st.columns(3)
-        with col_edit1:
-            new_p_unit = st.text_input("修正大包裝單位", value=str(matched_batch_row['進貨單位'])).strip()
-            new_po_qty = st.number_input("更正後的【進貨大包裝數量】", min_value=0.0, value=float(max(matched_batch_row['進貨大包裝數'], 0.0)), step=1.0)
-        with col_edit2:
-            new_u_unit = st.text_input("修正廚房使用單位", value=str(matched_batch_row['使用單位'])).strip()
-            new_total_amount = st.number_input("更正後的【採購總金額】($)", min_value=0.0, value=float(max(matched_batch_row['推估總金額'], 0.0)), step=10.0)
-        with col_edit3:
-            new_c_factor = st.number_input("修正轉換率", min_value=0.0001, value=float(max(matched_batch_row['轉換率'], 0.0001)), step=1.0)
-            new_safety = st.number_input("修正最低安全預警量", min_value=0.0, value=0.0, step=1.0)
+        
+        if is_bill:
+            st.markdown("##### 💰 填寫更正後的帳單金額與所屬月份（皆為必填）：")
+            col_bill_e1, col_bill_e2 = st.columns(2)
             
-        col_edit4, col_edit5, col_edit6 = st.columns(3)
-        with col_edit4: new_v_name = st.text_input("更正供應商店名", value=str(matched_batch_row['供應商']))
-        with col_edit5: new_v_phone = st.text_input("更正供應商電話", value=str(matched_batch_row['供應商電話']))
-        with col_edit6:
-            try: orig_date = datetime.strptime(matched_batch_row['有效期限'], "%Y-%m-%d").date()
-            except: orig_date = None
-            new_exp_input = st.date_input("更正有效期限", value=orig_date, key="edit_exp_date")
-            new_exp_str = new_exp_input.strftime("%Y-%m-%d") if new_exp_input is not None else ""
+            with col_bill_e1:
+                # 欄位名稱對齊分頁一
+                new_total_amount = st.number_input(
+                    "本次帳單【繳費總金額】($)", 
+                    min_value=0.0, 
+                    value=float(max(matched_batch_row['推估總金額'], 0.0)), 
+                    step=10.0,
+                    key="edit_bill_amount_input"
+                )
+            with col_bill_e2:
+                bill_months_options = [f"{i}月" for i in range(1, 13)]
+                current_month_str = str(datetime.now().month) + "月"
+                
+                conn = sqlite3.connect('inventory.db')
+                cursor = conn.cursor()
+                cursor.execute("SELECT details FROM history WHERE action = '帳單支出登記' AND details LIKE ? ORDER BY id DESC LIMIT 1", (f"%新單登記：{matched_batch_row['商品名稱']}%",))
+                hist_row = cursor.fetchone()
+                conn.close()
+                
+                if hist_row:
+                    import re
+                    month_match = re.search(r"費用月份：(\d+月)", hist_row[0])
+                    if month_match:
+                        current_month_str = month_match.group(1)
+                
+                if current_month_str in bill_months_options:
+                    default_month_idx = bill_months_options.index(current_month_str)
+                else:
+                    cleaned_m = current_month_str.lstrip('0')
+                    default_month_idx = bill_months_options.index(cleaned_m) if cleaned_m in bill_months_options else 0
+                    
+                selected_month_str = st.selectbox("請選擇此費用【所屬月份】(必填)", bill_months_options, index=default_month_idx, key="edit_bill_month_select")
+                
+            new_p_unit, new_u_unit, new_c_factor, new_po_qty, new_safety = "次", "次", 1.0, 1.0, 0.0
+            new_v_name, new_v_phone, new_exp_str = "公共事業/其他", "", ""
             
+        else:
+            st.markdown("##### 📦 填寫更正後的包裝規格與採購數據：")
+            col_edit1, col_edit2, col_edit3 = st.columns(3)
+            with col_edit1:
+                new_p_unit = st.text_input("大包裝進貨單位 (如:台斤、箱)", value=str(matched_batch_row['進貨單位'])).strip()
+                new_po_qty = st.number_input("進貨大包裝總數量", min_value=0.0, value=float(max(matched_batch_row['進貨大包裝數'], 0.0)), step=1.0)
+            with col_edit2:
+                new_u_unit = st.text_input("廚房基本使用小單位 (如:g、個)", value=str(matched_batch_row['使用單位'])).strip()
+                new_total_amount = st.number_input("本次進貨【採購總金額】($)", min_value=0.0, value=float(max(matched_batch_row['推估總金額'], 0.0)), step=10.0)
+            with col_edit3:
+                new_c_factor = st.number_input("轉換率 (一大包等於多少小單位)", min_value=0.0001, value=float(max(matched_batch_row['轉換率'], 0.0001)), step=1.0)
+                new_safety = st.number_input("設定最低安全預警量", min_value=0.0, value=0.0, step=1.0)
+                
+            col_edit4, col_edit5, col_edit6 = st.columns(3)
+            with col_edit4: new_v_name = st.text_input("更正供應商店名", value=str(matched_batch_row['供應商']))
+            with col_edit5: new_v_phone = st.text_input("更正供應商電話", value=str(matched_batch_row['供應商電話']))
+            with col_edit6:
+                try: orig_date = datetime.strptime(matched_batch_row['有效期限'], "%Y-%m-%d").date()
+                except: orig_date = None
+                new_exp_input = st.date_input("更正有效期限", value=orig_date, key="edit_exp_date")
+                new_exp_str = new_exp_input.strftime("%Y-%m-%d") if new_exp_input is not None else ""
+
+        # ---- 歷史採購單錯誤修正 核心防呆邏輯（完全同步對齊新登記） ----
         if st.button("💾 確認覆蓋並修正此筆採購資料"):
-            is_bill = str(matched_batch_row['商品編號']).startswith('C')
-            
             if not is_bill and new_p_unit == "":
-                st.error("❌ 錯誤：【大包裝單位】為必填項目，不能留空！")
+                st.error("❌ 錯誤：【大包裝進貨單位】為必填欄位，請勿留空！")
             elif not is_bill and new_u_unit == "":
-                st.error("❌ 錯誤：【廚房使用單位】為必填項目，不能留空！")
-            elif not is_bill and new_po_qty <= 0:
-                st.error("❌ 錯誤：【更正後的進貨大包裝數量】必須大於 0！")
+                st.error("❌ 錯誤：【廚房基本使用小單位】為必填欄位，請勿留空！")
             elif not is_bill and new_c_factor <= 0:
-                st.error("❌ 錯誤：【修正轉換率】必須大於 0！")
-            elif new_total_amount <= 0:
-                st.error("❌ 錯誤：【更正後的採購總金額】必須大於 0！")
+                st.error("❌ 錯誤：【轉換率】必須為大於 0 的有效數值！")
+            elif not is_bill and new_po_qty <= 0:
+                st.error("❌ 錯誤：【進貨大包裝總數量】必須大於 0！")
+            elif is_bill and new_total_amount <= 0:
+                st.error("❌ 錯誤：【本次帳單繳費總金額】必須大於 0！")
+            elif not is_bill and new_total_amount <= 0:
+                st.error("❌ 錯誤：【本次進貨採購總金額】必須大於 0！")
             else:
+                # 通過防呆，計算並寫入資料庫
                 new_total_use_units = new_po_qty * new_c_factor if not is_bill else 1.0
                 new_calculated_cost = new_total_amount / new_total_use_units if new_total_use_units > 0 else 0.0
                 
-                audit_trail = f"採購歷史修正【批次 {target_batch_id} - {matched_batch_row['商品名稱']}】:\n"
-                if float(matched_batch_row['進貨大包裝數']) != new_po_qty:
-                    audit_trail += f" * 進貨數量：自 {matched_batch_row['進貨大包裝數']} 修改為 {new_po_qty}\n"
-                if float(matched_batch_row['推估總金額']) != new_total_amount:
-                    audit_trail += f" * 採購總額：自 ${matched_batch_row['推估總金額']:.0f} 修改為 ${new_total_amount:.0f}\n"
+                if is_bill:
+                    audit_trail = f"歷史帳單修正【{matched_batch_row['商品名稱']}】:\n"
+                    audit_trail += f" * 費用月份：覆蓋調整為 {selected_month_str}\n"
+                    if float(matched_batch_row['推估總金額']) != new_total_amount:
+                        audit_trail += f" * 帳單金額：自 ${matched_batch_row['推估總金額']:.0f} 修改為 ${new_total_amount:.0f}\n"
+                else:
+                    audit_trail = f"採購歷史修正【批次 {target_batch_id} - {matched_batch_row['商品名稱']}】:\n"
+                    if float(matched_batch_row['進貨大包裝數']) != new_po_qty:
+                        audit_trail += f" * 進貨數量：自 {matched_batch_row['進貨大包裝數']} 修改為 {new_po_qty}\n"
+                    if float(matched_batch_row['推估總金額']) != new_total_amount:
+                        audit_trail += f" * 採購總額：自 ${matched_batch_row['推估總金額']:.0f} 修改為 ${new_total_amount:.0f}\n"
 
                 update_purchase_batch(target_batch_id, matched_batch_row['商品編號'], new_total_use_units, new_calculated_cost, new_p_unit, new_u_unit, new_c_factor, new_safety, new_v_name, new_v_phone, new_exp_str)
                 log_history(current_user, "採購單更正", audit_trail)
                 
-                trigger_toast(f"💾 批次 {target_batch_id} 資料覆蓋成功！", icon="✏️")
+                trigger_toast(f"💾 資料覆蓋成功！", icon="✏️")
                 st.rerun()

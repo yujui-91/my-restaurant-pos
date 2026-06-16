@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-from database.db_core import init_db, trigger_toast, show_pending_toast
+from database.db_core import init_db, trigger_toast, show_pending_toast, log_history
 
 st.set_page_config(layout="wide")
 
@@ -47,7 +47,6 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ 快速微調安全庫存線")
 
 conn = sqlite3.connect('inventory.db')
-# 💡 已修正：移除多餘的 behold 髒資料，確保欄位名稱正確對準 use_unit
 all_items_for_safety = pd.read_sql_query("SELECT prod_id, prod_name, safety_stock, use_unit FROM products WHERE (prod_id LIKE 'R%' OR prod_id LIKE 'S%') AND price >= 0", conn)
 conn.close()
 
@@ -75,11 +74,11 @@ if not all_items_for_safety.empty:
         trigger_toast(f"已將 【{matched_safety_row['prod_name']}】 的安全線更新為 {new_safety_value}", icon="⚙️")
         st.rerun()
 
-# --- 計算當前哪些項目低於安全庫存線 (排除已下架停用項目) ---
+# --- 計算當前哪些項目低於安全庫存線 (排除已下架停用項目，且僅統計有效在庫 qty > 0 的批次) ---
 conn = sqlite3.connect('inventory.db')
 df_alert_check = pd.read_sql_query('''
     SELECT p.prod_name, 
-           COALESCE((SELECT SUM(s.qty) FROM stock_batches s WHERE s.prod_id = p.prod_id), 0) as total_qty, 
+           COALESCE((SELECT SUM(s.qty) FROM stock_batches s WHERE s.prod_id = p.prod_id AND s.qty > 0), 0) as total_qty, 
            p.safety_stock, p.use_unit
     FROM products p 
     WHERE p.status = 1 AND (p.prod_id LIKE 'R%' OR p.prod_id LIKE 'S%')
@@ -110,14 +109,14 @@ elif stock_filter == "僅看用品 (S)":
 else:
     query_condition = "WHERE (p.prod_id LIKE 'R%' OR p.prod_id LIKE 'S%')"
 
-# 💡 新邏輯：透過 SUM(s.qty) 將多個批次疊加，並精確呈現移動平均單位成本
+# 透過 CASE WHEN s.qty > 0 將多個批次疊加，精確呈現有效庫存總量與價值
 df_merged_stock = pd.read_sql_query(f'''
     SELECT p.prod_id as 編號, 
            p.prod_name as 商品名稱, 
-           COALESCE(SUM(s.qty), 0) as 總庫存量, 
+           COALESCE(SUM(CASE WHEN s.qty > 0 THEN s.qty ELSE 0 END), 0) as 總庫存量, 
            p.use_unit as 單位, 
            p.cost as 移動平均單位成本, 
-           (COALESCE(SUM(s.qty), 0) * p.cost) as 庫存總價值,
+           (COALESCE(SUM(CASE WHEN s.qty > 0 THEN s.qty ELSE 0 END), 0) * p.cost) as 庫存總價值,
            p.safety_stock as 安全庫存, 
            p.status as 狀態碼
     FROM products p 
@@ -138,7 +137,7 @@ if not df_merged_stock.empty:
             styles[name_idx] = 'background-color: #ffcccc; color: #cc0000; font-weight: bold;'
         return styles
 
-    # 顯示合併後的庫存主表（手機版優化：指定核心寬度，消除過大間距）
+    # 顯示合併後的庫存主表
     st.dataframe(
         df_merged_stock.style.apply(highlight_disabled, axis=1)
                      .format({"總庫存量": "{:,.1f}", "移動平均單位成本": "${:,.4f}", "庫存總價值": "${:,.1f}", "安全庫存": "{:,.1f}"}), 
@@ -157,12 +156,12 @@ if not df_merged_stock.empty:
     )
     
     # ==========================================
-    # 💡 互動亮點功能：展開精確查看供應商與批次明細 (解決看不到供應商的問題)
+    # 🔍 展開精確查看供應商與批次明細 (僅顯示 qty > 0 的有效持倉)
     # ==========================================
     st.markdown("---")
     st.markdown("### 🔍 歷史進貨批次與獨立供應商抽查面板")
     
-    # 排除庫存為 0 且沒有批次紀錄的項目，方便老闆選擇
+    # 僅允許選擇目前還有庫存的品項進行分解
     valid_detail_items = df_merged_stock[df_merged_stock['總庫存量'] > 0]
     
     if not valid_detail_items.empty:
@@ -174,22 +173,21 @@ if not df_merged_stock.empty:
         target_prod_id = selected_stock_item.split(" - ")[0]
         
         conn = sqlite3.connect('inventory.db')
-        # 功能改善 1：包含精確計算出該批次剩餘在當前庫存中的總金額價值 (qty * p.cost)
+        # 包含精確計算出該批次賸餘在當前庫存中的總金額價值 (qty * s.cost 採用批次各自進貨原始單價)
         df_batch_details = pd.read_sql_query('''
             SELECT s.batch_id as 批次編號, 
                    s.inbound_date as 進貨日期, 
                    s.qty as 剩餘庫存量, 
-                   (s.qty * p.cost) as 當次進貨總金額,
+                   (s.qty * s.cost) as 當次進貨總金額,
                    s.expiry_date as 有效期限, 
                    s.vendor_name as 原始供應商,
                    s.vendor_phone as 供應商電話
             FROM stock_batches s
-            JOIN products p ON s.prod_id = p.prod_id
             WHERE s.prod_id = ? AND s.qty > 0
             ORDER BY s.inbound_date ASC, s.batch_id ASC
         ''', conn, params=(target_prod_id,))
         
-        # 撈取該品項在 products 中的基本（或最新一次）登記成本作為對照
+        # 撈取該品項在 products 中的最新登记平均成本作為對照
         cursor = conn.cursor()
         cursor.execute("SELECT cost, use_unit FROM products WHERE prod_id = ?", (target_prod_id,))
         prod_cost_info = cursor.fetchone()
@@ -199,9 +197,8 @@ if not df_merged_stock.empty:
         unit_str = prod_cost_info[1] if prod_cost_info else ""
         
         if not df_batch_details.empty:
-            st.caption(f"💡 目前 【{selected_stock_item}】 共由以下 {len(df_batch_details)} 個進貨批次組成，各自保留著原始供應商管道：")
+            st.caption(f"💡 目前 【{selected_stock_item}】 共由以下 {len(df_batch_details)} 個有效進貨批次組成，各自保留著原始供應商管道與獨立單價：")
             
-            # 手機平板優化：緊湊型批次細節表，且「當次進貨總金額」完美呈現
             st.dataframe(
                 df_batch_details.style.format({"剩餘庫存量": f"{{:,.1f}} {unit_str}", "當次進貨總金額": "${:,.1f}"}),
                 use_container_width=True,
@@ -209,7 +206,7 @@ if not df_merged_stock.empty:
                     "批次編號": st.column_config.NumberColumn("批次", width="small"),
                     "進貨日期": st.column_config.TextColumn("進貨日期", width="small"),
                     "剩餘庫存量": st.column_config.TextColumn("在庫數量", width="small"),
-                    "當次進貨總金額": st.column_config.NumberColumn("當次進貨總金額", width="small"),
+                    "當次進貨總金額": st.column_config.NumberColumn("當次剩餘總價值", width="small"),
                     "有效期限": st.column_config.TextColumn("效期", width="small"),
                     "原始供應商": st.column_config.TextColumn("原始供應商", width="medium"),
                     "供應商電話": st.column_config.TextColumn("聯絡電話", width="medium"),
@@ -217,49 +214,76 @@ if not df_merged_stock.empty:
                 hide_index=True
             )
             
-            # 手機平板友善的大字級卡片提示
             st.info(f"💡 財務小提示：此品項目前整體的「浮動移動平均單位成本」為 **${base_cost:,.4f}** / {unit_str}。")
         else:
             st.info("該品項目前無有效批次庫存。")
             
     # ==========================================
-    # 徹底刪除已下架品項的歷史庫存
+    # 💡 功能改善：清除已下架品項的殘留歷史庫存（智慧兩級聯動 + 詳細效期規格版）
     # ==========================================
-    # 重新撈取有批次且狀態為下架的資料
+    # 第一步：撈取有在庫庫存 (qty > 0) 且在產品表已被停用/下架 (status = 0) 的不重複食材名稱列表
     conn = sqlite3.connect('inventory.db')
-    df_disabled_batches = pd.read_sql_query('''
-        SELECT s.batch_id, s.prod_id, p.prod_name, s.qty, p.use_unit
-        FROM stock_batches s 
-        JOIN products p ON s.prod_id = p.prod_id 
-        WHERE p.status = 0
+    df_unique_disabled_items = pd.read_sql_query('''
+        SELECT DISTINCT p.prod_id, p.prod_name
+        FROM products p
+        JOIN stock_batches s ON p.prod_id = s.prod_id
+        WHERE p.status = 0 AND s.qty > 0
+        ORDER BY p.prod_id
     ''', conn)
     conn.close()
     
-    if not df_disabled_batches.empty:
+    if not df_unique_disabled_items.empty:
         st.markdown("---")
-        st.markdown("##### 🗑️ 徹底刪除已下架品項的歷史庫存")
-        st.caption("如果您不想在上方看到這些紅色的下架品項，可以在下方選擇將該批次庫存徹底從系統中刪除：")
+        st.markdown("##### 🗑️ 清理已下架品項的殘留庫存紀錄")
+        st.caption("如果您不想在上方看到這些紅色高亮的下架品項，可以在下方依序選擇品項與特定批次，將其數量歸零：")
         
-        del_options = df_disabled_batches.apply(
-            lambda r: f"【批次 {int(r['batch_id'])}】{r['prod_id']}-{r['prod_name']} (剩餘庫存: {r['qty']}{r['use_unit']})", axis=1
-        ).tolist()
+        # 1. 聯動第一級：選擇下架物料/食材名稱
+        disabled_item_options = df_unique_disabled_items.apply(lambda r: f"{r['prod_id']} - {r['prod_name']}", axis=1).tolist()
+        selected_disabled_item_str = st.selectbox("🔍 1. 請選取欲清理的下架商品/食材：", disabled_item_options, key="clean_disabled_item_box")
+        target_disabled_prod_id = selected_disabled_item_str.split(" - ")[0]
         
-        target_del_str = st.selectbox("🎯 選擇要永久刪除的下架庫存批次", del_options, key="home_del_disabled_batch")
+        # 2. 聯動第二級：根據選定的產品編號，即時去撈出這一項商品擁有的所有殘留有效批次
+        conn = sqlite3.connect('inventory.db')
+        df_disabled_batches = pd.read_sql_query('''
+            SELECT s.batch_id, s.qty, p.use_unit, s.inbound_date, s.expiry_date
+            FROM stock_batches s 
+            JOIN products p ON s.prod_id = p.prod_id 
+            WHERE s.prod_id = ? AND s.qty > 0
+            ORDER BY s.inbound_date ASC, s.batch_id ASC
+        ''', conn, params=(target_disabled_prod_id,))
+        conn.close()
         
-        if st.button("❌ 確認從庫存明細中刪除此批次", type="primary"):
-            target_batch_id = int(target_del_str.split("【批次 ")[1].split("】")[0])
+        if not df_disabled_batches.empty:
+            # 格式化批次資訊下拉選單：包含進貨日期與有效日期（無填寫時貼心防呆顯示）
+            def format_batch_label(r):
+                exp_label = r['expiry_date'] if (r['expiry_date'] and r['expiry_date'].strip() != "") else "無填寫"
+                return f"【批次 {int(r['batch_id'])}】進貨日: {r['inbound_date']} | 有效日期: {exp_label} | 殘留數量: {r['qty']}{r['use_unit']}"
+            
+            batch_options = df_disabled_batches.apply(format_batch_label, axis=1).tolist()
+            selected_batch_str = st.selectbox("🎯 2. 請選擇欲清空歸零的特定殘留批次：", batch_options, key="clean_disabled_batch_box")
+            
+            # 解析並鎖定選取的批次編號
+            target_batch_id = int(selected_batch_str.split("【批次 ")[1].split("】")[0])
             matched_del_row = df_disabled_batches[df_disabled_batches['batch_id'] == target_batch_id].iloc[0]
+            item_name = selected_disabled_item_str.split(" - ")[1]
             
-            conn = sqlite3.connect('inventory.db')
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM stock_batches WHERE batch_id = ?", (target_batch_id,))
-            conn.commit()
-            conn.close()
-            
-            from database.db_core import log_history
-            log_history(st.session_state.current_user, "庫存批次徹底刪除", f"老闆在首頁清除了已下架品項的殘留庫存：{matched_del_row['prod_name']}(批次:{target_batch_id})")
-            
-            trigger_toast(f"已成功刪除 【{matched_del_row['prod_name']}】 批次 {target_batch_id} 的庫存資料！", icon="🗑️")
-            st.rerun()
+            if st.button("❌ 確認將此下架批次數量歸零（移出明細）", type="primary", key="clean_disabled_submit_btn"):
+                # 安全更新：不直接 DELETE 破壞審計鏈，而是將 qty 改為 0，符合不刪資料的新核心原則！
+                conn = sqlite3.connect('inventory.db')
+                cursor = conn.cursor()
+                cursor.execute("UPDATE stock_batches SET qty = 0 WHERE batch_id = ?", (target_batch_id,))
+                conn.commit()
+                conn.close()
+                
+                log_history(
+                    st.session_state.current_user, 
+                    "下架庫存清理", 
+                    f"老闆在首頁清空了已下架品項的殘留庫存量：{item_name} (批次:{target_batch_id}，原數量:{matched_del_row['qty']}{matched_del_row['use_unit']})"
+                )
+                
+                trigger_toast(f"已成功將 【{item_name}】 批次 {target_batch_id} 的庫存量歸零清除！", icon="🗑️")
+                st.rerun()
+        else:
+            st.info("該品項目前無有效殘留批次。")
 else:
     st.info("目前此類別無庫存，請先辦理採購進貨。")
