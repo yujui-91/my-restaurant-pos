@@ -21,7 +21,6 @@ with po_tabs[0]:
     else: prefix = 'C'
 
     conn = sqlite3.connect('inventory.db')
-    # 💡 核心安全邏輯 1 & 2 修正：移除 status=1 的限制！已下架的原物料也要能採購進貨！
     existing_items_df = pd.read_sql_query(
         "SELECT prod_id, prod_name, purchase_unit, use_unit, conversion_factor, safety_stock FROM products WHERE prod_id LIKE ?", 
         conn, params=(f"{prefix}%",)
@@ -38,7 +37,7 @@ with po_tabs[0]:
     with col_choice1:
         options_list = [f"--- 請選擇已建立的{item_type[:2]} ---"] + (existing_items_df['prod_name'].tolist())
         chosen_select_name = st.selectbox(
-            "【重複登記】從這裡直接下拉搜尋既有品項", 
+            "【重複登記】從這裡直接下拉搜尋既品項", 
             options_list, 
             index=0,
             key="clean_po_select_box",
@@ -87,8 +86,16 @@ with po_tabs[0]:
         final_id = st.text_input("項目編號", value=default_id, disabled=True)
         
         if prefix == 'C':
-            st.markdown("##### 💰 2. 請輸入本次帳單金額：")
-            total_invoice_amount = st.number_input("本次帳單【繳費總金額】($)", min_value=0.0, value=0.0, step=10.0)
+            st.markdown("##### 💰 2. 請輸入本次帳單金額與對應月份：")
+            col_bill1, col_bill2 = st.columns(2)
+            with col_bill1:
+                total_invoice_amount = st.number_input("本次帳單【繳費總金額】($)", min_value=0.0, value=0.0, step=10.0)
+            with col_bill2:
+                # 💡 保留功能：指定特定月份選單 (1月 ~ 12月)
+                bill_months_options = [f"{i}月" for i in range(1, 13)]
+                current_month_idx = datetime.now().month - 1
+                selected_month_str = st.selectbox("請選擇此費用【所屬月份】(必填)", bill_months_options, index=current_month_idx)
+                
             p_unit, u_unit, c_factor, po_qty, s_stock = "次", "次", 1.0, 1.0, 0.0
             v_name, v_phone, exp_str = "公共事業/其他", "", ""
         else:
@@ -96,8 +103,6 @@ with po_tabs[0]:
             col_spec1, col_spec2, col_spec3 = st.columns(3)
             with col_spec1: p_unit = st.text_input("大包裝進貨單位 (如:台斤、箱)", value=default_p_unit).strip()
             with col_spec2: u_unit = st.text_input("廚房基本使用小單位 (如:g、個)", value=default_u_unit).strip()
-            
-            # 💡 核心安全邏輯 2 修正：利用 max(..., 0.0001) 確保預設帶入的值絕對不會低於最小值限制，解決噴錯與 Submit 按鈕消失
             with col_spec3: c_factor = st.number_input("轉換率 (一大包等於多少小單位)", min_value=0.0001, value=float(max(default_c_factor, 0.0001)), step=1.0)
 
             st.markdown("##### 💰 3. 請填寫本次採購的實際數據與供應商資訊：")
@@ -118,7 +123,6 @@ with po_tabs[0]:
         
         submit_po = st.form_submit_button("📥 確認無誤，送出登記")
         
-        # 【核心功能改善】：全面的必填欄位防呆檢查機制
         if submit_po:
             if not chosen_name:
                 st.error("❌ 錯誤：請選取重複登記項目或輸入首次登記項目名稱！")
@@ -149,11 +153,16 @@ with po_tabs[0]:
                 conn.commit()
                 conn.close()
                 
-                log_action = "帳單支出登記" if prefix == 'C' else "採購進貨"
-                vendor_info = f" (供應商: {v_name})" if v_name else ""
-                log_history(current_user, log_action, f"新單登記：{chosen_name}，數量：{po_qty}{p_unit}，總金額：${total_invoice_amount}{vendor_info}")
+                if prefix == 'C':
+                    log_action = "帳單支出登記"
+                    log_history(current_user, log_action, f"新單登記：{chosen_name}，費用月份：{selected_month_str}，總金額：${total_invoice_amount}")
+                    trigger_toast(f"帳單費用登記完成！【{chosen_name} ({selected_month_str}費用)】總金額：${total_invoice_amount}", icon="📥")
+                else:
+                    log_action = "採購進貨"
+                    vendor_info = f" (供應商: {v_name})" if v_name else ""
+                    log_history(current_user, log_action, f"新單登記：{chosen_name}，數量：{po_qty}{p_unit}，總金額：${total_invoice_amount}{vendor_info}")
+                    trigger_toast(f"採購登記完成！【{chosen_name}】總金額：${total_invoice_amount}", icon="📥")
                 
-                trigger_toast(f"採購登記完成！【{chosen_name}】總金額：${total_invoice_amount}", icon="📥")
                 st.rerun()
 
 with po_tabs[1]:
@@ -209,7 +218,7 @@ with po_tabs[1]:
     where_clause = " WHERE " + " AND ".join(query_conditions) if query_conditions else ""
 
     conn = sqlite3.connect('inventory.db')
-    # 💡 核心技術 Bug 修復：將原本黏在一起的 `as進貨單位` 補上空格改為 `as 進貨單位`，徹底解決 KeyError 的致命問題
+    # 💡 核心 Bug 已修復：將原本黏在一起的 `as進貨單位` 補上空格改為 `as 進貨單位`
     df_all_batches = pd.read_sql_query(f'''
         SELECT s.batch_id as 批次編號, s.prod_id as 商品編號, p.prod_name as 商品名稱, 
                s.qty as 當前小單位庫存, p.purchase_unit as 進貨單位, p.use_unit as 使用單位,
@@ -261,7 +270,6 @@ with po_tabs[1]:
         if st.button("💾 確認覆蓋並修正此筆採購資料"):
             is_bill = str(matched_batch_row['商品編號']).startswith('C')
             
-            # 【功能改善】：修正歷史採購資料時同步納入必填防呆機制
             if not is_bill and new_p_unit == "":
                 st.error("❌ 錯誤：【大包裝單位】為必填項目，不能留空！")
             elif not is_bill and new_u_unit == "":

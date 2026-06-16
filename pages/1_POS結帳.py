@@ -24,7 +24,6 @@ if 'pos_dish_price_val' not in st.session_state:
 
 conn = sqlite3.connect('inventory.db')
 existing_dishes = pd.read_sql_query("SELECT prod_id, prod_name, price FROM products WHERE status = 1 AND prod_id LIKE 'P%'", conn)
-# 注意：此處僅看正常啟用的食材，供現場加料使用
 all_raw_df = pd.read_sql_query("SELECT prod_id, prod_name, use_unit, cost FROM products WHERE status = 1 AND (prod_id LIKE 'R%' OR prod_id LIKE 'S%')", conn)
 conn.close()
 
@@ -243,7 +242,6 @@ with pos_tabs[0]:
                 conn = sqlite3.connect('inventory.db')
                 cursor = conn.cursor()
                 
-                # 💡 核心安全邏輯 1：檢查配方中是否有任何食材已被下架 (status=0)
                 disabled_item_detected = False
                 disabled_msg = ""
                 for item in st.session_state.current_recipe_list:
@@ -257,7 +255,6 @@ with pos_tabs[0]:
                     st.error(disabled_msg)
                     conn.close()
                 else:
-                    # 庫存充足防防呆
                     insufficient = False
                     insufficient_msg = ""
                     for item in st.session_state.current_recipe_list:
@@ -281,7 +278,6 @@ with pos_tabs[0]:
                         
                         for item in st.session_state.current_recipe_list:
                             total_need = item['單位用量'] * sale_qty
-                            # 💡 核心安全邏輯 4：由修復後的核心真正累加實際出貨的歷史批次成本
                             success, deducted_cost_val = deduct_stock_fifo(item['食材編號'], total_need, cursor)
                             actual_bill_food_cost += deducted_cost_val
                             
@@ -296,12 +292,16 @@ with pos_tabs[0]:
                         
                         trigger_toast(f"收銀成功！已售出 {final_dish_name} × {sale_qty} 份，金額：${st.session_state.pos_dish_price_val * sale_qty}", icon="🎉")
                         
+                        # ==========================================================
+                        # 💡 核心修正：除了清洗後台參數外，同步徹底刪除 UI 元件在快取區的記憶 Key
+                        # ==========================================================
                         st.session_state.pos_select_dish = "--- 請選擇菜單既有餐點 ---"
                         st.session_state.pos_input_dish = ""
                         st.session_state.pos_dish_price_val = 0
                         st.session_state.current_recipe_list = [] 
                         st.session_state.last_loaded_dish = "" 
                         
+                        # 徹底斬斷 Streamlit 畫面元件的內部記憶，強迫重新整理後直接跳回預設初始狀態
                         if "select_dish_widget" in st.session_state:
                             del st.session_state["select_dish_widget"]
                         if "input_dish_widget" in st.session_state:
@@ -326,10 +326,8 @@ with pos_tabs[1]:
             td_id = matched_dish['prod_id']
             old_price = int(float(matched_dish['price']))
             
-            # 技術修正：移除 min_value=1，允許 Streamlit 完整獲取使用者鍵入的負數，才能正常被下方的防呆機制攔截並顯示錯誤。
             new_dish_price = st.number_input("更正後的販售價格 (必須為大於 0 的整數)", step=1, key="edit_price_input", value=max(old_price, 1))
             
-            # 初始化或更換餐點時重新載入配方到暫存器
             if 'editing_recipe_dish_id' not in st.session_state or st.session_state.editing_recipe_dish_id != td_id:
                 conn = sqlite3.connect('inventory.db')
                 db_recipe = pd.read_sql_query('''
@@ -340,12 +338,10 @@ with pos_tabs[1]:
                 st.session_state.editing_recipe_list = db_recipe.to_dict(orient='records')
                 st.session_state.editing_recipe_dish_id = td_id
 
-            # 🌟 新增功能：允許在修改餐點時「加入其他原物料」 🌟
             st.markdown("----")
             st.markdown("##### ➕ 追加新原物料至此餐點標準配方：")
             col_add_e1, col_add_e2, col_add_e3 = st.columns([2, 1, 1])
             with col_add_e1:
-                # 僅篩選正常啟用的原物料與用品
                 add_edit_mat_name = st.selectbox("選擇要追加的食材/用品", ["--- 請選擇食材 ---"] + all_raw_df['prod_name'].tolist(), key="add_edit_mat_select")
             with col_add_e2:
                 add_edit_mat_qty = st.number_input("單份標準用量", min_value=0.0001, value=1.0, step=1.0, key="add_edit_mat_qty_input")
@@ -356,7 +352,6 @@ with pos_tabs[1]:
                         matched_mats = all_raw_df[all_raw_df['prod_name'] == add_edit_mat_name]
                         if not matched_mats.empty:
                             mat_info = matched_mats.iloc[0]
-                            # 檢查是否已存在於配方中
                             existing_idx = next((i for i, item in enumerate(st.session_state.editing_recipe_list) if item['食材編號'] == mat_info['prod_id']), None)
                             
                             new_item_dict = {
@@ -392,7 +387,6 @@ with pos_tabs[1]:
                     use_container_width=True
                 )
                 
-                # 同步 data_editor 的異動回 session_state
                 has_changes = False
                 updated_recipe_list = []
                 for idx, row in edited_df.iterrows():
@@ -415,7 +409,6 @@ with pos_tabs[1]:
             else:
                 st.info("此餐點目前沒有任何配方物料，請從上方選單追加。")
 
-            # 儲存到資料庫
             recipe_has_negative = any(float(item["單位用量"]) <= 0 for item in st.session_state.editing_recipe_list)
             
             if st.button("💾 確認儲存餐點價格與配方變更"):
@@ -437,7 +430,6 @@ with pos_tabs[1]:
                     log_history(current_user, f"修正餐點參數-{target_dish_name}", change_details)
                     
                     trigger_toast(f"餐點【{target_dish_name}】參數與全新配方已成功覆蓋更新！", icon="⚙️")
-                    # 清除暫存
                     del st.session_state.editing_recipe_list
                     del st.session_state.editing_recipe_dish_id
                     st.rerun()
