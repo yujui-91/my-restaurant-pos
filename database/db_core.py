@@ -56,7 +56,7 @@ def init_db():
                         qty_needed REAL,
                         PRIMARY KEY (parent_id, child_id))''')
     
-    # 4. 歷史紀錄表
+    # 4. 歷史紀錄表 (原有欄位完全不變，維持對既有資料的向下相容)
     cursor.execute('''CREATE TABLE IF NOT EXISTS history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT, 
                         timestamp TEXT, 
@@ -174,24 +174,17 @@ def update_purchase_batch(batch_id, prod_id, new_original_qty, new_cost, p_unit,
     conn = sqlite3.connect('inventory.db')
     cursor = conn.cursor()
     
-    # 核心修正邏輯：先撈取該批次目前的「舊原始數量」與「舊剩餘數量」
     cursor.execute("SELECT qty, original_qty FROM stock_batches WHERE batch_id = ?", (batch_id,))
     batch_info = cursor.fetchone()
     
     if batch_info:
         old_qty = batch_info[0]
         old_orig_qty = batch_info[1] if batch_info[1] > 0 else old_qty
-        
-        # 計算已消耗數量
         consumed_qty = max(0.0, old_orig_qty - old_qty)
-        
-        # 智慧比例換算：新在庫剩餘量 = 新原始進貨總量 - 依新轉換率折算或維持的已消耗數量
-        # 如果新調整的進貨總量小於已消耗量，則剩餘量歸 0 (防呆)，否則按差額精準扣除已消耗
         new_qty = max(0.0, new_original_qty - consumed_qty)
     else:
         new_qty = new_original_qty
     
-    # 重新計算該物料「其餘所有批次」的在庫總價值與數量，以同步更新移動平均成本
     cursor.execute("SELECT SUM(qty), SUM(qty * cost) FROM stock_batches WHERE prod_id = ? AND batch_id != ? AND qty > 0", (prod_id, batch_id))
     other_stock_info = cursor.fetchone()
     other_qty = other_stock_info[0] if (other_stock_info and other_stock_info[0]) else 0.0
