@@ -47,7 +47,7 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ 快速微調安全庫存線")
 
 conn = sqlite3.connect('inventory.db')
-# 只對食材(R)與用品(S)且未下架停用的品項進行微調
+# 💡 已修正：移除多餘的 behold 髒資料，確保欄位名稱正確對準 use_unit
 all_items_for_safety = pd.read_sql_query("SELECT prod_id, prod_name, safety_stock, use_unit FROM products WHERE (prod_id LIKE 'R%' OR prod_id LIKE 'S%') AND price >= 0", conn)
 conn.close()
 
@@ -174,16 +174,19 @@ if not df_merged_stock.empty:
         target_prod_id = selected_stock_item.split(" - ")[0]
         
         conn = sqlite3.connect('inventory.db')
+        # 功能改善 1：包含精確計算出該批次剩餘在當前庫存中的總金額價值 (qty * p.cost)
         df_batch_details = pd.read_sql_query('''
-            SELECT batch_id as 批次編號, 
-                   inbound_date as 進貨日期, 
-                   qty as 剩餘庫存量, 
-                   expiry_date as 有效期限, 
-                   vendor_name as 原始供應商,
-                   vendor_phone as 供應商電話
-            FROM stock_batches 
-            WHERE prod_id = ? AND qty > 0
-            ORDER BY inbound_date ASC, batch_id ASC
+            SELECT s.batch_id as 批次編號, 
+                   s.inbound_date as 進貨日期, 
+                   s.qty as 剩餘庫存量, 
+                   (s.qty * p.cost) as 當次進貨總金額,
+                   s.expiry_date as 有效期限, 
+                   s.vendor_name as 原始供應商,
+                   s.vendor_phone as 供應商電話
+            FROM stock_batches s
+            JOIN products p ON s.prod_id = p.prod_id
+            WHERE s.prod_id = ? AND s.qty > 0
+            ORDER BY s.inbound_date ASC, s.batch_id ASC
         ''', conn, params=(target_prod_id,))
         
         # 撈取該品項在 products 中的基本（或最新一次）登記成本作為對照
@@ -198,14 +201,15 @@ if not df_merged_stock.empty:
         if not df_batch_details.empty:
             st.caption(f"💡 目前 【{selected_stock_item}】 共由以下 {len(df_batch_details)} 個進貨批次組成，各自保留著原始供應商管道：")
             
-            # 手機平板優化：緊湊型批次細節表，且「原始供應商」與「電話」完美呈現
+            # 手機平板優化：緊湊型批次細節表，且「當次進貨總金額」完美呈現
             st.dataframe(
-                df_batch_details.style.format({"剩餘庫存量": f"{{:,.1f}} {unit_str}"}),
+                df_batch_details.style.format({"剩餘庫存量": f"{{:,.1f}} {unit_str}", "當次進貨總金額": "${:,.1f}"}),
                 use_container_width=True,
                 column_config={
                     "批次編號": st.column_config.NumberColumn("批次", width="small"),
                     "進貨日期": st.column_config.TextColumn("進貨日期", width="small"),
                     "剩餘庫存量": st.column_config.TextColumn("在庫數量", width="small"),
+                    "當次進貨總金額": st.column_config.NumberColumn("當次進貨總金額", width="small"),
                     "有效期限": st.column_config.TextColumn("效期", width="small"),
                     "原始供應商": st.column_config.TextColumn("原始供應商", width="medium"),
                     "供應商電話": st.column_config.TextColumn("聯絡電話", width="medium"),
