@@ -71,7 +71,13 @@ def init_db():
         exp_1 = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
         exp_2 = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
         
-        cursor.executemany("INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+        # 核心優化：明確指定欄位名稱插入，徹底解決 OperationalError 欄位數量不符問題
+        cursor.executemany("""
+            INSERT INTO products (
+                prod_id, prod_name, cost, price, safety_stock, 
+                purchase_unit, use_unit, conversion_factor, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
             ('R001', '澳洲牛肉', 0.5, 0.0, 1000, '箱(20kg)', 'g', 20000.0, 1),
             ('R002', '麵條', 5.0, 0.0, 50, '箱(100份)', '份', 100.0, 1),
             ('R003', '高湯', 0.02, 0.0, 5000, '桶(20L)', 'ml', 20000.0, 1),
@@ -81,7 +87,12 @@ def init_db():
             ('P001', '招牌牛肉麵(成品)', 0.0, 180.0, 0, '碗', '碗', 1.0, 1)
         ])
         
-        cursor.executemany("INSERT INTO stock_batches (prod_id, qty, expiry_date, inbound_date, vendor_name, vendor_phone, cost, original_qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [
+        cursor.executemany("""
+            INSERT INTO stock_batches (
+                prod_id, qty, expiry_date, inbound_date, 
+                vendor_name, vendor_phone, cost, original_qty
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
             ('R001', 500, exp_1, today, '豪好吃肉品批發', '0912-345678', 0.5, 500.0),   
             ('R001', 2000, exp_2, today, '豪好吃肉品批發', '0912-345678', 0.5, 2000.0),  
             ('R002', 60, exp_2, today, '大豐製麵廠', '', 5.0, 60.0), 
