@@ -6,6 +6,24 @@ from database.db_core import init_db, trigger_toast, show_pending_toast
 st.set_page_config(layout="wide")
 
 # ==========================================
+# 📱 行動裝置優化：注入自定義 CSS 緊湊樣式
+# ==========================================
+st.markdown("""
+    <style>
+        /* 放大表格內文字體，並縮減行高與內距，讓手機看更緊湊 */
+        [data-testid="stDataFrame"] td, [data-testid="stDataFrame"] th {
+            font-size: 15px !important;
+            padding: 6px 8px !important;
+        }
+        /* 讓手機版跑馬燈與提示區塊更顯眼 */
+        .stAlert p {
+            font-size: 15px !important;
+            font-weight: 500;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+# ==========================================
 # 全域通知監聽器：置於最首行，確保重整完畢後平穩彈出通知
 # ==========================================
 show_pending_toast()
@@ -120,26 +138,36 @@ if not df_merged_stock.empty:
             styles[name_idx] = 'background-color: #ffcccc; color: #cc0000; font-weight: bold;'
         return styles
 
-    # 顯示合併後的庫存主表
+    # 顯示合併後的庫存主表（手機版優化：指定核心寬度，消除過大間距）
     st.dataframe(
         df_merged_stock.style.apply(highlight_disabled, axis=1)
                      .format({"總庫存量": "{:,.1f}", "移動平均單位成本": "${:,.4f}", "庫存總價值": "${:,.1f}", "安全庫存": "{:,.1f}"}), 
         use_container_width=True, 
-        column_config={"狀態碼": None}
+        column_config={
+            "狀態碼": None,
+            "編號": st.column_config.TextColumn("編號", width="small"),
+            "商品名稱": st.column_config.TextColumn("商品名稱", width="medium"),
+            "總庫存量": st.column_config.NumberColumn("總庫存量", width="small"),
+            "單位": st.column_config.TextColumn("單位", width="small"),
+            "移動平均單位成本": st.column_config.NumberColumn("單位成本", width="small"),
+            "庫存總價值": st.column_config.NumberColumn("總價值", width="small"),
+            "安全庫存": st.column_config.NumberColumn("安全線", width="small"),
+        },
+        hide_index=True
     )
     
     # ==========================================
-    # 💡 互動亮點功能：隨時點選品項，展開查看「每次不同的歷史進貨成本明細」
+    # 💡 互動亮點功能：展開精確查看供應商與批次明細 (解決看不到供應商的問題)
     # ==========================================
     st.markdown("---")
-    st.markdown("### 🔍 歷史進貨批次與獨立成本抽查面板")
+    st.markdown("### 🔍 歷史進貨批次與獨立供應商抽查面板")
     
     # 排除庫存為 0 且沒有批次紀錄的項目，方便老闆選擇
     valid_detail_items = df_merged_stock[df_merged_stock['總庫存量'] > 0]
     
     if not valid_detail_items.empty:
         selected_stock_item = st.selectbox(
-            "🎯 請選取下方品項，系統將即時分析該項目的每一次進貨明細與單價：",
+            "🎯 請選取下方品項，系統將即時分解列出每一筆進貨批次的【原始供應商】與進貨明細：",
             valid_detail_items['編號'] + " - " + valid_detail_items['商品名稱']
         )
         
@@ -151,7 +179,8 @@ if not df_merged_stock.empty:
                    inbound_date as 進貨日期, 
                    qty as 剩餘庫存量, 
                    expiry_date as 有效期限, 
-                   vendor_name as 供應商
+                   vendor_name as 原始供應商,
+                   vendor_phone as 供應商電話
             FROM stock_batches 
             WHERE prod_id = ? AND qty > 0
             ORDER BY inbound_date ASC, batch_id ASC
@@ -167,18 +196,24 @@ if not df_merged_stock.empty:
         unit_str = prod_cost_info[1] if prod_cost_info else ""
         
         if not df_batch_details.empty:
-            st.caption(f"💡 目前 【{selected_stock_item}】 共由以下 {len(df_batch_details)} 個進貨批次組成。")
+            st.caption(f"💡 目前 【{selected_stock_item}】 共由以下 {len(df_batch_details)} 個進貨批次組成，各自保留著原始供應商管道：")
             
-            # 由於舊資料庫在 stock_batches 表中沒有獨立存入當時的成本（而是存於 products 表），
-            # 這裡為了完美符合您「隨時看每次不同的單位成本」之訴求，我們在画面上同時呈現系統目前計算的基礎單價，
-            # 並提醒您若有透過「採購單修正」或不同進貨登記，此面板將能完美核對各批次對應的時間與庫存關聯。
+            # 手機平板優化：緊湊型批次細節表，且「原始供應商」與「電話」完美呈現
             st.dataframe(
                 df_batch_details.style.format({"剩餘庫存量": f"{{:,.1f}} {unit_str}"}),
                 use_container_width=True,
+                column_config={
+                    "批次編號": st.column_config.NumberColumn("批次", width="small"),
+                    "進貨日期": st.column_config.TextColumn("進貨日期", width="small"),
+                    "剩餘庫存量": st.column_config.TextColumn("在庫數量", width="small"),
+                    "有效期限": st.column_config.TextColumn("效期", width="small"),
+                    "原始供應商": st.column_config.TextColumn("原始供應商", width="medium"),
+                    "供應商電話": st.column_config.TextColumn("聯絡電話", width="medium"),
+                },
                 hide_index=True
             )
             
-            # 提示移動平均的計算
+            # 手機平板友善的大字級卡片提示
             st.info(f"💡 財務小提示：此品項目前整體的「浮動移動平均單位成本」為 **${base_cost:,.4f}** / {unit_str}。")
         else:
             st.info("該品項目前無有效批次庫存。")
