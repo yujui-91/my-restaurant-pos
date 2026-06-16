@@ -1,3 +1,4 @@
+# pages/4_盤點.py
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -66,9 +67,9 @@ if not df_products_in_stock.empty:
         """)
         
         with st.form("precise_audit_form"):
+            # 🎯 移除 min_value 限制，不再讓 Streamlit 自動把負數偷偷轉化成 0.0
             actual_qty = st.number_input(
                 f"填寫該批次現場【實盤總數量】 ({unit_label})", 
-                min_value=0.0, 
                 value=theoretical_qty, 
                 step=1.0
             )
@@ -76,37 +77,40 @@ if not df_products_in_stock.empty:
             submit_audit = st.form_submit_button("💾 確認無誤，覆蓋並更新此批次庫存")
             
             if submit_audit:
-                diff_qty = actual_qty - theoretical_qty
-                
-                if diff_qty > 0:
-                    audit_status = f"盤盈 (該批次多了 {abs(diff_qty):,.2f} {unit_label})"
-                elif diff_qty < 0:
-                    audit_status = f"盤虧 (該批次少了 {abs(diff_qty):,.2f} {unit_label})"
+                # 🛑 核心防呆：現場實盤數量絕不可能低於 0，若小於 0 則立刻拋錯阻斷
+                if actual_qty < 0:
+                    st.error(f"❌ 錯誤：現場【實盤總數量】絕對不能小於 0！您目前的輸入數值為 {actual_qty}")
                 else:
-                    audit_status = "完全吻合 (無誤差)"
-                
-                conn = sqlite3.connect('inventory.db')
-                cursor = conn.cursor()
-                cursor.execute('''
-                    UPDATE stock_batches 
-                    SET qty = ? 
-                    WHERE batch_id = ?
-                ''', (actual_qty, target_batch_id))
-                
-                # 功能改善：移除自動清空歸零批次的行為碼，轉而永久保留
-                conn.commit()
-                conn.close()
-                
-                log_details = (
-                    f"盤點核實覆蓋。品項：【{item_name}({target_prod_id})】的[批次 {target_batch_id}]。習得歷史進貨日: {orig_inbound}，原登記供應商: {orig_vendor if orig_vendor else '無'}。"
-                    f"該批次系統理論數: {theoretical_qty:,.2f} {unit_label} -> 現場實盤數: {actual_qty:,.2f} {unit_label}。盤點結果：{audit_status}，持續繼承單價基準: ${current_base_cost:.4f}/{unit_label}。"
-                )
-                log_history(current_user, f"存貨盤點-{item_name}", log_details)
-                
-                trigger_toast(f"📋 批次 {target_batch_id} 盤點修正完成！結果：{audit_status}", icon="🔍")
-                st.success(f"🎉 [批次 {target_batch_id}] 數據更新成功！盤點結果：{audit_status}")
-                st.rerun()
+                    diff_qty = actual_qty - theoretical_qty
+                    
+                    if diff_qty > 0:
+                        audit_status = f"盤盈 (該批次多了 {abs(diff_qty):,.2f} {unit_label})"
+                    elif diff_qty < 0:
+                        audit_status = f"盤虧 (該批次少了 {abs(diff_qty):,.2f} {unit_label})"
+                    else:
+                        audit_status = "完全吻合 (無誤差)"
+                    
+                    conn = sqlite3.connect('inventory.db')
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        UPDATE stock_batches 
+                        SET qty = ? 
+                        WHERE batch_id = ?
+                    ''', (actual_qty, target_batch_id))
+                    
+                    conn.commit()
+                    conn.close()
+                    
+                    log_details = (
+                        f"盤點核實覆蓋。品項：【{item_name}({target_prod_id})】的[批次 {target_batch_id}]。習得歷史進貨日: {orig_inbound}，原登記供應商: {orig_vendor if orig_vendor else '無'}。"
+                        f"該批次系統理論數: {theoretical_qty:,.2f} {unit_label} -> 現場實盤數: {actual_qty:,.2f} {unit_label}。盤點結果：{audit_status}，持續繼承單價基準: ${current_base_cost:.4f}/{unit_label}。"
+                    )
+                    log_history(current_user, f"存貨盤點-{item_name}", log_details)
+                    
+                    trigger_toast(f"📋 批次 {target_batch_id} 盤點修正完成！結果：{audit_status}", icon="🔍")
+                    st.success(f"🎉 [批次 {target_batch_id}] 數據更新成功！盤點結果：{audit_status}")
+                    st.rerun()
     else:
         st.warning("⚠️ 找不到該商品的有效庫存批次，請重新整理頁面。")
 else:
-    st.info(f"💡 目前 【{audit_cate_filter}】 類別中沒有任何在庫庫存資料可供盤點。")
+    st.info(f"💡 目前 【audit_cate_filter】 類別中沒有任何在庫庫存資料可供盤點。")

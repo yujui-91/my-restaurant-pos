@@ -8,7 +8,7 @@ import streamlit as st
 st.subheader("📊 門市商業智能：營收、成本與損益分析")
 
 report_option = st.selectbox(
-    "📅 選擇統計區間", ["今天", "過去 7 天", "過去 30 定", "自訂區間 (自選起訖日期)"], key="finance_time"
+    "📅 選擇統計區間", ["今天", "過去 7 天", "過去 30 天", "自訂區間 (自選起訖日期)"], key="finance_time"
 )
 
 now = datetime.now()
@@ -45,16 +45,14 @@ inbound_end = end_date.strftime("%Y-%m-%d")
 st.caption(f"統計區間：{start_date} ～ {end_date}")
 
 conn = sqlite3.connect("inventory.db")
-# 1. 讀取前台餐點收銀結帳紀錄
 df_sales = pd.read_sql_query(
     """
-    SELECT details FROM history WHERE action LIKE '餐點收銀結帳-%' AND timestamp BETWEEN ? AND ?
+    SELECT details FROM history WHERE (action LIKE '餐點收銀結帳-%' OR action = '多品項收銀結帳') AND timestamp BETWEEN ? AND ?
 """,
     conn,
     params=(start_str, end_str),
 )
 
-# 2. 讀取固定帳單費用 (C開頭)
 df_bill = pd.read_sql_query(
     """
     SELECT p.prod_name, SUM(s.qty * p.cost) amount FROM stock_batches s
@@ -65,10 +63,9 @@ df_bill = pd.read_sql_query(
     params=(inbound_start, inbound_end),
 )
 
-# 改善需求 3：撈取此段時間區間內，系統真正「進貨登記」的所有歷史批次資料，用以解析實際進貨大包裝總金額
 df_purchase_history = pd.read_sql_query(
     """
-    SELECT s.prod_id, s.qty, p.cost, p.prod_name
+    SELECT s.prod_id, s.qty, s.cost, p.prod_name
     FROM stock_batches s
     JOIN products p ON s.prod_id = p.prod_id
     WHERE s.inbound_date BETWEEN ? AND ? AND (s.prod_id LIKE 'R%' OR s.prod_id LIKE 'S%')
@@ -78,13 +75,11 @@ df_purchase_history = pd.read_sql_query(
 )
 conn.close()
 
-# 計算進貨成本 (拆分食材 R 與 用品 S)
 total_purchase_r = 0.0
 total_purchase_s = 0.0
 
 for _, row in df_purchase_history.iterrows():
     p_id = row["prod_id"]
-    # 進貨當下的批次總金額 = 小單位數量 * 移動平均單價
     p_amount = float(row["qty"]) * float(row["cost"])
     if p_id.startswith('R'):
         total_purchase_r += p_amount
@@ -93,34 +88,42 @@ for _, row in df_purchase_history.iterrows():
 
 total_purchase_all = total_purchase_r + total_purchase_s
 
-total_revenue, total_food_cost, total_bill = 0, 0, 0
+total_revenue, total_food_cost, total_bill = 0.0, 0.0, 0.0
 material_usage, dish_sales = {}, {}
 
 for _, row in df_sales.iterrows():
     txt = row["details"]
 
-    # 1. 營業額解析
     revenue_match = re.search(r"總金額 \$(\d+\.?\d*)", txt)
     if revenue_match:
         total_revenue += float(revenue_match.group(1))
 
-    # 2. 食材精準移動加權歷史實際成本解析
-    cost_match = re.search(r"精準食材成本 \$(\d+\.?\d*)", txt)
+    cost_match = re.search(r"食材成本 \$(\d+\.?\d*)", txt)
+    if not cost_match:
+        cost_match = re.search(r"食材總成本 \$(\d+\.?\d*)", txt)
     if cost_match:
         total_food_cost += float(cost_match.group(1))
 
-    # 3. 成品餐點銷售數量排行解析
-    dish_match = re.search(r"前台銷售「(.+?) × ([\d\.]+) 份」", txt)
-    if dish_match:
-        dish_name = dish_match.group(1)
-        qty = float(dish_match.group(2))
-        dish_sales[dish_name] = dish_sales.get(dish_name, 0) + qty
+    # 相容舊版與新合併版點餐單解析
+    dish_items = re.findall(r"【(.+?) x ([\d\.]+)份】", txt)
+    if not dish_items:
+        dish_match = re.search(r"前台銷售「(.+?) × ([\d\.]+) 份」", txt)
+        if dish_match:
+            dish_items = [(dish_match.group(1), dish_match.group(2))]
+            
+    for dish_name, qty_val in dish_items:
+        dish_sales[dish_name] = dish_sales.get(dish_name, 0.0) + float(qty_val)
 
-    # 食材圓餅圖精確限制字元解析
     mats = re.findall(r"([^\s_,「」（）()]+)_([RS]\d+)\(([\d\.]+)", txt)
-    for m_name, m_id, qty_val in mats:
-        qty_val = float(qty_val)
-        material_usage[m_name] = material_usage.get(m_name, 0) + qty_val
+    if not mats:
+        mats = re.findall(r"([^\s_,「」（）()]+)\(([\d\.]+)", txt)
+        # 排除包含餐點或總金額等中文字
+        mats = [(name, "", val) for name, val in mats if not any(k in name for k in ["份", "單價", "小計", "總金額", "成本", "出餐"])]
+
+    for m_tuple in mats:
+        m_name = m_tuple[0]
+        qty_val = float(m_tuple[-1])
+        material_usage[m_name] = material_usage.get(m_name, 0.0) + qty_val
 
 if not df_bill.empty:
     total_bill = float(df_bill["amount"].sum())
@@ -129,7 +132,6 @@ gross_profit = total_revenue - total_food_cost
 net_profit = gross_profit - total_bill
 margin = (net_profit / total_revenue) * 100 if total_revenue > 0 else 0
 
-# 呈現核心關鍵指標
 a, b, c, d, e = st.columns(5)
 a.metric("🏪 營業額", f"${total_revenue:,.0f}")
 b.metric("🥩 食材消耗成本", f"${total_food_cost:,.0f}")
@@ -137,9 +139,6 @@ c.metric("⚡ 固定帳單支出", f"${total_bill:,.0f}")
 d.metric("🔥 門市純利", f"${net_profit:,.0f}")
 e.metric("📈 淨利率", f"{margin:.1f}%")
 
-# ==========================================
-# 改善需求 3：新增獨立的進貨成本數據與現金流看板
-# ==========================================
 st.markdown("### 📥 期間採購進貨總支出統計（現金流參考指標）")
 st.caption("💡 商學知識：開店利潤是以「食材實際消耗量」計算。下方進貨金額代表您本月『花費多少現金去補貨囤貨』，屬於現金流掌控指標。")
 p_col1, p_col2, p_col3 = st.columns(3)

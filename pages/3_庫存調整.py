@@ -58,34 +58,39 @@ if not df_unique_items.empty:
         
         with st.form("inventory_adjustment_form"):
             adj_type = st.radio("動作選擇", ["過期損耗/報廢/人為疏失 (扣減庫存)", "手動補正/盤盈回補 (增加庫存)"], horizontal=True)
-            adj_qty = st.number_input(f"請輸入異動變更的數量 ({unit_label})", min_value=0.1, value=1.0, step=1.0)
+            
+            # 🎯 移除 min_value 限制，允許 Streamlit 接收鍵盤輸入的負數，以便在後端精確捕捉並拋出錯誤
+            adj_qty = st.number_input(f"請輸入異動變更的數量 ({unit_label})", value=1.0, step=1.0)
             
             reason_txt = st.text_input("請填寫微調/報廢原因說明 (選填)", value="")
             
             submit_adj = st.form_submit_button("🔧 確認執行庫存異動")
             
             if submit_adj:
-                final_qty_change = -adj_qty if "報廢" in adj_type else adj_qty
-                new_total_qty = current_qty + final_qty_change
-                
-                if new_total_qty < 0:
-                    st.error("❌ 錯誤：扣減數量不能大於現有庫存量！")
+                # 🛑 核心防呆：數量小於或等於 0 時，馬上跳出錯誤訊息，並阻斷後續所有變更動作
+                if adj_qty <= 0:
+                    st.error(f"❌ 錯誤：異動變更的數量必須大於 0！您目前的輸入數值為 {adj_qty}")
                 else:
-                    final_reason = reason_txt.strip() if reason_txt.strip() != "" else "未填寫原因"
+                    final_qty_change = -adj_qty if "報廢" in adj_type else adj_qty
+                    new_total_qty = current_qty + final_qty_change
+                    
+                    if new_total_qty < 0:
+                        st.error("❌ 錯誤：扣減數量不能大於現有庫存量！")
+                    else:
+                        final_reason = reason_txt.strip() if reason_txt.strip() != "" else "未填寫原因"
 
-                    conn = sqlite3.connect('inventory.db')
-                    cursor = conn.cursor()
-                    cursor.execute("UPDATE stock_batches SET qty = ? WHERE batch_id = ?", (new_total_qty, batch_id_part))
-                    # 功能改善：移除原有的歸零自動清理 DELETE 行為，使其改為保留歸零紀錄。
-                    conn.commit()
-                    conn.close()
-                    
-                    log_details = f"庫存微調【{item_name}】(批次編號 {batch_id_part}，進貨日: {orig_inbound_date})。動作：{adj_type}，數量：{adj_qty} {unit_label}，異動後現存：{new_total_qty} {unit_label}。原因：{final_reason}"
-                    log_history(current_user, f"庫存微調-{item_name}", log_details)
-                    
-                    trigger_toast(f"🛠️ 批次庫存微調完畢！品項：{item_name}，變動量：{final_qty_change:+,.1f}", icon="🔧")
-                    st.success(f"🎉 批次庫存調整成功！已成功紀錄於歷史動作審計軌跡。")
-                    st.rerun()
+                        conn = sqlite3.connect('inventory.db')
+                        cursor = conn.cursor()
+                        cursor.execute("UPDATE stock_batches SET qty = ? WHERE batch_id = ?", (new_total_qty, batch_id_part))
+                        conn.commit()
+                        conn.close()
+                        
+                        log_details = f"庫存微調【{item_name}】(批次編號 {batch_id_part}，進貨日: {orig_inbound_date})。動作：{adj_type}，數量：{adj_qty} {unit_label}，異動後現存：{new_total_qty} {unit_label}。原因：{final_reason}"
+                        log_history(current_user, f"庫存微調-{item_name}", log_details)
+                        
+                        trigger_toast(f"🛠️ 批次庫存微調完畢！品項：{item_name}，變動量：{final_qty_change:+,.1f}", icon="🔧")
+                        st.success(f"🎉 批次庫存調整成功！已成功紀錄於歷史動作審計軌跡。")
+                        st.rerun()
     else:
         st.info("💡 該品項目前無有效批次。")
 else:

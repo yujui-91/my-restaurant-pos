@@ -43,7 +43,6 @@ def init_db():
     sb_columns = [info[1] for info in cursor.fetchall()]
     if 'cost' not in sb_columns:
         cursor.execute("ALTER TABLE stock_batches ADD COLUMN cost REAL DEFAULT 0.0")
-        # 同步舊資料：將 products 的歷史成本填入舊批次作為基本防呆
         cursor.execute("UPDATE stock_batches SET cost = COALESCE((SELECT cost FROM products WHERE products.prod_id = stock_batches.prod_id), 0.0)")
     
     # 3. BOM 組裝配方表
@@ -107,7 +106,6 @@ def log_history(user, action, details):
     conn.close()
 
 def deduct_stock_fifo(prod_id, qty_to_deduct, cursor):
-    """功能改善：直接由庫存批次明細表 (stock_batches) 中的原始紀錄單價計算加權扣除金額，且不直接 DELETE 歸零紀錄"""
     cursor.execute("SELECT batch_id, qty, cost FROM stock_batches WHERE prod_id = ? AND qty > 0 ORDER BY expiry_date ASC, inbound_date ASC", (prod_id,))
     batches = cursor.fetchall()
     total_available = sum([b[1] for b in batches])
@@ -120,9 +118,7 @@ def deduct_stock_fifo(prod_id, qty_to_deduct, cursor):
     for batch_id, batch_qty, batch_cost in batches:
         if remains <= 0: break
         
-        # 精確計算本次扣除份數
         deduct_qty = min(remains, batch_qty)
-        # 核心優化：直接乘以該批次的進貨單價 (batch_cost) 
         total_deducted_cost += deduct_qty * batch_cost
         
         if batch_qty >= remains:
@@ -132,7 +128,6 @@ def deduct_stock_fifo(prod_id, qty_to_deduct, cursor):
             cursor.execute("UPDATE stock_batches SET qty = 0 WHERE batch_id = ?", (batch_id,))
             remains -= batch_qty
             
-    # 核心改善：不再執行 DELETE FROM stock_batches WHERE qty <= 0，保留批次完整生命週期
     return True, total_deducted_cost
 
 def get_next_raw_id():
@@ -174,10 +169,20 @@ def get_next_bill_id():
 def update_purchase_batch(batch_id, prod_id, new_qty, new_cost, p_unit, u_unit, c_factor, s_stock, v_name, v_phone, exp_str):
     conn = sqlite3.connect('inventory.db')
     cursor = conn.cursor()
+    
+    # 核心修正：計算該物料「其餘所有批次」的在庫總價值與數量，重新計算真正的移動平均成本
+    cursor.execute("SELECT SUM(qty), SUM(qty * cost) FROM stock_batches WHERE prod_id = ? AND batch_id != ? AND qty > 0", (prod_id, batch_id))
+    other_stock_info = cursor.fetchone()
+    other_qty = other_stock_info[0] if (other_stock_info and other_stock_info[0]) else 0.0
+    other_val = other_stock_info[1] if (other_stock_info and other_stock_info[1]) else 0.0
+    
+    final_total_qty = other_qty + new_qty
+    final_moving_avg_cost = (other_val + (new_qty * new_cost)) / final_total_qty if final_total_qty > 0 else new_cost
+
     cursor.execute('''UPDATE products SET 
                         cost = ?, safety_stock = ?, purchase_unit = ?, use_unit = ?, conversion_factor = ?
-                      WHERE prod_id = ?''', (new_cost, s_stock, p_unit, u_unit, c_factor, prod_id))
-    # 核心優化：更新歷史採購時同時覆蓋批次明細中的 cost 欄位
+                      WHERE prod_id = ?''', (final_moving_avg_cost, s_stock, p_unit, u_unit, c_factor, prod_id))
+                      
     cursor.execute('''UPDATE stock_batches SET 
                         qty = ?, expiry_date = ?, vendor_name = ?, vendor_phone = ?, cost = ?
                       WHERE batch_id = ?''', (new_qty, exp_str, v_name, v_phone, new_cost, batch_id))
