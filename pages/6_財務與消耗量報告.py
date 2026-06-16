@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import re
+import json
 import plotly.express as px
 from datetime import datetime, timedelta
 from database.db_core import show_pending_toast
@@ -12,7 +13,7 @@ show_pending_toast()
 st.subheader("📊 門市商業智能：營收、成本與損益分析報告")
 
 # ==========================================
-# 🔍 頂部複合時間篩選面板 (找回原本超彈性的時間篩選)
+# 🔍 頂部複合時間篩選面板
 # ==========================================
 report_option = st.selectbox(
     "📅 請選擇財務統計區間：", 
@@ -56,9 +57,9 @@ while current_ptr <= end_date:
 # ==========================================
 conn = sqlite3.connect('inventory.db')
 
-# 1. 撈取選定日期區間內發生的點餐與作廢紀錄
-df_sales = pd.read_sql_query('''
-    SELECT action, details FROM history 
+# 1. 撈取選定日期區間內發生的所有相關收銀與作廢紀錄
+df_history_sales = pd.read_sql_query('''
+    SELECT id, action, details, timestamp FROM history 
     WHERE (action = '多品項收銀結帳' OR action = '訂單作廢成功')
       AND timestamp BETWEEN ? AND ?
 ''', conn, params=(start_str, end_str))
@@ -71,36 +72,73 @@ df_expenses_raw = pd.read_sql_query('''
 
 conn.close()
 
+# 收集該期間內已被作廢的單號池，以便進行雙向安全沖銷
+canceled_order_ids = set()
+for _, row in df_history_sales.iterrows():
+    if row['action'] == "訂單作廢成功":
+        id_match = re.search(r"作廢了單號 (\d+)", row['details'])
+        if id_match:
+            canceled_order_ids.add(int(id_match.group(1)))
+
 # 初始化財務加總變數
 total_revenue = 0.0
 total_food_cost = 0.0
 total_op_expense = 0.0
 total_stock_loss = 0.0
 
-# 找回你最愛的：餐點銷售排行與原物料消耗統計池
+# 餐點銷售排行與原物料消耗統計池
 dish_sales = {}
 material_usage = {}
 
-# A. 處理即時區間內的營業額、FIFO 食材成本與餐點銷售排行
-for _, row in df_sales.iterrows():
+# A. 處理即時區間內的營業額、FIFO 食材成本與餐點銷售排行 (全面結構化 JSON 解析)
+for _, row in df_history_sales.iterrows():
+    # 核心改善 1：如果該筆「多品項收銀結帳」單號存在於作廢池中，直接予以財務沖銷排除
+    if row['action'] == "多品項收銀結帳" and row['id'] in canceled_order_ids:
+        continue
+    if row['action'] == "訂單作廢成功":
+        continue # 作廢紀錄本身不提供正向營收
+        
     txt = row['details']
     
-    # 累加營業額
+    # 強度升級：優先嘗試 JSON 結構化解析
+    if "||STRUCT_DATA||" in txt:
+        try:
+            json_part = txt.split("||STRUCT_DATA||")[1]
+            payload = json.loads(json_part)
+            
+            total_revenue += float(payload.get("total_revenue", 0.0))
+            total_food_cost += float(payload.get("total_cost", 0.0))
+            
+            # 累加餐點銷售份數
+            for d in payload.get("dishes", []):
+                d_name = d.get("prod_name")
+                d_qty = float(d.get("qty", 0.0))
+                if d_name:
+                    dish_sales[d_name] = dish_sales.get(d_name, 0.0) + d_qty
+                    
+            # 累加原物料消耗
+            for m in payload.get("materials", []):
+                m_name = m.get("mat_name")
+                m_qty = float(m.get("qty", 0.0))
+                if m_name:
+                    material_usage[m_name] = material_usage.get(m_name, 0.0) + m_qty
+            continue # 解析成功，跳過傳統舊正則匹配
+        except:
+            pass # 萬一 JSON 損毀則降級退回舊模式
+
+    # 向下相容：傳統正則表達式解析舊資料
     revenue_match = re.search(r"總金額 \$(\d+\.?\d*)", txt)
     if revenue_match:
         total_revenue += float(revenue_match.group(1))
         
-    # 累加 FIFO 精準食材成本
     cost_match = re.search(r"精準食材成本 \$([\d\.]+)", txt)
     if cost_match:
         total_food_cost += float(cost_match.group(1))
         
-    # 🏆【功能完美補回】解析並累加當期餐點銷售份數
     dish_items = re.findall(r"【(.+?) x ([\d\.]+)份】", txt)
     for dish_name, qty_val in dish_items:
         dish_sales[dish_name] = dish_sales.get(dish_name, 0.0) + float(qty_val)
         
-    # 解析並累加原物料消耗 (前台出餐部分)
     if "消耗食材:" in txt:
         mats_part = txt.split("消耗食材:")[1].strip()
         mats_list = mats_part.split(", ")
@@ -119,27 +157,22 @@ for _, row in df_expenses_raw.iterrows():
     timestamp_str = row['timestamp']
     default_month = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S").strftime("%Y-%m")
     
-    # 🎯 檢查有無指定 target_month
     target_month_match = re.search(r"目標歸帳月份:\s*(\d{4}-\d{2})", details)
     assigned_month = target_month_match.group(1) if target_month_match else default_month
     
-    # 如果這筆紀錄歸帳的月份，剛好在老闆上方篩選的日期涵蓋範圍內，就納入計算！
     if assigned_month in covered_target_months:
-        
-        # 處理手動調整庫存產生的費用 (如水電費扣減)
         if "手動調整庫存" in row['action']:
             amt_match = re.search(r"總值變動:?\s*\$?(-?[\d\.]+)", details)
             if amt_match:
                 change_amt = float(amt_match.group(1))
-                if "C" in row['action']: # 水電固定帳單
+                if "C" in row['action']: 
                     expense_val = abs(change_amt) if change_amt < 0 else -change_amt
                     total_op_expense += expense_val
                     c_expense_records.append({"費用項目": f"手動調整-{row['action']}", "金額": expense_val})
-                else: # 食材用品手動調減視為損耗 (僅在當前日期區間內才累加損耗，防報表膨脹)
+                else: 
                     if start_str <= timestamp_str <= end_str:
                         total_stock_loss += abs(change_amt) if change_amt < 0 else 0.0
                         
-        # 處理採購進貨直接費用化的項目
         elif "採購進貨" in row['action'] and "C" in row['action']:
             tot_match = re.search(r"總金額:?\s*\$(\d+)", details)
             if tot_match:
@@ -170,7 +203,7 @@ e.metric("📈 門市淨利率", f"{margin:.1f}%")
 st.divider()
 
 # ==========================================
-# 🏆 面板呈現區 2：餐點排行與原物料消耗 (並列雙欄排版)
+# 🏆 面板呈現區 2：餐點排行與原物料消耗
 # ==========================================
 left_col, right_col = st.columns(2)
 
@@ -180,7 +213,6 @@ with left_col:
         rank_df = pd.DataFrame(dish_sales.items(), columns=["餐點名稱", "銷售份數"]).sort_values(by="銷售份數", ascending=False)
         st.dataframe(rank_df, hide_index=True, use_container_width=True)
         
-        # 繪製餐點銷量長條圖
         fig_dish = px.bar(rank_df, x='餐點名稱', y='銷售份數', text_auto=True, title="🎯 當期餐點熱銷排行榜")
         st.plotly_chart(fig_dish, use_container_width=True)
     else:
@@ -190,8 +222,6 @@ with right_col:
     st.markdown("### 🍩 食材與原物料消耗占比")
     if material_usage:
         pie_df = pd.DataFrame(material_usage.items(), columns=["食材物料", "消耗總數量"])
-        
-        # 繪製 Plotly 圓餅圖
         fig_mat = px.pie(pie_df, values='消耗總數量', names='食材物料', title="🥬 食材原物料消耗比例結構", hole=0.3)
         st.plotly_chart(fig_mat, use_container_width=True)
     else:

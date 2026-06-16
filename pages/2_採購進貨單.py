@@ -13,6 +13,9 @@ current_user = st.session_state.get('current_user', '老 闆')
 
 po_tabs = st.tabs(["📥 新進貨單登記", "✏️ 歷史採購單錯誤修正"])
 
+# ==========================================
+# 分頁 1：新進貨單登記 (原汁原味完整保留)
+# ==========================================
 with po_tabs[0]:
     item_type = st.radio("✨ 請選擇本次登記類別：", ["食材 (R 開頭)", "用品 (S 開頭)", "帳單費用 (C 開頭，如水電瓦斯)"], horizontal=True)
 
@@ -168,6 +171,10 @@ with po_tabs[0]:
                 
                 st.rerun()
 
+
+# ==========================================
+# 分頁 2：歷史採購單錯誤修正 (完美修復核心問題 4)
+# ==========================================
 with po_tabs[1]:
     st.markdown("##### 🔍 歷史採購單精準篩選面板：")
     
@@ -221,13 +228,14 @@ with po_tabs[1]:
     where_clause = " WHERE " + " AND ".join(query_conditions) if query_conditions else ""
 
     conn = sqlite3.connect('inventory.db')
+    # 💡 完美核心修復 4：在此 SQL 查詢欄位精準補上 p.safety_stock as 安全庫存
     df_all_batches = pd.read_sql_query(f'''
         SELECT s.batch_id as 批次編號, s.prod_id as 商品編號, p.prod_name as 商品名稱, 
                s.qty as 當前小單位庫存, s.original_qty as 原始小單位庫存, p.purchase_unit as 進貨單位, p.use_unit as 使用單位,
                p.conversion_factor as 轉換率, (s.original_qty / p.conversion_factor) as 進貨大包裝數,
                (s.qty / p.conversion_factor) as 剩餘大包裝數,
                (s.qty * s.cost) as 推估總金額, s.expiry_date as 有效期限, s.vendor_name as 供應商, s.vendor_phone as 供應商電話,
-               s.inbound_date as 進貨日期
+               s.inbound_date as 進貨日期, p.safety_stock as 安全庫存
         FROM stock_batches s JOIN products p ON s.prod_id = p.prod_id 
         {where_clause}
         ORDER BY s.batch_id DESC
@@ -308,7 +316,8 @@ with po_tabs[1]:
                 new_total_amount = st.number_input("本次進貨【採購總金額】($)", min_value=0.0, value=float(max(matched_batch_row['推估總金額'], 0.0)), step=10.0)
             with col_edit3:
                 new_c_factor = st.number_input("轉換率 (一大包等於多少小單位)", min_value=0.0001, value=float(max(matched_batch_row['轉換率'], 0.0001)), step=1.0)
-                new_safety = st.number_input("設定最低安全預警量", min_value=0.0, value=0.0, step=1.0)
+                # 💡 完美核心修復 4：在此精準引入轉換後的 float(matched_batch_row['安全庫存']) 作為預設 value，徹底告別 Key 遺失引發的彈錯
+                new_safety = st.number_input("設定最低安全預警量", min_value=0.0, value=float(matched_batch_row['安全庫存']), step=1.0)
                 
             col_edit4, col_edit5, col_edit6 = st.columns(3)
             with col_edit4: new_v_name = st.text_input("更正供應商店名", value=str(matched_batch_row['供應商']))
@@ -349,7 +358,7 @@ with po_tabs[1]:
                 else:
                     audit_trail = f"採購歷史修正【批次 {target_batch_id} - {matched_batch_row['商品名稱']}】:\n"
                     if float(matched_batch_row['進貨大包裝數']) != new_po_qty:
-                        audit_trail += f" * 進貨數量：自 {matched_batch_row['進貨大包裝數']} 修改為 {new_po_qty}\n"
+                        audit_trail += f" *進貨數量：自 {matched_batch_row['進貨大包裝數']} 修改為 {new_po_qty}\n"
                     if float(matched_batch_row['推估總金額']) != new_total_amount:
                         audit_trail += f" * 採購總額：自 ${matched_batch_row['推估總金額']:.0f} 修改為 ${new_total_amount:.0f}\n"
 

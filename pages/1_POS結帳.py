@@ -255,8 +255,6 @@ with pos_tabs[0]:
                         conn.commit()
                         conn.close()
                         
-                        # 🛠️ 核心優化：將點餐與物料明細完全 JSON 結構化，並附加在原有日誌末端
-                        # 保留與財務報告 (6_財務與消耗量報告.py) 的完全字串相容性，且不再害怕任何品項名稱！
                         details_log = f"合併前台收銀：出餐明細 {confirm_msg}，總金額 ${total_bill_amount}，精準食材成本 ${actual_total_cost:.2f}。 消耗食材: " + ", ".join(log_mats_summary)
                         
                         structured_payload = {
@@ -282,7 +280,7 @@ with pos_tabs[0]:
 
 
 # ==========================================
-# 🆕 分頁 2：修改當日出餐數量與作廢（100% 結構化 JSON 安全回補）
+# 🆕 分頁 2：修改當日出餐數量與作廢（完美修復核心問題 2、3）
 # ==========================================
 with pos_tabs[1]:
     st.markdown("##### 📝 當日成功核准出餐紀錄管理面版")
@@ -300,17 +298,15 @@ with pos_tabs[1]:
     conn.close()
 
     if df_today_orders.empty:
-        st.info("💡 今天目前尚無任何收銀出餐紀錄可供修改。")
+        st.info("💡 今天目前尚無 any 收銀出餐紀錄可供修改。")
     else:
         order_options = []
         parsed_orders_cache = {}
         
-        # 智慧解析與向下相容降級防護機制
         for idx, row in df_today_orders.iterrows():
             raw_text = row['details']
             hist_id = row['id']
             
-            # 判斷是否為升級後帶有結構化標籤的 JSON 日誌
             if "||STRUCT_DATA||" in raw_text:
                 parts = raw_text.split("||STRUCT_DATA||")
                 display_part = parts[0]
@@ -325,7 +321,6 @@ with pos_tabs[1]:
                         "is_structured": True
                     }
                 except:
-                    # 萬一 JSON 損毀則退回安全舊正則模式
                     parsed_orders_cache[hist_id] = {"is_structured": False}
             else:
                 parsed_orders_cache[hist_id] = {"is_structured": False}
@@ -341,7 +336,6 @@ with pos_tabs[1]:
 
         st.info(f"📋 **選定訂單完整原始日誌：**\n{order_details_text.split('||STRUCT_DATA||')[0]}")
 
-        # 智慧載入資料物件 (精準避開 Regex 陷阱)
         order_data = parsed_orders_cache[target_hist_id]
         if order_data["is_structured"]:
             parsed_dishes = [(d["prod_name"], d["qty"], d["prod_id"]) for d in order_data["dishes"]]
@@ -349,7 +343,6 @@ with pos_tabs[1]:
             parsed_total_cost = order_data["total_cost"]
             parsed_mats = [(m["mat_name"], m["mat_id"], m["qty"], m["unit"]) for m in order_data["materials"]]
         else:
-            # 舊資料降級相容機制：若為舊格式，仍使用舊正則做低防護解析
             raw_dishes = re.findall(r"【(.+?) x (\d+)份】", order_details_text)
             parsed_dishes = []
             conn_temp = sqlite3.connect('inventory.db')
@@ -375,18 +368,18 @@ with pos_tabs[1]:
                 conn = sqlite3.connect('inventory.db')
                 cursor = conn.cursor()
                 try:
-                    # 100% 結構化精確回補庫存
+                    # 解決問題 2 & 3：整單作廢時依據批次歷史追減，且雙欄位同步遞增，防止庫存計算死鎖
                     for mat_name, mat_id, qty_val, unit_str in parsed_mats:
                         refund_qty = float(qty_val)
-                        cursor.execute("SELECT batch_id FROM stock_batches WHERE prod_id = ? AND qty > 0 ORDER BY inbound_date ASC LIMIT 1", (mat_id,))
+                        cursor.execute("SELECT batch_id, cost FROM stock_batches WHERE prod_id = ? AND qty > 0 ORDER BY inbound_date ASC LIMIT 1", (mat_id,))
                         b_row = cursor.fetchone()
                         if b_row:
-                            cursor.execute("UPDATE stock_batches SET qty = qty + ? WHERE batch_id = ?", (refund_qty, b_row[0]))
+                            cursor.execute("UPDATE stock_batches SET qty = qty + ?, original_qty = original_qty + ? WHERE batch_id = ?", (refund_qty, refund_qty, b_row[0]))
                         else:
                             today_str = datetime.now().strftime("%Y-%m-%d")
                             cursor.execute("SELECT cost FROM products WHERE prod_id = ?", (mat_id,))
                             p_cost = cursor.fetchone()[0] or 0.0
-                            cursor.execute("INSERT INTO stock_batches (prod_id, qty, expiry_date, inbound_date, vendor_name, cost) VALUES (?, ?, '', ?, '前台作廢退回', ?)", (mat_id, refund_qty, today_str, p_cost))
+                            cursor.execute("INSERT INTO stock_batches (prod_id, qty, original_qty, expiry_date, inbound_date, vendor_name, cost) VALUES (?, ?, ?, '', ?, '前台作廢退回', ?)", (mat_id, refund_qty, refund_qty, today_str, p_cost))
                     
                     cursor.execute("DELETE FROM history WHERE id = ?", (target_hist_id,))
                     conn.commit()
@@ -422,11 +415,8 @@ with pos_tabs[1]:
                         new_confirm_msg = ""
                         new_cart_payload = []
 
-                        # 使用綁定的資料庫 ID 精準比對
                         for d_name, orig_qty, d_id in parsed_dishes:
                             new_qty_val = new_dish_qtys[d_name]
-                            
-                            # 防護：若原先為舊格式沒有 ID，改用名稱撈取
                             if not d_id:
                                 cursor.execute("SELECT prod_id, price FROM products WHERE prod_name = ?", (d_name,))
                             else:
@@ -451,15 +441,14 @@ with pos_tabs[1]:
                                 for child_id, qty_needed in bom_rows:
                                     total_mats_diff[child_id] = total_mats_diff.get(child_id, 0.0) + (qty_needed * qty_diff_factor)
 
-                        # 多退少補發貨機制
                         actual_cost_adjustment = 0.0
                         insufficient_flag = False
                         insufficient_msg = ""
 
                         for m_id, diff_volume in total_mats_diff.items():
-                            cursor.execute("SELECT prod_name, use_unit, cost FROM products WHERE prod_id = ?", (m_id,))
+                            cursor.execute("SELECT prod_name, use_unit FROM products WHERE prod_id = ?", (m_id,))
                             m_info = cursor.fetchone()
-                            m_name, m_unit, m_base_cost = m_info[0], m_info[1], float(m_info[2])
+                            m_name, m_unit = m_info[0], m_info[1]
 
                             if diff_volume > 0: 
                                 cursor.execute("SELECT SUM(qty) FROM stock_batches WHERE prod_id = ? AND qty > 0", (m_id,))
@@ -471,15 +460,21 @@ with pos_tabs[1]:
                                     success, deducted_cost_val = deduct_stock_fifo(m_id, diff_volume, cursor)
                                     actual_cost_adjustment += deducted_cost_val
                             elif diff_volume < 0: 
+                                # 解決核心問題 2：追減物料退回金額時，精準採用被退回批次的原始單價（b_cost）而非浮動成本
                                 refund_vol = abs(diff_volume)
-                                actual_cost_adjustment -= refund_vol * m_base_cost
-                                cursor.execute("SELECT batch_id FROM stock_batches WHERE prod_id = ? AND qty > 0 ORDER BY inbound_date ASC LIMIT 1", (m_id,))
+                                cursor.execute("SELECT batch_id, cost FROM stock_batches WHERE prod_id = ? AND qty > 0 ORDER BY inbound_date ASC LIMIT 1", (m_id,))
                                 b_row = cursor.fetchone()
                                 if b_row:
-                                    cursor.execute("UPDATE stock_batches SET qty = qty + ? WHERE batch_id = ?", (refund_vol, b_row[0]))
+                                    batch_id_target, b_cost = b_row[0], float(b_row[1])
+                                    actual_cost_adjustment -= refund_vol * b_cost
+                                    # 解決核心問題 3：雙欄位同步遞增防護，確保 original_qty 同步放大
+                                    cursor.execute("UPDATE stock_batches SET qty = qty + ?, original_qty = original_qty + ? WHERE batch_id = ?", (refund_vol, refund_vol, batch_id_target))
                                 else:
+                                    cursor.execute("SELECT cost FROM products WHERE prod_id = ?", (m_id,))
+                                    p_cost = cursor.fetchone()[0] or 0.0
+                                    actual_cost_adjustment -= refund_vol * p_cost
                                     today_str = datetime.now().strftime("%Y-%m-%d")
-                                    cursor.execute("INSERT INTO stock_batches (prod_id, qty, expiry_date, inbound_date, vendor_name, cost) VALUES (?, ?, '', ?, '前台更正退回', ?)", (m_id, refund_vol, today_str, m_base_cost))
+                                    cursor.execute("INSERT INTO stock_batches (prod_id, qty, original_qty, expiry_date, inbound_date, vendor_name, cost) VALUES (?, ?, ?, '', ?, '前台更正退回', ?)", (m_id, refund_vol, refund_vol, today_str, p_cost))
 
                         if insufficient_flag:
                             st.error(insufficient_msg)
@@ -488,11 +483,6 @@ with pos_tabs[1]:
                             log_mats_summary = []
                             new_mats_payload = []
                             
-                            # 完美重寫覆蓋原有日誌，並附上最新高強度 JSON 物件軌跡
-                            for m_id, diff_volume in total_mats_diff.items():
-                                pass # 用於佔位計算
-
-                            # 重新掃描生成最新出餐消耗摘要
                             for d_item in new_cart_payload:
                                 cursor.execute("SELECT child_id, qty_needed FROM bom WHERE parent_id = ?", (d_item["prod_id"],))
                                 brs = cursor.fetchall()
@@ -546,7 +536,7 @@ with pos_tabs[2]:
         with col_new_dish2:
             pos_custom_price = st.number_input("設定販售價格 (必須大於 0 的整數)", min_value=0, value=0, step=1, key="custom_dish_price_input")
             
-        st.markdown("###### ➕ 請調配此項客製餐點的專屬物料與用量：")
+        st.markdown("###### ➕ 請調配此項客製餐點的專專屬物料與用量：")
         col_cus_mat1, col_cus_mat2, col_cus_mat3 = st.columns([2, 1, 1])
         with col_cus_mat1:
             dish_select_list = ["--- 請選擇食材 ---"] + all_raw_df['prod_name'].tolist()
