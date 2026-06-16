@@ -2,11 +2,13 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
+import re
+from datetime import datetime
 from database.db_core import log_history, deduct_stock_fifo, get_next_dish_id, update_dish_and_bom, trigger_toast, show_pending_toast
 
 show_pending_toast()
 
-st.subheader("🛒 收銀結帳系統")
+st.subheader("🛒 收銀結帳與出餐管理系統")
 
 current_user = st.session_state.get('current_user', '老 闆')
 
@@ -24,10 +26,6 @@ conn.close()
 # 💡 核心商業智能算法：模擬前台 FIFO 即時成本核算
 # ==========================================
 def calculate_cart_estimated_cost(cart_items):
-    """
-    依據當前購物車內的所有餐點及份數，去模擬庫存 stock_batches 中 FIFO 實際會扣除的金額
-    此函數純粹計算、不更動資料庫，用來即時反饋給老闆看當前點單的精確成本與利潤
-    """
     if not cart_items:
         return 0.0, {}
         
@@ -77,7 +75,8 @@ def calculate_cart_estimated_cost(cart_items):
     conn.close()
     return cart_total_cost, mats_status
 
-pos_tabs = st.tabs(["💰 前台收銀結帳", "✏️ 餐點細項修改", "❌ 品項下架與管理區"])
+# 新增優化：擴充為四個功能分頁，完美整合當日出餐數量微調與作廢機制
+pos_tabs = st.tabs(["💰 前台收銀結帳", "✏️ 修改當日出餐數量", "✏️ 餐點細項修改", "❌ 品項下架與管理區"])
 
 # ==========================================
 # 分頁 1：前台收銀結帳 (多品項購物車 + 即時成本核算)
@@ -262,10 +261,190 @@ with pos_tabs[0]:
     else:
         st.info("💡 目前點餐購物車為空，請從上方選取餐點並加入點餐單。")
 
+
 # ==========================================
-# 分頁 2：餐點細項修改 (價格欄位挪移優化版)
+# 🆕 分頁 2：修改當日出餐數量與作廢（智慧反向 FIFO 回補）
 # ==========================================
 with pos_tabs[1]:
+    st.markdown("##### 📝 當日成功核准出餐紀錄管理面版")
+    st.caption("以下列出今天發生的所有點餐交易。您可以針對特定交易進行整單作廢或數量微調，系統將精確計算差額並回補/扣減庫存。")
+
+    today_start = datetime.now().strftime("%Y-%m-%d 00:00:00")
+    today_end = datetime.now().strftime("%Y-%m-%d 23:59:59")
+
+    conn = sqlite3.connect('inventory.db')
+    df_today_orders = pd.read_sql_query('''
+        SELECT id, timestamp, user, details FROM history 
+        WHERE action = '多品項收銀結帳' AND timestamp BETWEEN ? AND ?
+        ORDER BY id DESC
+    ''', conn, params=(today_start, today_end))
+    conn.close()
+
+    if df_today_orders.empty:
+        st.info("💡 今天目前尚無任何收銀出餐紀錄可供修改。")
+    else:
+        order_options = []
+        for idx, row in df_today_orders.iterrows():
+            brief_match = re.search(r"出餐明細 (.+?)，總金額", row['details'])
+            brief = brief_match.group(1) if brief_match else "明細解析失敗"
+            order_options.append(f"單號 {row['id']} | 時間: {row['timestamp'].split(' ')[1]} | 明細: {brief}")
+
+        selected_order_str = st.selectbox("🎯 請選擇欲更正或作廢的當日出餐紀錄：", order_options)
+        target_hist_id = int(selected_order_str.split("單號 ")[1].split(" |")[0])
+        matched_order_row = df_today_orders[df_today_orders['id'] == target_hist_id].iloc[0]
+        order_details_text = matched_order_row['details']
+
+        st.info(f"📋 **選定訂單完整原始日誌：**\n{order_details_text}")
+
+        # 利用正則解析出餐品項、總金額、成本與物料消耗量
+        parsed_dishes = re.findall(r"【(.+?) x (\d+)份】", order_details_text)
+        parsed_total_revenue = float(re.search(r"總金額 \$(\d+)", order_details_text).group(1))
+        parsed_total_cost = float(re.search(r"精準食材成本 \$([\d\.]+)", order_details_text).group(1))
+        parsed_mats = re.findall(r"([^\s_,\(]+)_([RS]\d+)\(([\d\.]+)([^\)]+)\)", order_details_text)
+
+        st.markdown("##### ⚙️ 選擇維護動作")
+        manage_action = st.radio("請選擇維護類型：", ["❌ 整單作廢（全數退款並回補庫存）", "✏️ 數量微調（更正點餐數量）"], horizontal=True)
+
+        if "整單作廢" in manage_action:
+            st.warning("⚠️ **注意：** 作廢後，該筆營業額將在報表中消失，且系統將會把消耗的原物料 100% 歸還至庫存批次中。")
+            if st.button("🔥 確定執行整單作廢", type="primary", use_container_width=True):
+                conn = sqlite3.connect('inventory.db')
+                cursor = conn.cursor()
+                try:
+                    # 智慧庫存回補機制
+                    for mat_name, mat_id, qty_str, unit_str in parsed_mats:
+                        refund_qty = float(qty_str)
+                        # 優先尋找該品項目前還在線上的最舊有效批次進行加回，若無則新創一個回補批次
+                        cursor.execute("SELECT batch_id FROM stock_batches WHERE prod_id = ? AND qty > 0 ORDER BY inbound_date ASC LIMIT 1", (mat_id,))
+                        b_row = cursor.fetchone()
+                        if b_row:
+                            cursor.execute("UPDATE stock_batches SET qty = qty + ? WHERE batch_id = ?", (refund_qty, b_row[0]))
+                        else:
+                            today_str = datetime.now().strftime("%Y-%m-%d")
+                            cursor.execute("SELECT cost FROM products WHERE prod_id = ?", (mat_id,))
+                            p_cost = cursor.fetchone()[0] or 0.0
+                            cursor.execute("INSERT INTO stock_batches (prod_id, qty, expiry_date, inbound_date, vendor_name, cost) VALUES (?, ?, '', ?, '前台作廢退回', ?)", (mat_id, refund_qty, today_str, p_cost))
+                    
+                    # 刪除或標記該筆 history 紀錄（此處採直接刪除，以防影響財務報告分析）
+                    cursor.execute("DELETE FROM history WHERE id = ?", (target_hist_id,))
+                    conn.commit()
+                    log_history(current_user, "訂單作廢成功", f"老闆作廢了單號 {target_hist_id} 的當日訂單，成功退回營業額 ${parsed_total_revenue} 元，庫存原物料已完整回補。")
+                    trigger_toast(f"已成功作廢單號 {target_hist_id} 的點餐紀錄，庫存已同步回補！", icon="🗑️")
+                    st.rerun()
+                except Exception as e:
+                    conn.rollback()
+                    st.error(f"執行作廢失敗：{e}")
+                finally:
+                    conn.close()
+
+        elif "數量微調" in manage_action:
+            st.markdown("###### 📝 請在下方輸入該單「正確」的餐點數量：")
+            new_dish_qtys = {}
+            has_qty_changed = False
+            
+            # 動態生成表單供老闆修改每一項餐點的數量
+            for d_name, d_qty in parsed_dishes:
+                new_q = st.number_input(f"【{d_name}】之正確出餐份數 (原為 {d_qty} 份)", min_value=0, value=int(d_qty), step=1, key=f"edit_qty_{d_name}")
+                new_dish_qtys[d_name] = new_q
+                if new_q != int(d_qty):
+                    has_qty_changed = True
+
+            if st.button("💾 儲存出餐數量變更", type="primary", use_container_width=True):
+                if not has_qty_changed:
+                    st.info("數量沒有任何變動，無需修正。")
+                else:
+                    conn = sqlite3.connect('inventory.db')
+                    cursor = conn.cursor()
+                    try:
+                        # 1. 計算新的銷售總金額與重新核算 BOM
+                        new_total_bill = 0.0
+                        total_mats_diff = {} # 記錄每種物料需要多扣還是回補
+                        new_confirm_msg = ""
+
+                        for d_name, orig_qty in parsed_dishes:
+                            new_qty_val = new_dish_qtys[d_name]
+                            cursor.execute("SELECT prod_id, price FROM products WHERE prod_name = ?", (d_name,))
+                            p_row = cursor.fetchone()
+                            if p_row:
+                                p_id, price = p_row[0], float(p_row[1])
+                                new_total_bill += price * new_qty_val
+                                if new_qty_val > 0:
+                                    new_confirm_msg += f"【{d_name} x {new_qty_val}份】"
+                                
+                                # 算物料差額 (新總需求量 - 舊總需求量)
+                                qty_diff_factor = new_qty_val - int(orig_qty)
+                                cursor.execute("SELECT child_id, qty_needed FROM bom WHERE parent_id = ?", (p_id,))
+                                bom_rows = cursor.fetchall()
+                                for child_id, qty_needed in bom_rows:
+                                    total_mats_diff[child_id] = total_mats_diff.get(child_id, 0.0) + (qty_needed * qty_diff_factor)
+
+                        # 2. 執行庫存的多退少補 (加強防呆庫存量)
+                        actual_cost_adjustment = 0.0
+                        log_mats_summary = []
+                        insufficient_flag = False
+                        insufficient_msg = ""
+
+                        for m_id, diff_volume in total_mats_diff.items():
+                            cursor.execute("SELECT prod_name, use_unit, cost FROM products WHERE prod_id = ?", (m_id,))
+                            m_info = cursor.fetchone()
+                            m_name, m_unit, m_base_cost = m_info[0], m_info[1], float(m_info[2])
+
+                            if diff_volume > 0: # 數量增加，需要「補扣」庫存
+                                cursor.execute("SELECT SUM(qty) FROM stock_batches WHERE prod_id = ? AND qty > 0", (m_id,))
+                                avail = cursor.fetchone()[0] or 0.0
+                                if avail < diff_volume:
+                                    insufficient_flag = True
+                                    insufficient_msg += f"❌ 修正失敗：原物料【{m_name}】庫存剩餘 {avail}，不足以補扣額外的 {diff_volume} {m_unit}！\n"
+                                else:
+                                    success, deducted_cost_val = deduct_stock_fifo(m_id, diff_volume, cursor)
+                                    actual_cost_adjustment += deducted_cost_val
+                            elif diff_volume < 0: # 數量減少，需要「回補」庫存
+                                refund_vol = abs(diff_volume)
+                                actual_cost_adjustment -= refund_vol * m_base_cost
+                                cursor.execute("SELECT batch_id FROM stock_batches WHERE prod_id = ? AND qty > 0 ORDER BY inbound_date ASC LIMIT 1", (m_id,))
+                                b_row = cursor.fetchone()
+                                if b_row:
+                                    cursor.execute("UPDATE stock_batches SET qty = qty + ? WHERE batch_id = ?", (refund_vol, b_row[0]))
+                                else:
+                                    today_str = datetime.now().strftime("%Y-%m-%d")
+                                    cursor.execute("INSERT INTO stock_batches (prod_id, qty, expiry_date, inbound_date, vendor_name, cost) VALUES (?, ?, '', ?, '前台更正退回', ?)", (m_id, refund_vol, today_str, m_base_cost))
+
+                        if insufficient_flag:
+                            st.error(insufficient_msg)
+                        else:
+                            # 3. 完美回寫覆蓋原本的交易日誌明細，確保利潤報告完全自動勾稽
+                            final_new_cost = parsed_total_cost + actual_cost_adjustment
+                            
+                            # 重新抓取該單全新對應的消耗食材字串
+                            log_mats_summary = []
+                            for d_name, n_q in new_dish_qtys.items():
+                                if n_q > 0:
+                                    cursor.execute("SELECT prod_id FROM products WHERE prod_name = ?", (d_name,))
+                                    pid = cursor.fetchone()[0]
+                                    cursor.execute("SELECT child_id, qty_needed FROM bom WHERE parent_id = ?", (pid,))
+                                    brs = cursor.fetchall()
+                                    for cid, qn in brs:
+                                        cursor.execute("SELECT prod_name, use_unit FROM products WHERE prod_id = ?", (cid,))
+                                        p_i = cursor.fetchone()
+                                        log_mats_summary.append(f"{p_i[0]}_{cid}({qn * n_q:.1f}{p_i[1]})")
+
+                            updated_log_text = f"合併前台收銀：出餐明細 {new_confirm_msg}，總金額 ${new_total_bill:.0f}，精準食材成本 ${final_new_cost:.2f}。 消耗食材: " + ", ".join(log_mats_summary)
+                            cursor.execute("UPDATE history SET details = ? WHERE id = ?", (updated_log_text, target_hist_id))
+                            conn.commit()
+                            
+                            trigger_toast(f"🎉 單號 {target_hist_id} 的數量已成功更正！營業額調整為 ${new_total_bill:.0f}，食材成本調整為 ${final_new_cost:.2f}", icon="✏️")
+                            st.rerun()
+                    except Exception as e:
+                        conn.rollback()
+                        st.error(f"更新數量時發生錯誤：{e}")
+                    finally:
+                        conn.close()
+
+
+# ==========================================
+# 分頁 3：餐點細項修改 (價格欄位挪移優化版)
+# ==========================================
+with pos_tabs[2]:
     st.markdown("##### 🆕 1. 現場食材加料 / 臨時自訂新餐點創立區")
     st.caption("可在下方直接輸入現場客製化配方，或者直接手動登錄新餐點與售價，完成後將自動加入正式菜單：")
     
@@ -380,7 +559,6 @@ with pos_tabs[1]:
                         st.rerun()
 
     st.markdown("---")
-    # ⚙️ 2. 現有餐點微調作業區
     st.markdown("##### ⚙️ 2. 調整與管理現有餐點配方與售價：")
     if existing_dishes.empty:
         st.info("目前尚無既有餐點可供修改。")
@@ -405,7 +583,6 @@ with pos_tabs[1]:
                 st.session_state.editing_recipe_list = db_recipe.to_dict(orient='records')
                 st.session_state.editing_recipe_dish_id = td_id
 
-            # 追加新原物料面板
             st.markdown("###### ➕ 追加全新原物料至此餐點中：")
             col_add_e1, col_add_e2 = st.columns([3, 1])
             with col_add_e1:
@@ -434,7 +611,6 @@ with pos_tabs[1]:
                         trigger_toast(f"已將 {mat_info['prod_name']} 整合至配方暫存單！", icon="➕")
                         st.rerun()
 
-            # 標準配方大表（微調與刪除）
             st.markdown("###### 📋 該餐點目前的配方清單（可雙擊直接修改數量或勾選移除）：")
             if st.session_state.editing_recipe_list:
                 df_recipe_view = pd.DataFrame(st.session_state.editing_recipe_list)
@@ -477,7 +653,6 @@ with pos_tabs[1]:
             else:
                 st.info("此餐點目前沒有任何配方物料，請利用上方追加。")
 
-            # 🌟 功能改善：移除大標題與多餘分區，將價格直接安插在配方表正下方，完美接著修改
             new_dish_price = st.number_input("💵 調整此餐點最終門市售價 (必須為大於 0 的整數)", step=1, key="edit_price_input", value=max(old_price, 1))
 
             recipe_has_negative = any(float(item["單位用量"]) <= 0 for item in st.session_state.editing_recipe_list)
@@ -520,10 +695,11 @@ with pos_tabs[1]:
         else:
             st.error("❌ 找不到該餐點資料，可能剛已被下架！")
 
+
 # ==========================================
-# 分頁 3：品項下架與管理區
+# 分頁 4：品項下架與管理區
 # ==========================================
-with pos_tabs[2]:
+with pos_tabs[3]:
     st.markdown("##### ❌ 菜單餐點下架控制面板")
     conn = sqlite3.connect('inventory.db')
     all_dishes_raw = pd.read_sql_query("SELECT prod_id, prod_name, price, status FROM products WHERE prod_id LIKE 'P%'", conn)

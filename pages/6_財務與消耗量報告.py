@@ -1,14 +1,23 @@
 # pages/6_財務與消耗量報告.py
-from datetime import datetime, timedelta
-import re
-import sqlite3
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import sqlite3
+import re
+import plotly.express as px
+from datetime import datetime, timedelta
+from database.db_core import show_pending_toast
 
-st.subheader("📊 門市商業智能：營收、成本與損益分析")
+show_pending_toast()
 
+st.subheader("📊 門市商業智能：營收、成本與損益分析報告")
+
+# ==========================================
+# 🔍 頂部複合時間篩選面板 (找回原本超彈性的時間篩選)
+# ==========================================
 report_option = st.selectbox(
-    "📅 選擇統計區間", ["今天", "過去 7 天", "過去 30 天", "自訂區間 (自選起訖日期)"], key="finance_time"
+    "📅 請選擇財務統計區間：", 
+    ["今天", "過去 7 天", "過去 30 天", "自訂區間 (自選起訖日期)"], 
+    key="finance_time_filter"
 )
 
 now = datetime.now()
@@ -25,168 +34,185 @@ elif report_option == "過去 30 天":
 else:
     c1, c2 = st.columns(2)
     with c1:
-        start_date = st.date_input(
-            "自訂開始日期", value=now.date() - timedelta(days=1), key="finance_start"
-        )
+        start_date = st.date_input("自訂開始日期", value=now.date() - timedelta(days=1), key="finance_start_day")
     with c2:
-        end_date = st.date_input(
-            "自訂結束日期", value=now.date(), key="finance_end"
-        )
+        end_date = st.date_input("自訂結束日期", value=now.date(), key="finance_end_day")
 
-start_str = datetime.combine(start_date, datetime.min.time()).strftime(
-    "%Y-%m-%d %H:%M:%S"
-)
-end_str = datetime.combine(end_date, datetime.max.time()).strftime(
-    "%Y-%m-%d %H:%M:%S"
-)
-inbound_start = start_date.strftime("%Y-%m-%d")
-inbound_end = end_date.strftime("%Y-%m-%d")
+# 格式化為字串以利 SQL 比對
+start_str = datetime.combine(start_date, datetime.min.time()).strftime("%Y-%m-%d %H:%M:%S")
+end_str = datetime.combine(end_date, datetime.max.time()).strftime("%Y-%m-%d %H:%M:%S")
 
-st.caption(f"統計區間：{start_date} ～ {end_date}")
+st.caption(f"📈 目前統計審計區間：{start_date} ～ {end_date}")
 
-conn = sqlite3.connect("inventory.db")
-df_sales = pd.read_sql_query(
-    """
-    SELECT details FROM history WHERE (action LIKE '餐點收銀結帳-%' OR action = '多品項收銀結帳') AND timestamp BETWEEN ? AND ?
-""",
-    conn,
-    params=(start_str, end_str),
-)
+# 智慧計算當前篩選區間跨越了哪些月份 (用於撈取精準歸帳的 C% 固定費用)
+current_ptr = start_date
+covered_target_months = set()
+while current_ptr <= end_date:
+    covered_target_months.add(current_ptr.strftime("%Y-%m"))
+    current_ptr += timedelta(days=1)
 
-df_bill = pd.read_sql_query(
-    """
-    SELECT p.prod_name, SUM(s.qty * p.cost) amount FROM stock_batches s
-    JOIN products p ON s.prod_id = p.prod_id
-    WHERE p.prod_id LIKE 'C%' AND s.inbound_date BETWEEN ? AND ? GROUP BY p.prod_id
-""",
-    conn,
-    params=(inbound_start, inbound_end),
-)
+# ==========================================
+# 📊 資料庫核心撈取與智慧歸帳解析
+# ==========================================
+conn = sqlite3.connect('inventory.db')
 
-df_purchase_history = pd.read_sql_query(
-    """
-    SELECT s.prod_id, s.qty, s.cost, p.prod_name
-    FROM stock_batches s
-    JOIN products p ON s.prod_id = p.prod_id
-    WHERE s.inbound_date BETWEEN ? AND ? AND (s.prod_id LIKE 'R%' OR s.prod_id LIKE 'S%')
-""",
-    conn,
-    params=(inbound_start, inbound_end),
-)
+# 1. 撈取選定日期區間內發生的點餐與作廢紀錄
+df_sales = pd.read_sql_query('''
+    SELECT action, details FROM history 
+    WHERE (action = '多品項收銀結帳' OR action = '訂單作廢成功')
+      AND timestamp BETWEEN ? AND ?
+''', conn, params=(start_str, end_str))
+
+# 2. 撈取全歷史中所有涉及手動調整或採購的日誌 (用來後續過濾 target_month)
+df_expenses_raw = pd.read_sql_query('''
+    SELECT action, details, timestamp FROM history 
+    WHERE action LIKE '手動調整庫存-%' OR action LIKE '採購進貨-%'
+''', conn)
+
 conn.close()
 
-total_purchase_r = 0.0
-total_purchase_s = 0.0
+# 初始化財務加總變數
+total_revenue = 0.0
+total_food_cost = 0.0
+total_op_expense = 0.0
+total_stock_loss = 0.0
 
-for _, row in df_purchase_history.iterrows():
-    p_id = row["prod_id"]
-    p_amount = float(row["qty"]) * float(row["cost"])
-    if p_id.startswith('R'):
-        total_purchase_r += p_amount
-    elif p_id.startswith('S'):
-        total_purchase_s += p_amount
+# 找回你最愛的：餐點銷售排行與原物料消耗統計池
+dish_sales = {}
+material_usage = {}
 
-total_purchase_all = total_purchase_r + total_purchase_s
-
-total_revenue, total_food_cost, total_bill = 0.0, 0.0, 0.0
-material_usage, dish_sales = {}, {}
-
+# A. 處理即時區間內的營業額、FIFO 食材成本與餐點銷售排行
 for _, row in df_sales.iterrows():
-    txt = row["details"]
-
+    txt = row['details']
+    
+    # 累加營業額
     revenue_match = re.search(r"總金額 \$(\d+\.?\d*)", txt)
     if revenue_match:
         total_revenue += float(revenue_match.group(1))
-
-    cost_match = re.search(r"食材成本 \$(\d+\.?\d*)", txt)
-    if not cost_match:
-        cost_match = re.search(r"食材總成本 \$(\d+\.?\d*)", txt)
+        
+    # 累加 FIFO 精準食材成本
+    cost_match = re.search(r"精準食材成本 \$([\d\.]+)", txt)
     if cost_match:
         total_food_cost += float(cost_match.group(1))
-
-    # 相容舊版與新合併版點餐單解析
+        
+    # 🏆【功能完美補回】解析並累加當期餐點銷售份數
     dish_items = re.findall(r"【(.+?) x ([\d\.]+)份】", txt)
-    if not dish_items:
-        dish_match = re.search(r"前台銷售「(.+?) × ([\d\.]+) 份」", txt)
-        if dish_match:
-            dish_items = [(dish_match.group(1), dish_match.group(2))]
-            
     for dish_name, qty_val in dish_items:
         dish_sales[dish_name] = dish_sales.get(dish_name, 0.0) + float(qty_val)
+        
+    # 解析並累加原物料消耗 (前台出餐部分)
+    if "消耗食材:" in txt:
+        mats_part = txt.split("消耗食材:")[1].strip()
+        mats_list = mats_part.split(", ")
+        for m_str in mats_list:
+            match = re.match(r"([^\s_]+)_([RS]\d+)\(([\d\.]+)([^\)]+)\)", m_str)
+            if match:
+                m_name = match.group(1)
+                m_qty = float(match.group(3))
+                material_usage[m_name] = material_usage.get(m_name, 0.0) + m_qty
 
-    mats = re.findall(r"([^\s_,「」（）()]+)_([RS]\d+)\(([\d\.]+)", txt)
-    if not mats:
-        mats = re.findall(r"([^\s_,「」（）()]+)\(([\d\.]+)", txt)
-        # 排除包含餐點或總金額等中文字
-        mats = [(name, "", val) for name, val in mats if not any(k in name for k in ["份", "單價", "小計", "總金額", "成本", "出餐"])]
+# B. 處理固定資產/水電營運費用 (C%) 的智慧月份歸帳過濾
+c_expense_records = []
 
-    for m_tuple in mats:
-        m_name = m_tuple[0]
-        qty_val = float(m_tuple[-1])
-        material_usage[m_name] = material_usage.get(m_name, 0.0) + qty_val
+for _, row in df_expenses_raw.iterrows():
+    details = row['details']
+    timestamp_str = row['timestamp']
+    default_month = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S").strftime("%Y-%m")
+    
+    # 🎯 檢查有無指定 target_month
+    target_month_match = re.search(r"目標歸帳月份:\s*(\d{4}-\d{2})", details)
+    assigned_month = target_month_match.group(1) if target_month_match else default_month
+    
+    # 如果這筆紀錄歸帳的月份，剛好在老闆上方篩選的日期涵蓋範圍內，就納入計算！
+    if assigned_month in covered_target_months:
+        
+        # 處理手動調整庫存產生的費用 (如水電費扣減)
+        if "手動調整庫存" in row['action']:
+            amt_match = re.search(r"總值變動:?\s*\$?(-?[\d\.]+)", details)
+            if amt_match:
+                change_amt = float(amt_match.group(1))
+                if "C" in row['action']: # 水電固定帳單
+                    expense_val = abs(change_amt) if change_amt < 0 else -change_amt
+                    total_op_expense += expense_val
+                    c_expense_records.append({"費用項目": f"手動調整-{row['action']}", "金額": expense_val})
+                else: # 食材用品手動調減視為損耗 (僅在當前日期區間內才累加損耗，防報表膨脹)
+                    if start_str <= timestamp_str <= end_str:
+                        total_stock_loss += abs(change_amt) if change_amt < 0 else 0.0
+                        
+        # 處理採購進貨直接費用化的項目
+        elif "採購進貨" in row['action'] and "C" in row['action']:
+            tot_match = re.search(r"總金額:?\s*\$(\d+)", details)
+            if tot_match:
+                expense_val = float(tot_match.group(1))
+                total_op_expense += expense_val
+                c_expense_records.append({"費用項目": f"採購進貨-{row['action']}", "金額": expense_val})
 
-if not df_bill.empty:
-    total_bill = float(df_bill["amount"].sum())
-
+# 會計損益表公式平衡 (P&L)
 gross_profit = total_revenue - total_food_cost
-net_profit = gross_profit - total_bill
-margin = (net_profit / total_revenue) * 100 if total_revenue > 0 else 0
+net_profit = gross_profit - total_op_expense - total_stock_loss
+
+margin = (net_profit / total_revenue * 100) if total_revenue > 0 else 0.0
+gross_margin = (gross_profit / total_revenue * 100) if total_revenue > 0 else 0.0
+
+# ==========================================
+# 🏪 面板呈現區 1：經營損益平衡總覽
+# ==========================================
+st.markdown("### 🧾 門市動態損益平衡摘要 (P&L)")
+st.info(f"💡 **會計智慧歸帳生效中：** 當前固定資產與水電費已綁定 `target_month` 歸帳。您目前選擇的區間涵蓋了 {', '.join(covered_target_months)} 的帳單。")
 
 a, b, c, d, e = st.columns(5)
-a.metric("🏪 營業額", f"${total_revenue:,.0f}")
+a.metric("🏪 營業總收入", f"${total_revenue:,.0f}")
 b.metric("🥩 食材消耗成本", f"${total_food_cost:,.0f}")
-c.metric("⚡ 固定帳單支出", f"${total_bill:,.0f}")
-d.metric("🔥 門市純利", f"${net_profit:,.0f}")
-e.metric("📈 淨利率", f"{margin:.1f}%")
-
-st.markdown("### 📥 期間採購進貨總支出統計（現金流參考指標）")
-st.caption("💡 商學知識：開店利潤是以「食材實際消耗量」計算。下方進貨金額代表您本月『花費多少現金去補貨囤貨』，屬於現金流掌控指標。")
-p_col1, p_col2, p_col3 = st.columns(3)
-p_col1.metric("📦 總進貨補貨金額", f"${total_purchase_all:,.0f}")
-p_col2.metric("🥬 食材類進貨 (R)", f"${total_purchase_r:,.0f}")
-p_col3.metric("🥢 用品類進貨 (S)", f"${total_purchase_s:,.0f}")
+c.metric("⚡ 固定帳單/費用", f"${total_op_expense:,.1f}")
+d.metric("🔥 最終真實淨利", f"${net_profit:,.1f}")
+e.metric("📈 門市淨利率", f"{margin:.1f}%")
 
 st.divider()
-left, right = st.columns(2)
 
-with left:
-    st.markdown("### 🍩 食材純原物料消耗占比")
+# ==========================================
+# 🏆 面板呈現區 2：餐點排行與原物料消耗 (並列雙欄排版)
+# ==========================================
+left_col, right_col = st.columns(2)
+
+with left_col:
+    st.markdown("### 🏆 成品餐點銷售排行 (銷量池)")
+    if dish_sales:
+        rank_df = pd.DataFrame(dish_sales.items(), columns=["餐點名稱", "銷售份數"]).sort_values(by="銷售份數", ascending=False)
+        st.dataframe(rank_df, hide_index=True, use_container_width=True)
+        
+        # 繪製餐點銷量長條圖
+        fig_dish = px.bar(rank_df, x='餐點名稱', y='銷售份數', text_auto=True, title="🎯 當期餐點熱銷排行榜")
+        st.plotly_chart(fig_dish, use_container_width=True)
+    else:
+        st.info("💡 當前選定期間內尚無餐點銷售紀錄。")
+
+with right_col:
+    st.markdown("### 🍩 食材與原物料消耗占比")
     if material_usage:
         pie_df = pd.DataFrame(material_usage.items(), columns=["食材物料", "消耗總數量"])
-        st.vega_lite_chart(
-            pie_df,
-            {
-                "mark": "arc",
-                "encoding": {
-                    "theta": {"field": "消耗總數量", "type": "quantitative"},
-                    "color": {"field": "食材物料", "type": "nominal"},
-                },
-            },
-            use_container_width=True,
-        )
+        
+        # 繪製 Plotly 圓餅圖
+        fig_mat = px.pie(pie_df, values='消耗總數量', names='食材物料', title="🥬 食材原物料消耗比例結構", hole=0.3)
+        st.plotly_chart(fig_mat, use_container_width=True)
     else:
-        st.info("目前沒有食材消耗資料")
-
-with right:
-    st.markdown("### 🏆 成品餐點銷售排行")
-    if dish_sales:
-        rank_df = pd.DataFrame(dish_sales.items(), columns=["餐點名稱", "銷售份數"]).sort_values(
-            "銷售份數", ascending=False
-        )
-        st.dataframe(rank_df, hide_index=True, use_container_width=True)
-    else:
-        st.info("目前沒有餐點銷售資料")
+        st.info("💡 當前選定期間內尚無食材消耗數據。")
 
 st.divider()
-st.markdown("### 📌 門市商業會計損益摘要")
-st.info(f"""
-營業收入（客單進帳）：${total_revenue:,.0f}
-－ 食材消耗成本（FIFO 精確扣料）：${total_food_cost:,.0f}
-－ 固定帳單費用（水電瓦斯開銷）：${total_bill:,.0f}
-＝ 最終真實淨利潤：${net_profit:,.0f}
-門市最終淨利率：{margin:.1f}%
 
---------------------------------------------------
-備視現金流狀況：
-期間內補貨總採購金額（付給廠商的現金總額）：${total_purchase_all:,.0f}
-""")
+# ==========================================
+# 💧 面板呈現區 3：水電固定費用歸帳明細
+# ==========================================
+st.markdown("### 💧 固定資產與水電營運費用 (C%) 明細追蹤")
+if not c_expense_records:
+    st.info(f"💡 當前涵蓋月份 ({', '.join(covered_target_months)}) 內無任何固定資產或水電費用帳單歸帳。")
+else:
+    df_c_view = pd.DataFrame(c_expense_records)
+    st.dataframe(
+        df_c_view, 
+        column_config={
+            "費用項目": st.column_config.TextColumn("費用歸帳大類"),
+            "金額": st.column_config.NumberColumn("金額 ($)", format="$%.1f")
+        },
+        use_container_width=True,
+        hide_index=True
+    )

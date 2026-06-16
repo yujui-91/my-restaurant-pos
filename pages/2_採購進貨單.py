@@ -153,8 +153,14 @@ with po_tabs[0]:
                 conn.close()
                 
                 if prefix == 'C':
+                    # 🎯【智慧歸帳核心優化】自動組裝 target_month 格式
+                    month_digits = int(selected_month_str.replace("月", ""))
+                    current_year = datetime.now().year
+                    formatted_target_month = f"{current_year}-{month_digits:02d}"
+                    
                     log_action = "帳單支出登記"
-                    log_history(current_user, log_action, f"新單登記：{chosen_name}，費用月份：{selected_month_str}，總金額：${total_invoice_amount}")
+                    # 這裡將標籤文字寫入歷史紀錄的 details 中，供財報精準撈取
+                    log_history(current_user, log_action, f"新單登記：{chosen_name}，費用月份：{selected_month_str}，總金額：${total_invoice_amount}。 目標歸帳月份: {formatted_target_month}")
                     trigger_toast(f"帳單費用登記完成！【{chosen_name} ({selected_month_str}費用)】總金額：${total_invoice_amount}", icon="📥")
                 else:
                     log_action = "採購進貨"
@@ -258,7 +264,6 @@ with po_tabs[1]:
             col_bill_e1, col_bill_e2 = st.columns(2)
             
             with col_bill_e1:
-                # 欄位名稱對齊分頁一
                 new_total_amount = st.number_input(
                     "本次帳單【繳費總金額】($)", 
                     min_value=0.0, 
@@ -315,7 +320,7 @@ with po_tabs[1]:
                 new_exp_input = st.date_input("更正有效期限", value=orig_date, key="edit_exp_date")
                 new_exp_str = new_exp_input.strftime("%Y-%m-%d") if new_exp_input is not None else ""
 
-        # ---- 歷史採購單錯誤修正 核心防呆邏輯（完全同步對齊新登記） ----
+        # ---- 歷史採購單錯誤修正 核心防呆邏輯 ----
         if st.button("💾 確認覆蓋並修正此筆採購資料"):
             if not is_bill and new_p_unit == "":
                 st.error("❌ 錯誤：【大包裝進貨單位】為必填欄位，請勿留空！")
@@ -330,19 +335,24 @@ with po_tabs[1]:
             elif not is_bill and new_total_amount <= 0:
                 st.error("❌ 錯誤：【本次進貨採購總金額】必須大於 0！")
             else:
-                # 通過防呆，計算並寫入資料庫
                 new_total_use_units = new_po_qty * new_c_factor if not is_bill else 1.0
                 new_calculated_cost = new_total_amount / new_total_use_units if new_total_use_units > 0 else 0.0
                 
                 if is_bill:
+                    # 🎯【智慧修正歷史歸帳優化】
+                    edit_month_digits = int(selected_month_str.replace("月", ""))
+                    current_year = datetime.now().year
+                    formatted_edit_month = f"{current_year}-{edit_month_digits:02d}"
+                    
                     audit_trail = f"歷史帳單修正【{matched_batch_row['商品名稱']}】:\n"
                     audit_trail += f" * 費用月份：覆蓋調整為 {selected_month_str}\n"
                     if float(matched_batch_row['推估總金額']) != new_total_amount:
                         audit_trail += f" * 帳單金額：自 ${matched_batch_row['推估總金額']:.0f} 修改為 ${new_total_amount:.0f}\n"
+                    audit_trail += f" 目標歸帳月份: {formatted_edit_month}"
                 else:
                     audit_trail = f"採購歷史修正【批次 {target_batch_id} - {matched_batch_row['商品名稱']}】:\n"
                     if float(matched_batch_row['進貨大包裝數']) != new_po_qty:
-                        audit_trail += f" * 進貨數量：自 {matched_batch_row['進貨大包裝數']} 修改為 {new_po_qty}\n"
+                        audit_trail += f" *進貨數量：自 {matched_batch_row['進貨大包裝數']} 修改為 {new_po_qty}\n"
                     if float(matched_batch_row['推估總金額']) != new_total_amount:
                         audit_trail += f" * 採購總額：自 ${matched_batch_row['推估總金額']:.0f} 修改為 ${new_total_amount:.0f}\n"
 
