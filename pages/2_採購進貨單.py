@@ -24,7 +24,6 @@ with po_tabs[0]:
     else: prefix = 'C'
 
     conn = sqlite3.connect('inventory.db')
-    # 撈取所有品項（含 status），以利重複採購時自動上架
     existing_items_df = pd.read_sql_query(
         "SELECT prod_id, prod_name, purchase_unit, use_unit, conversion_factor, safety_stock, status FROM products WHERE prod_id LIKE ?", 
         conn, params=(f"{prefix}%",)
@@ -35,7 +34,6 @@ with po_tabs[0]:
     if prefix in ['R', 'S']:
         st.caption("💡 知識庫：不同供應商的同名品項建議分開建立，命名如 `[A廠商] 紙盒` 與 `[B廠商] 紙盒`。")
 
-    # 解決原本互斥鎖死 Bug：改用單選鈕切換登記模式，元件不會再卡死
     reg_mode = st.radio("請選擇登記模式：", ["從既有品項【重複登記】", "填寫新名稱【首次登記】"], horizontal=True)
 
     chosen_name = ""
@@ -48,12 +46,11 @@ with po_tabs[0]:
             if row['status'] == 0:
                 options_display.append(f"{row['prod_name']} (🔴 已下架，採購將自動啟用)")
             else:
-                options_display.append(row['prod_name'])
+                options_display.append(row['status'] == 0 and f"{row['prod_name']} (🔴 已下架，採購將自動啟用)" or row['prod_name'])
                 
         chosen_select_display = st.selectbox("下拉搜尋現有品項", options_display, index=0)
         
         if chosen_select_display != f"--- 請選擇已建立的{item_type[:2]} ---":
-            # 還原真實品項名稱
             chosen_name = chosen_select_display.replace(" (🔴 已下架，採購將自動啟用)", "")
             matched_item = existing_items_df[existing_items_df['prod_name'] == chosen_name].iloc[0]
             default_id = matched_item['prod_id']
@@ -67,7 +64,6 @@ with po_tabs[0]:
         if chosen_input_name.strip() != "":
             chosen_name = chosen_input_name.strip()
             
-            # 檢查輸入的新名稱是否在資料庫已存在（包含已下架的項目）
             conn = sqlite3.connect('inventory.db')
             cursor = conn.cursor()
             cursor.execute("SELECT prod_id, purchase_unit, use_unit, conversion_factor, safety_stock FROM products WHERE prod_name = ?", (chosen_name,))
@@ -87,14 +83,18 @@ with po_tabs[0]:
         final_id = st.text_input("項目編號", value=default_id, disabled=True)
         
         if prefix == 'C':
-            st.markdown("##### 💰 2. 請輸入本次帳單金額與對應月份：")
-            col_bill1, col_bill2 = st.columns(2)
+            st.markdown("##### 💰 2. 請輸入本次帳單金額與對應歸帳年月（防止跨年財報錯誤）：")
+            col_bill1, col_bill2, col_bill3 = st.columns([2, 1, 1])
             with col_bill1:
                 total_invoice_amount = st.number_input("本次帳單【繳費總金額】($)", min_value=0.0, value=0.0, step=10.0)
             with col_bill2:
+                this_year = datetime.now().year
+                bill_year_options = [this_year, this_year - 1]
+                selected_year = st.selectbox("請選擇費用【所屬年份】", bill_year_options, index=0)
+            with col_bill3:
                 bill_months_options = [f"{i}月" for i in range(1, 13)]
                 current_month_idx = max(0, min(datetime.now().month - 1, 11))
-                selected_month_str = st.selectbox("請選擇此費用【所屬月份】(必填)", bill_months_options, index=current_month_idx)
+                selected_month_str = st.selectbox("請選擇費用【所屬月份】", bill_months_options, index=current_month_idx)
                 
             p_unit, u_unit, c_factor, po_qty, s_stock = "次", "次", 1.0, 1.0, 0.0
             v_name, v_phone, exp_str = "公共事業/其他", "", ""
@@ -141,7 +141,6 @@ with po_tabs[0]:
                 conn = sqlite3.connect('inventory.db')
                 cursor = conn.cursor()
                 
-                # 智慧自動上架：寫入 products 時一律強制將 status 設定為 1
                 cursor.execute('''INSERT OR REPLACE INTO products 
                                   (prod_id, prod_name, cost, price, safety_stock, purchase_unit, use_unit, conversion_factor, status)
                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)''', 
@@ -152,7 +151,6 @@ with po_tabs[0]:
                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', 
                                (final_id, total_use_units, exp_str, today_str, v_name, v_phone, calculated_single_cost, total_use_units))
                 
-                # 獲取剛插入的實體批次 ID
                 new_batch_id = cursor.lastrowid
                 
                 conn.commit()
@@ -160,13 +158,11 @@ with po_tabs[0]:
                 
                 if prefix == 'C':
                     month_digits = int(selected_month_str.replace("月", ""))
-                    current_year = datetime.now().year
-                    formatted_target_month = f"{current_year}-{month_digits:02d}"
+                    formatted_target_month = f"{selected_year}-{month_digits:02d}"
                     
                     log_action = "帳單支出登記"
-                    # 功能改善：加入實體 (賬單批次: X)
-                    log_history(current_user, log_action, f"新單登記：{chosen_name}，費用月份：{selected_month_str}，總金額：${total_invoice_amount}。 目標歸帳月份: {formatted_target_month} (賬單批次: {new_batch_id})")
-                    trigger_toast(f"帳單費用登記完成！【{chosen_name} ({selected_month_str}費用)】總金額：${total_invoice_amount}", icon="📥")
+                    log_history(current_user, log_action, f"新單登記：{chosen_name}，費用月份：{selected_year}年{selected_month_str}，總金額：${total_invoice_amount}。 目標歸帳月份: {formatted_target_month} (賬單批次: {new_batch_id})")
+                    trigger_toast(f"帳單費用登記完成！【{chosen_name} ({selected_year}年{selected_month_str}費用)】總金額：${total_invoice_amount}", icon="📥")
                 else:
                     log_action = "採購進貨"
                     vendor_info = f" (供應商: {v_name})" if v_name else ""
@@ -174,7 +170,6 @@ with po_tabs[0]:
                     is_auto_enabled = not existing_items_df.empty and chosen_name in existing_items_df['prod_name'].values and existing_items_df[existing_items_df['prod_name'] == chosen_name].iloc[0]['status'] == 0
                     auto_enabled_log = " (偵測到下架食材，系統已在進貨時自動將其重新啟用上架！)" if is_auto_enabled else ""
                     
-                    # 功能改善：加入實體 (賬單批次: X)
                     log_history(current_user, log_action, f"新單登記：{chosen_name}，數量：{po_qty}{p_unit}，總金額：${total_invoice_amount}{vendor_info}{auto_enabled_log} (賬單批次: {new_batch_id})")
                     trigger_toast(f"採購登記完成！【{chosen_name}】庫存已增加{auto_enabled_log}", icon="📥")
                 
@@ -182,7 +177,7 @@ with po_tabs[0]:
 
 
 # ==========================================
-# 分頁 2：歷史採購單錯誤修正 (已修復欄位對齊 KeyError)
+# 分頁 2：歷史採購單錯誤修正
 # ==========================================
 with po_tabs[1]:
     st.markdown("##### 🔍 歷史採購單精準篩選面板：")
@@ -237,7 +232,6 @@ with po_tabs[1]:
     where_clause = " WHERE " + " AND ".join(query_conditions) if query_conditions else ""
 
     conn = sqlite3.connect('inventory.db')
-    # 重點修正：對齊 SQL 欄位中文別名，防止 KeyError
     df_all_batches = pd.read_sql_query(f'''
         SELECT s.batch_id as 批次編號, s.prod_id as 商品編號, p.prod_name as 商品名稱, 
                s.qty as 當前小單位庫存, s.original_qty as 原始小單位庫存, p.purchase_unit as 進貨單位, p.use_unit as 使用單位,
@@ -276,8 +270,8 @@ with po_tabs[1]:
         st.markdown("---")
         
         if is_bill:
-            st.markdown("##### 💰 填寫更正後的帳單金額與所屬月份（皆為必填）：")
-            col_bill_e1, col_bill_e2 = st.columns(2)
+            st.markdown("##### 💰 填寫更正後的帳單金額與所屬年月（皆為必填）：")
+            col_bill_e1, col_bill_e2, col_bill_e3 = st.columns([2, 1, 1])
             
             with col_bill_e1:
                 new_total_amount = st.number_input(
@@ -287,40 +281,55 @@ with po_tabs[1]:
                     step=10.0,
                     key="edit_bill_amount_input"
                 )
-            with col_bill_e2:
-                bill_months_options = [f"{i}月" for i in range(1, 13)]
-                
-                # 預設回退值：當下這個月字串 (例如："6月")
-                fallback_month_str = str(datetime.now().month) + "月"
-                current_month_str = None
-                
-                conn = sqlite3.connect('inventory.db')
-                cursor = conn.cursor()
+            
+            # 從歷史稽核日誌反查先前設定的年份與月份作為預設回退依據
+            fallback_year = datetime.now().year
+            fallback_month_str = str(datetime.now().month) + "月"
+            current_year_val = fallback_year
+            current_month_str = fallback_month_str
+            
+            conn = sqlite3.connect('inventory.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT details FROM history WHERE details LIKE ? ORDER BY id DESC LIMIT 1", (f"%目標歸帳月份:%(賬單批次: {target_batch_id})%",))
+            hist_row = cursor.fetchone()
+            if not hist_row:
                 cursor.execute("SELECT details FROM history WHERE action = '帳單支出登記' AND details LIKE ? ORDER BY id DESC LIMIT 1", (f"%新單登記：{matched_batch_row['商品名稱']}%",))
                 hist_row = cursor.fetchone()
-                conn.close()
-                
-                if hist_row:
-                    import re
-                    month_match = re.search(r"費用月份：(\d+月)", hist_row[0])
-                    if month_match:
-                        current_month_str = month_match.group(1)
-                
-                # ====== 核心改善：防呆驗證與預設值回退機制 ======
-                # 1. 檢查有沒有成功抓到月份，以及抓到的月份在不在選單內
-                if current_month_str and current_month_str in bill_months_options:
-                    default_month_idx = bill_months_options.index(current_month_str)
+            conn.close()
+            
+            if hist_row:
+                import re
+                target_month_match = re.search(r"目標歸帳月份:\s*(\d{4})-(\d{2})", hist_row[0])
+                if target_month_match:
+                    current_year_val = int(target_month_match.group(1))
+                    current_month_str = str(int(target_month_match.group(2))) + "月"
                 else:
-                    # 2. 如果格式不合(例如補零的狀況)，嘗試去零後再檢查一次
-                    cleaned_m = current_month_str.lstrip('0') if current_month_str else ""
-                    if cleaned_m in bill_months_options:
-                        default_month_idx = bill_months_options.index(cleaned_m)
-                    else:
-                        # 3. 徹底找不到、格式不合或 Regex 失敗，自動幫店員選「當下這個月」
-                        default_month_idx = bill_months_options.index(fallback_month_str)
-                # ================================================
+                    month_match = re.search(r"費用月份：(?:(\d+)年)?(\d+月)", hist_row[0])
+                    if month_match:
+                        if month_match.group(1):
+                            current_year_val = int(month_match.group(1))
+                        current_month_str = month_match.group(2)
+            
+            bill_year_options = [fallback_year, fallback_year - 1]
+            if current_year_val in bill_year_options:
+                default_year_idx = bill_year_options.index(current_year_val)
+            else:
+                default_year_idx = 0
+                
+            bill_months_options = [f"{i}月" for i in range(1, 13)]
+            if current_month_str and current_month_str in bill_months_options:
+                default_month_idx = bill_months_options.index(current_month_str)
+            else:
+                cleaned_m = current_month_str.lstrip('0') if current_month_str else ""
+                if cleaned_m in bill_months_options:
+                    default_month_idx = bill_months_options.index(cleaned_m)
+                else:
+                    default_month_idx = bill_months_options.index(fallback_month_str)
                     
-                selected_month_str = st.selectbox("請選擇此費用【所屬月份】(必填)", bill_months_options, index=default_month_idx, key="edit_bill_month_select")
+            with col_bill_e2:
+                selected_year = st.selectbox("請選擇費用【所屬年份】", bill_year_options, index=default_year_idx, key="edit_bill_year_select")
+            with col_bill_e3:
+                selected_month_str = st.selectbox("請選擇費用【所屬月份】", bill_months_options, index=default_month_idx, key="edit_bill_month_select")
                 
             new_p_unit, new_u_unit, new_c_factor, new_po_qty, new_safety = "次", "次", 1.0, 1.0, 0.0
             new_v_name, new_v_phone, new_exp_str = "公共事業/其他", "", ""
@@ -329,7 +338,6 @@ with po_tabs[1]:
             st.markdown("##### 📦 填寫更正後的包裝規格與採購數據：")
             col_edit1, col_edit2, col_edit3 = st.columns(3)
             with col_edit1:
-                # 欄位對齊修復：使用 SQL Alias 對應的中文名稱，避免跳出 KeyError
                 new_p_unit = st.text_input("大包裝進貨單位 (如:台斤、箱)", value=str(matched_batch_row['進貨單位'])).strip()
                 new_po_qty = st.number_input("新設定的進貨大包裝總數量", min_value=0.0, value=float(max(matched_batch_row['進貨大包裝數'], 0.0)), step=1.0)
             with col_edit2:
@@ -367,17 +375,14 @@ with po_tabs[1]:
                 
                 if is_bill:
                     edit_month_digits = int(selected_month_str.replace("月", ""))
-                    current_year = datetime.now().year
-                    formatted_edit_month = f"{current_year}-{edit_month_digits:02d}"
+                    formatted_edit_month = f"{selected_year}-{edit_month_digits:02d}"
                     
-                    # 功能改善：加入實體 (賬單批次: X)
                     audit_trail = f"歷史帳單修正【{matched_batch_row['商品名稱']}】 (賬單批次: {target_batch_id}):\n"
-                    audit_trail += f" * 費用月份：覆蓋調整為 {selected_month_str}\n"
+                    audit_trail += f" * 費用月份：覆蓋調整為 {selected_year}年{selected_month_str}\n"
                     if float(matched_batch_row['推估總金額']) != new_total_amount:
                         audit_trail += f" * 帳單金額：自 ${matched_batch_row['推估總金額']:.0f} 修改為 ${new_total_amount:.0f}\n"
                     audit_trail += f" 目標歸帳月份: {formatted_edit_month}"
                 else:
-                    # 功能改善：加入實體 (賬單批次: X)
                     audit_trail = f"採購歷史修正【批次 {target_batch_id} - {matched_batch_row['商品名稱']}】 (賬單批次: {target_batch_id}):\n"
                     if float(matched_batch_row['進貨大包裝數']) != new_po_qty:
                         audit_trail += f" * 進貨數量：自 {matched_batch_row['進貨大包裝數']} 修改為 {new_po_qty}\n"

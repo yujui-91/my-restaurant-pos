@@ -11,7 +11,6 @@ st.subheader("🔧 庫存微調與報廢管理面板")
 
 current_user = st.session_state.get('current_user', '老 闆')
 
-# 🪵 移除「帳單費用 (C)」單選選項
 stock_adj_cate = st.radio("🗂️ 請選擇要調整的項目類別：", ["僅看 食材 (R)", "僅看 用品 (S)"], horizontal=True)
 
 if "食材" in stock_adj_cate: 
@@ -63,14 +62,19 @@ if not df_unique_items.empty:
         st.markdown(f"> 📊 **當前選擇批次狀態：** **{item_name}** (進貨日期: {orig_inbound_date}) ｜ 目前系統登記庫存量： **{current_qty} {unit_label}**")
         
         with st.form("inventory_adjustment_form"):
-            # 🪵 調整動作說明的文字（移除費用扣減字眼）
             adj_type = st.radio("動作選擇", ["過期損耗/報廢 (扣減庫存)", "手動補正/盤盈回補 (增加庫存)"], horizontal=True)
             adj_qty = st.number_input(f"請輸入異動變更的數量 ({unit_label})", value=1.0, step=1.0)
             
-            # 📅 讓老闆直接指定要算在哪個月的財報上
-            bill_months_options = [f"{i}月" for i in range(1, 13)]
-            current_month_idx = max(0, min(datetime.now().month - 1, 11))
-            adj_month_str = st.selectbox("📅 請指定此筆損耗歸屬月份（財報依此歸帳）：", bill_months_options, index=current_month_idx)
+            st.markdown("###### 📅 請指定此筆損耗歸屬之完整年份與月份（確保跨年財報精確）：")
+            col_adj_y, col_adj_m = st.columns(2)
+            with col_adj_y:
+                this_year = datetime.now().year
+                adj_year_options = [this_year, this_year - 1]
+                selected_adj_year = st.selectbox("歸帳年份", adj_year_options, index=0)
+            with col_adj_m:
+                bill_months_options = [f"{i}月" for i in range(1, 13)]
+                current_month_idx = max(0, min(datetime.now().month - 1, 11))
+                adj_month_str = st.selectbox("歸帳月份", bill_months_options, index=current_month_idx)
             
             reason_txt = st.text_input("請填寫微調/報廢原因說明 (選填)", value="")
             submit_adj = st.form_submit_button("🔧 確認執行庫存異動")
@@ -89,7 +93,6 @@ if not df_unique_items.empty:
 
                         conn = sqlite3.connect('inventory.db')
                         cursor = conn.cursor()
-                        # 獲取單價以計算財務變動總值
                         cursor.execute("SELECT cost FROM products WHERE prod_id = ?", (target_prod_id,))
                         unit_cost = cursor.fetchone()[0] or 0.0
                         total_value_change = final_qty_change * unit_cost
@@ -98,10 +101,8 @@ if not df_unique_items.empty:
                         conn.commit()
                         conn.close()
                         
-                        # 🎯【轉換成 YYYY-MM 標籤字串】
                         month_digits = int(adj_month_str.replace("月", ""))
-                        current_year = datetime.now().year
-                        formatted_target_month = f"{current_year}-{month_digits:02d}"
+                        formatted_target_month = f"{selected_adj_year}-{month_digits:02d}"
 
                         log_details = (
                             f"庫存微調【{item_name}】(批次編號 {batch_id_part}，進貨日: {orig_inbound_date})。"
