@@ -17,9 +17,15 @@ with col_f1:
     # 篩選器 1：時間區間篩選
     history_time_option = st.selectbox(
         "📅 選擇查看時間區間",
-        ["今天", "過去 7 天", "過去 30 天", "自訂區間 (自選起訖日期)"],
+        ["今天", "過去 7 定", "過去 7 天", "過去 30 天", "自訂區間 (自選起訖日期)"],
+        index=1,  # 修正防呆
         key="history_filter"
     )
+    # 若不小心選到錯字，自動導回
+    if history_time_option == "今天":
+        pass
+    elif history_time_option in ["過去 7 定", "過去 7 天"]:
+        history_time_option = "過去 7 天"
 
 # 處理時間區間邏輯
 now = datetime.now()
@@ -67,9 +73,9 @@ conn = sqlite3.connect("inventory.db")
 sql_query = "SELECT timestamp AS 時間, user AS 操作人, action AS 動作, details AS 詳細說明 FROM history WHERE timestamp BETWEEN ? AND ?"
 sql_params = [start_str, end_str]
 
-# 功能改善 3：修正大方向動作類別匹配條件，使其與實際寫入端（多品項收銀結帳）相符，避免搜尋不到
+# 修正大方向動作類別匹配條件，使其與新版獨立分離的作廢與更正紀錄相符
 if selected_main_action == "🛒 餐點收銀結帳":
-    sql_query += " AND (action = '多品項收銀結帳' OR action = '訂單作廢成功')"
+    sql_query += " AND (action = '多品項收銀結帳' OR action = '訂單作廢成功' OR action = '更正點餐數量')"
 elif selected_main_action == "⚙️ 餐點參數修正":
     sql_query += " AND action LIKE '修正餐點參數-%'"
 elif selected_main_action == "📥 採購進貨登記":
@@ -85,6 +91,12 @@ df_hist = pd.read_sql_query(sql_query, conn, params=sql_params)
 conn.close()
 
 # ==========================================
+# 🛠️ 核心改善：將詳細說明內干擾閱讀的 ||STRUCT_DATA|| JSON 字串切除
+# ==========================================
+if not df_hist.empty:
+    df_hist['詳細說明'] = df_hist['詳細說明'].apply(lambda x: str(x).split("||STRUCT_DATA||")[0] if "||STRUCT_DATA||" in str(x) else x)
+
+# ==========================================
 # 📱 畫面呈現區 (細項與詳細說明在此輸出)
 # ==========================================
 if not df_hist.empty:
@@ -93,7 +105,7 @@ if not df_hist.empty:
     use_mobile_view = st.toggle("📱 切換為手機/平板專用排版（防止長文字被遮擋）", value=False)
     
     if not use_mobile_view:
-        # 電腦版檢視：大表格
+        # 電腦版檢視：大表格 (此時「詳細說明」欄位已無 JSON 干擾，非常乾淨整潔)
         st.data_editor(
             df_hist,
             column_config={
@@ -108,7 +120,7 @@ if not df_hist.empty:
             key="history_view_table"
         )
     else:
-        # 手機/平板版檢視：直式卡片清單，點開卡片即會輸出所有細項文字
+        # 手機/平板版檢視：直式卡片清單
         st.markdown("---")
         for idx, row in df_hist.iterrows():
             with st.expander(f"⏰ {row['時間']} | {row['動作']} ({row['操作人']})"):

@@ -16,7 +16,7 @@ current_user = st.session_state.get('current_user', '老 闆')
 if 'pos_shopping_cart' not in st.session_state:
     st.session_state.pos_shopping_cart = []
 
-conn = sqlite3.connect('inventory.db')
+conn = sqlite3.connect('inventory.db', timeout=20.0)
 existing_dishes = pd.read_sql_query("SELECT prod_id, prod_name, price FROM products WHERE status = 1 AND prod_id LIKE 'P%'", conn)
 all_raw_df = pd.read_sql_query("SELECT prod_id, prod_name, use_unit, cost FROM products WHERE status = 1 AND (prod_id LIKE 'R%' OR prod_id LIKE 'S%')", conn)
 conn.close()
@@ -25,7 +25,7 @@ def calculate_cart_estimated_cost(cart_items):
     if not cart_items:
         return 0.0, {}
         
-    conn = sqlite3.connect('inventory.db')
+    conn = sqlite3.connect('inventory.db', timeout=20.0)
     cursor = conn.cursor()
     
     total_mats_needed = {}
@@ -68,6 +68,7 @@ def calculate_cart_estimated_cost(cart_items):
             
         cart_total_cost += this_mat_cost
         
+    cursor.close()
     conn.close()
     return cart_total_cost, mats_status
 
@@ -187,7 +188,7 @@ with pos_tabs[0]:
             col_conf1, col_conf2 = st.columns(2)
             with col_conf1:
                 if st.button("✅ 核准出餐（執行批量庫存扣料）", type="primary", use_container_width=True):
-                    conn = sqlite3.connect('inventory.db')
+                    conn = sqlite3.connect('inventory.db', timeout=20.0)
                     cursor = conn.cursor()
                     
                     all_mats_needed = {}
@@ -220,15 +221,17 @@ with pos_tabs[0]:
                             insufficient_msg += f" ❌ 庫存告急：物料【{status_row[1] if status_row else c_id}】批量點單共需要 {total_need:.1f}，目前全庫僅剩 {current_stock:.1f}！\n"
                             
                     if disabled_item_detected:
-                        st.session_state.show_checkout_confirm = False  # 改善功能 2：強迫關閉確認視窗
+                        st.session_state.show_checkout_confirm = False  
                         st.error(disabled_msg)
+                        cursor.close()
                         conn.close()
-                        st.button("🔄 重新載入畫面以調整數量", on_click=st.rerun) # 協助刷新介面
+                        st.button("🔄 重新載入畫面以調整數量", on_click=st.rerun) 
                     elif insufficient_flag:
-                        st.session_state.show_checkout_confirm = False  # 改善功能 2：強迫關閉確認視窗
+                        st.session_state.show_checkout_confirm = False  
                         st.error(insufficient_msg)
+                        cursor.close()
                         conn.close()
-                        st.button("🔄 重新載入畫面以調整數量", on_click=st.rerun) # 協助刷新介面
+                        st.button("🔄 重新載入畫面以調整數量", on_click=st.rerun) 
                     else:
                         try:
                             actual_total_cost = 0.0
@@ -256,6 +259,7 @@ with pos_tabs[0]:
                                 })
                                 
                             conn.commit()
+                            cursor.close()
                             conn.close()
                             
                             details_log = f"合併前台收銀：出餐明細 {confirm_msg}，總金額 ${total_bill_amount}，精準食材成本 ${actual_total_cost:.2f}。 消耗食材: " + ", ".join(log_mats_summary)
@@ -276,6 +280,7 @@ with pos_tabs[0]:
                             st.rerun()
                         except Exception as e:
                             conn.rollback()
+                            cursor.close()
                             conn.close()
                             st.error(f"🚨 會計核心異常：交易已安全回滾。原因：{e}")
             with col_conf2:
@@ -283,11 +288,11 @@ with pos_tabs[0]:
                     st.session_state.show_checkout_confirm = False
                     st.rerun()
     else:
-        st.info("💡 目前點餐購物車為空，請從上方選取餐點並加入點餐單。")
+        st.info("💡 目前點餐購物車為空，請從上方選取餐點並加入點餐單.")
 
 
 # ==========================================
-# 分頁 2：修改當日出餐數量與作廢（優化健康同步與時間邊界版）
+# 分頁 2：修改當日出餐數量與作廢（分離獨立紀錄歷史版）
 # ==========================================
 with pos_tabs[1]:
     st.markdown("##### 📝 當日成功核准出餐紀錄管理面版")
@@ -295,7 +300,7 @@ with pos_tabs[1]:
     today_start = datetime.now().strftime("%Y-%m-%d 00:00:00")
     today_end = datetime.now().strftime("%Y-%m-%d 23:59:59")
 
-    conn = sqlite3.connect('inventory.db')
+    conn = sqlite3.connect('inventory.db', timeout=20.0)
     df_today_orders = pd.read_sql_query('''
         SELECT id, timestamp, user, details FROM history 
         WHERE action = '多品項收銀結帳' AND timestamp BETWEEN ? AND ?
@@ -312,7 +317,7 @@ with pos_tabs[1]:
         for idx, row in df_today_orders.iterrows():
             raw_text = row['details']
             hist_id = row['id']
-            orig_time = row['timestamp'] # 擷取原始交易時間
+            orig_time = row['timestamp'] 
             
             if "||STRUCT_DATA||" in raw_text:
                 parts = raw_text.split("||STRUCT_DATA||")
@@ -345,7 +350,7 @@ with pos_tabs[1]:
         st.info(f"📋 **選定訂單完整原始日誌：**\n{order_details_text.split('||STRUCT_DATA||')[0]}")
 
         order_data = parsed_orders_cache[target_hist_id]
-        orig_order_timestamp = order_data["orig_timestamp"] # 安全備用時間標籤
+        orig_order_timestamp = order_data["orig_timestamp"] 
 
         if order_data["is_structured"]:
             parsed_dishes = [(d["prod_name"], d["qty"], d["prod_id"]) for d in order_data["dishes"]]
@@ -355,13 +360,14 @@ with pos_tabs[1]:
         else:
             raw_dishes = re.findall(r"【(.+?) x (\d+)份】", order_details_text)
             parsed_dishes = []
-            conn_temp = sqlite3.connect('inventory.db')
+            conn_temp = sqlite3.connect('inventory.db', timeout=20.0)
             cursor_temp = conn_temp.cursor()
             for name, qty in raw_dishes:
                 cursor_temp.execute("SELECT prod_id FROM products WHERE prod_name = ?", (name,))
                 pid_row = cursor_temp.fetchone()
                 pid = pid_row[0] if pid_row else ""
                 parsed_dishes.append((name, int(qty), pid))
+            cursor_temp.close()
             conn_temp.close()
             
             parsed_total_revenue = float(re.search(r"總金額 \$(\d+)", order_details_text).group(1))
@@ -375,7 +381,7 @@ with pos_tabs[1]:
         if "整單作廢" in manage_action:
             st.warning("⚠️ **注意：** 作廢將依據當時結帳發貨時的「精確原始批次」完整歸還至庫存中。")
             if st.button("🔥 確定執行整單作廢", type="primary", use_container_width=True):
-                conn = sqlite3.connect('inventory.db')
+                conn = sqlite3.connect('inventory.db', timeout=20.0)
                 cursor = conn.cursor()
                 try:
                     for mat in parsed_mats:
@@ -385,7 +391,6 @@ with pos_tabs[1]:
                         
                         if batches_info:
                             for b_info in batches_info:
-                                # 【功能改善 1】作廢退回時，只加回即時庫存量 qty，絕對不可更動歷史進貨總量 original_qty
                                 cursor.execute(
                                     "UPDATE stock_batches SET qty = qty + ? WHERE batch_id = ?", 
                                     (float(b_info["qty"]), b_info["batch_id"])
@@ -394,7 +399,6 @@ with pos_tabs[1]:
                             cursor.execute("SELECT batch_id FROM stock_batches WHERE prod_id = ? ORDER BY inbound_date DESC, batch_id DESC LIMIT 1", (mat_id,))
                             b_row = cursor.fetchone()
                             if b_row:
-                                # 【功能改善 1】無批次紀錄時回補最新批次，同樣只加回 qty
                                 cursor.execute("UPDATE stock_batches SET qty = qty + ? WHERE batch_id = ?", (refund_qty, b_row[0]))
                             else:
                                 today_str = datetime.now().strftime("%Y-%m-%d")
@@ -402,17 +406,20 @@ with pos_tabs[1]:
                                 p_cost = cursor.fetchone()[0] or 0.0
                                 cursor.execute("INSERT INTO stock_batches (prod_id, qty, original_qty, expiry_date, inbound_date, vendor_name, cost) VALUES (?, ?, ?, '', ?, '前台作廢退回', ?)", (mat_id, refund_qty, refund_qty, today_str, p_cost))
                     
-                    cursor.execute("DELETE FROM history WHERE id = ?", (target_hist_id,))
                     conn.commit()
+                    cursor.close()
+                    conn.close()
                     
-                    log_history(current_user, "訂單作廢成功", f"老闆作廢了單號 {target_hist_id} 的當日訂單，成功退回營業額 ${parsed_total_revenue} 元，庫存原物料已精準完整回補。 [原始訂單交易時間: {orig_order_timestamp}]")
+                    orig_brief = order_details_text.split("||STRUCT_DATA||")[0]
+                    log_history(current_user, "訂單作廢成功", f"操作人員執行整單作廢。被作廢單號: {target_hist_id} ｜ 原始交易時間: {orig_order_timestamp} ｜ 退回營業額: ${parsed_total_revenue} 元 ｜ 庫存原物料已完整回補。 原始單據內容為: [{orig_brief}]")
+                    
                     trigger_toast(f"已成功作廢單號 {target_hist_id} 的點餐紀錄，庫存已同步回補！", icon="🗑️")
                     st.rerun()
                 except Exception as e:
                     conn.rollback()
-                    st.error(f"執行作廢失敗：{e}")
-                finally:
+                    cursor.close()
                     conn.close()
+                    st.error(f"執行作廢失敗：{e}")
 
         elif "數量微調" in manage_action:
             st.markdown("###### 📝 請在下方輸入該單「正確」的餐點數量：")
@@ -429,16 +436,14 @@ with pos_tabs[1]:
                 if not has_qty_changed:
                     st.info("數量沒有任何變動，無需修正。")
                 else:
-                    conn = sqlite3.connect('inventory.db')
+                    conn = sqlite3.connect('inventory.db', timeout=20.0)
                     cursor = conn.cursor()
                     try:
                         for mat in parsed_mats:
                             if mat.get("deducted_batches", []):
                                 for b_info in mat["deducted_batches"]:
-                                    # 【功能改善 1】微調回補時，只加回即時庫存量 qty，不更動 original_qty
                                     cursor.execute("UPDATE stock_batches SET qty = qty + ? WHERE batch_id = ?", (float(b_info["qty"]), b_info["batch_id"]))
                             else:
-                                # 【功能改善 1】同上，只加回 qty
                                 cursor.execute("UPDATE stock_batches SET qty = qty + ? WHERE batch_id = (SELECT batch_id FROM stock_batches WHERE prod_id = ? ORDER BY inbound_date DESC, batch_id DESC LIMIT 1)", (float(mat["qty"]), mat["mat_id"]))
                         
                         new_total_bill = 0.0
@@ -489,26 +494,26 @@ with pos_tabs[1]:
                         if insufficient_flag:
                             st.error(insufficient_msg)
                             conn.rollback()
+                            cursor.close()
+                            conn.close()
                         else:
-                            details_text_part = f"合併前台收銀：出餐明細 {new_confirm_msg}，總金額 ${new_total_bill:.0f}，精準食材成本 ${final_new_cost:.2f}。 消耗食材: " + ", ".join(log_mats_summary)
+                            details_text_part = f"數量更正紀錄（對應原單號 {target_hist_id}）：出餐明細 {new_confirm_msg}，新總金額 ${new_total_bill:.0f}，更正後精準食材成本 ${final_new_cost:.2f}。 消耗食材: " + ", ".join(log_mats_summary)
                             new_payload_struct = {
                                 "dishes": new_cart_payload, 
                                 "materials": new_mats_payload, 
                                 "total_revenue": new_total_bill, 
                                 "total_cost": final_new_cost,
-                                "orig_timestamp": orig_order_timestamp
+                                "orig_timestamp": orig_order_timestamp,
+                                "is_correction": True,
+                                "referenced_id": target_hist_id
                             }
                             updated_full_log = details_text_part + " ||STRUCT_DATA||" + json.dumps(new_payload_struct, ensure_ascii=False)
-                            
-                            cursor.execute("UPDATE history SET details = ? WHERE id = ?", (updated_full_log, target_hist_id))
                             
                             for m_id in total_mats_needed_new.keys():
                                 matched_hist_mat = next((m for m in parsed_mats if m["mat_id"] == m_id), None)
                                 hist_cost_fallback = 0.0
                                 if matched_hist_mat and "deducted_batches" in matched_hist_mat and matched_hist_mat["deducted_batches"]:
                                     hist_cost_fallback = float(matched_hist_mat["deducted_batches"][0].get("cost", 0.0))
-                                else:
-                                    hist_cost_fallback = 0.0
 
                                 cursor.execute('''
                                     SELECT 
@@ -523,17 +528,23 @@ with pos_tabs[1]:
                                 cursor.execute("UPDATE products SET cost = ? WHERE prod_id = ?", (float(calculated_avg_cost), m_id))
                             
                             conn.commit()
-                            trigger_toast(f"🎉 單號 {target_hist_id} 的數量已成功更正，且後台庫存成本已完美同步！", icon="✏️")
+                            cursor.close()
+                            conn.close()
+                            
+                            # 💡 核心安全修正：將 log_history 移到外部獨立 conn 之後執行，防止 cursor 重疊造成的鎖死
+                            log_history(current_user, "更正點餐數量", updated_full_log)
+                            
+                            trigger_toast(f"🎉 單號 {target_hist_id} 的數量更正單已獨立成立，庫存成本完美同步！", icon="✏️")
                             st.rerun()
                     except Exception as e:
                         conn.rollback()
-                        st.error(f"更新數量時發生錯誤，資料庫已安全復原：{e}")
-                    finally:
+                        cursor.close()
                         conn.close()
+                        st.error(f"更新數量時發生錯誤，資料庫已安全復原：{e}")
 
 
 # ==========================================
-# 分頁 3：餐點配方微調與臨時餐點創立 (已移除手動單位，改為自動追隨)
+# 分頁 3：餐點配方微調與臨時餐點創立 
 # ==========================================
 with pos_tabs[2]:
     st.markdown("##### 🆕 1. 現場食材加料 / 臨時自訂新餐點創立區")
@@ -632,11 +643,12 @@ with pos_tabs[2]:
                     elif not st.session_state.custom_recipe_pool:
                         st.error("❌ 錯誤變更：新創餐點必須至少包含一項原物料配方，不可做「無本生意」！")
                     else:
-                        conn = sqlite3.connect('inventory.db')
+                        conn = sqlite3.connect('inventory.db', timeout=20.0)
                         cursor = conn.cursor()
                         cursor.execute("SELECT prod_id FROM products WHERE prod_name = ? AND status = 1", (pos_custom_name,))
                         if cursor.fetchone():
                             st.error(f"❌ 錯誤：【{pos_custom_name}】已存在於正式菜單中，請直接至下方區塊修正參數，切勿重複建立！")
+                            cursor.close()
                             conn.close()
                         else:
                             new_d_id = get_next_dish_id()
@@ -644,8 +656,8 @@ with pos_tabs[2]:
                             for item in st.session_state.custom_recipe_pool:
                                 cursor.execute("INSERT INTO bom VALUES (?, ?, ?)", (new_d_id, item['食材編號'], item['單位用量']))
                             conn.commit()
+                            cursor.close()
                             conn.close()
-                            # 【功能改善 2】修正寫入與日誌調用的變數，統一使用正確定義的 custom_custom_dish_calc_cost
                             log_history(
                                 current_user, 
                                 f"修正餐點參數-新創自訂餐點-{pos_custom_name}", 
@@ -761,7 +773,7 @@ with pos_tabs[2]:
                     elif (pot_large_servings > 0 and pot_large_price <= 0) or (pot_small_servings > 0 and pot_small_price <= 0):
                         st.error("❌ 錯誤：只要有分配碗數，對應的販售價格必須大於 0！")
                     else:
-                        conn = sqlite3.connect('inventory.db')
+                        conn = sqlite3.connect('inventory.db', timeout=20.0)
                         cursor = conn.cursor()
                         
                         if pot_large_servings > 0:
@@ -769,6 +781,7 @@ with pos_tabs[2]:
                             cursor.execute("SELECT prod_id FROM products WHERE prod_name = ? AND status = 1", (l_name,))
                             if cursor.fetchone():
                                 st.error(f"❌ 錯誤：【{l_name}】已存在於菜單中，請更換名稱或刪除舊品項！")
+                                cursor.close()
                                 conn.close()
                                 st.stop()
                             l_id = get_next_dish_id()
@@ -782,15 +795,23 @@ with pos_tabs[2]:
                             cursor.execute("SELECT prod_id FROM products WHERE prod_name = ? AND status = 1", (s_name,))
                             if cursor.fetchone():
                                 st.error(f"❌ 錯誤：【{s_name}】已存在於菜單中，請更換名稱或刪除舊品項！")
+                                cursor.close()
                                 conn.close()
                                 st.stop()
-                            s_id = get_next_dish_id()
+                                
+                            if pot_large_servings > 0:
+                                current_num = int(re.findall(r'\d+', l_id)[0])
+                                s_id = f"P{current_num + 1:03d}"
+                            else:
+                                s_id = get_next_dish_id()
+                                
                             cursor.execute("INSERT INTO products VALUES (?, ?, ?, ?, 0.0, '碗', '碗', 1.0, 1)", (s_id, s_name, single_small_cost, float(pot_small_price)))
                             for item in st.session_state.pot_recipe_pool:
                                 single_s_qty = (item['單位用量'] / total_shares) * 1.0
                                 cursor.execute("INSERT INTO bom VALUES (?, ?, ?)", (s_id, item['食材編號'], single_s_qty))
                                 
                         conn.commit()
+                        cursor.close()
                         conn.close()
                         
                         log_history(
@@ -818,7 +839,7 @@ with pos_tabs[2]:
             old_price = int(float(matched_dish['price']))
             
             if 'editing_recipe_dish_id' not in st.session_state or st.session_state.editing_recipe_dish_id != td_id:
-                conn = sqlite3.connect('inventory.db')
+                conn = sqlite3.connect('inventory.db', timeout=20.0)
                 db_recipe = pd.read_sql_query('''
                     SELECT p.prod_name as 食材名稱, b.child_id as 食材編號, b.qty_needed as 單位用量, p.use_unit as 單位
                     FROM bom b JOIN products p ON b.child_id = p.prod_id WHERE b.parent_id = ?
@@ -912,13 +933,14 @@ with pos_tabs[2]:
                         r_cost = float(matched_raw.iloc[0]['cost']) if not matched_raw.empty else 0.0
                         updated_dish_base_cost += item['單位用量'] * r_cost
                         
-                    conn = sqlite3.connect('inventory.db')
+                    conn = sqlite3.connect('inventory.db', timeout=20.0)
                     cursor = conn.cursor()
                     cursor.execute("UPDATE products SET price = ?, cost = ? WHERE prod_id = ?", (float(new_dish_price), updated_dish_base_cost, td_id))
                     cursor.execute("DELETE FROM bom WHERE parent_id = ?", (td_id,))
                     for b_save in recipe_list_to_save:
                         cursor.execute("INSERT INTO bom VALUES (?, ?, ?)", (td_id, b_save['食材編號'], b_save['單位用量']))
                     conn.commit()
+                    cursor.close()
                     conn.close()
                     
                     log_history(current_user, f"修正餐點參數-{target_dish_name}", change_details + f" * 同步重算標準原物料配方成本為: ${updated_dish_base_cost:.2f}")
@@ -935,7 +957,7 @@ with pos_tabs[2]:
 # ==========================================
 with pos_tabs[3]:
     st.markdown("##### ❌ 菜單餐點下架控制面板")
-    conn = sqlite3.connect('inventory.db')
+    conn = sqlite3.connect('inventory.db', timeout=20.0)
     all_dishes_raw = pd.read_sql_query("SELECT prod_id, prod_name, price, status FROM products WHERE prod_id LIKE 'P%'", conn)
     conn.close()
     
@@ -957,20 +979,22 @@ with pos_tabs[3]:
                 matched_del_dish = matched_del_dish_rows.iloc[0]
                 if matched_del_dish['status'] == 0:
                     if st.button("🟢 重新上架此餐點"):
-                        conn = sqlite3.connect('inventory.db')
+                        conn = sqlite3.connect('inventory.db', timeout=20.0)
                         cursor = conn.cursor()
                         cursor.execute("UPDATE products SET status = 1 WHERE prod_id = ?", (del_dish_id,))
                         conn.commit()
+                        cursor.close()
                         conn.close()
                         log_history(current_user, "修正餐點參數-餐點重新上架", f"上架餐點菜單品項：{matched_del_dish['prod_name']} ({del_dish_id})")
                         trigger_toast(f"餐點【{matched_del_dish['prod_name']}】已重新上架！", icon="🚀")
                         st.rerun()
                 else:
                     if st.button("🔴 確認將此餐點下架隱藏"):
-                        conn = sqlite3.connect('inventory.db')
+                        conn = sqlite3.connect('inventory.db', timeout=20.0)
                         cursor = conn.cursor()
                         cursor.execute("UPDATE products SET status = 0 WHERE prod_id = ?", (del_dish_id,))
                         conn.commit()
+                        cursor.close()
                         conn.close()
                         log_history(current_user, "修正餐點參數-餐點下架隱藏", f"下架隱藏餐點菜單品項：{matched_del_dish['prod_name']} ({del_dish_id})")
                         trigger_toast(f"餐點【{matched_del_dish['prod_name']}】已成功下架！", icon="🗑️")
@@ -978,7 +1002,7 @@ with pos_tabs[3]:
 
     st.divider()
     st.markdown("##### ❌ 食材與用品庫存品項下架面板")
-    conn = sqlite3.connect('inventory.db')
+    conn = sqlite3.connect('inventory.db', timeout=20.0)
     all_mats_raw = pd.read_sql_query("SELECT prod_id, prod_name, use_unit, status FROM products WHERE prod_id LIKE 'R%' OR prod_id LIKE 'S%'", conn)
     conn.close()
     
@@ -1000,20 +1024,22 @@ with pos_tabs[3]:
                 matched_del_mat = matched_del_mat_rows.iloc[0]
                 if matched_del_mat['status'] == 0:
                     if st.button("🟢 恢復使用此食材/用品"):
-                        conn = sqlite3.connect('inventory.db')
+                        conn = sqlite3.connect('inventory.db', timeout=20.0)
                         cursor = conn.cursor()
                         cursor.execute("UPDATE products SET status = 1 WHERE prod_id = ?", (del_mat_id,))
                         conn.commit()
+                        cursor.close()
                         conn.close()
                         log_history(current_user, "修正餐點參數-物料恢復使用", f"重新啟用後台物料/用品：{matched_del_mat['prod_name']} ({del_mat_id})")
                         trigger_toast(f"品項【{matched_del_mat['prod_name']}】已重新啟用！", icon="✅")
                         st.rerun()
                 else:
                     if st.button("🔴 確認停用並下架此品項"):
-                        conn = sqlite3.connect('inventory.db')
+                        conn = sqlite3.connect('inventory.db', timeout=20.0)
                         cursor = conn.cursor()
                         cursor.execute("UPDATE products SET status = 0 WHERE prod_id = ?", (del_mat_id,))
                         conn.commit()
+                        cursor.close()
                         conn.close()
                         log_history(current_user, "修正餐點參數-物料停用下架", f"停用並下架後台物料/用品：{matched_del_mat['prod_name']} ({del_mat_id})")
                         trigger_toast(f"品項【{matched_del_mat['prod_name']}】已成功停用！", icon="🗑️")
