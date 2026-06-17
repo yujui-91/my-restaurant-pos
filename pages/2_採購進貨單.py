@@ -14,7 +14,7 @@ current_user = st.session_state.get('current_user', '老 闆')
 po_tabs = st.tabs(["📥 新進貨單登記", "✏️ 歷史採購單錯誤修正"])
 
 # ==========================================
-# 分頁 1：新進貨單登記 (原汁原味完整保留)
+# 分頁 1：新進貨單登記 (智慧自動上架與 UI 鎖死優化)
 # ==========================================
 with po_tabs[0]:
     item_type = st.radio("✨ 請選擇本次登記類別：", ["食材 (R 開頭)", "用品 (S 開頭)", "帳單費用 (C 開頭，如水電瓦斯)"], horizontal=True)
@@ -24,66 +24,64 @@ with po_tabs[0]:
     else: prefix = 'C'
 
     conn = sqlite3.connect('inventory.db')
+    # 撈取所有品項（含 status），以利重複採購時自動上架
     existing_items_df = pd.read_sql_query(
-        "SELECT prod_id, prod_name, purchase_unit, use_unit, conversion_factor, safety_stock FROM products WHERE prod_id LIKE ?", 
+        "SELECT prod_id, prod_name, purchase_unit, use_unit, conversion_factor, safety_stock, status FROM products WHERE prod_id LIKE ?", 
         conn, params=(f"{prefix}%",)
     )
     conn.close()
 
-    st.markdown("##### 🔍 1. 品項選取（二選一，具備智慧互斥防呆）：")
+    st.markdown("##### 🔍 1. 品項選取（智慧二選一切換）：")
     if prefix in ['R', 'S']:
-        st.caption("💡 知識庫：不同供應商的同名品項（例如：紙盒）建議分開建立為獨立項目，命名如 `[A廠商] 紙盒` 與 `[B廠商] 紙盒`。")
+        st.caption("💡 知識庫：不同供應商的同名品項建議分開建立，命名如 `[A廠商] 紙盒` 與 `[B廠商] 紙盒`。")
 
-    col_choice1, col_choice2 = st.columns(2)
-    has_input_text = "clean_po_input_name" in st.session_state and st.session_state.clean_po_input_name.strip() != ""
-    
-    with col_choice1:
-        options_list = [f"--- 請選擇已建立的{item_type[:2]} ---"] + (existing_items_df['prod_name'].tolist())
-        chosen_select_name = st.selectbox(
-            "【重複登記】從這裡直接下拉搜尋既品項", 
-            options_list, 
-            index=0,
-            key="clean_po_select_box",
-            disabled=has_input_text  
-        )
+    # 解決原本互斥鎖死 Bug：改用單選鈕切換登記模式，元件不會再卡死
+    reg_mode = st.radio("請選擇登記模式：", ["從既有品項【重複登記】", "填寫新名稱【首次登記】"], horizontal=True)
+
+    chosen_name = ""
+    default_id = ""
+    default_p_unit, default_u_unit, default_c_factor, default_safety = "", "", 1.0, 0.0
+
+    if reg_mode == "從既有品項【重複登記】":
+        options_display = [f"--- 請選擇已建立的{item_type[:2]} ---"]
+        for _, row in existing_items_df.iterrows():
+            if row['status'] == 0:
+                options_display.append(f"{row['prod_name']} (🔴 已下架，採購將自動啟用)")
+            else:
+                options_display.append(row['prod_name'])
+                
+        chosen_select_display = st.selectbox("下拉搜尋現有品項", options_display, index=0)
         
-    has_selected_existing = chosen_select_name != f"--- 請選擇已建立的{item_type[:2]} ---"
+        if chosen_select_display != f"--- 請選擇已建立的{item_type[:2]} ---":
+            # 還原真實品項名稱
+            chosen_name = chosen_select_display.replace(" (🔴 已下架，採購將自動啟用)", "")
+            matched_item = existing_items_df[existing_items_df['prod_name'] == chosen_name].iloc[0]
+            default_id = matched_item['prod_id']
+            default_p_unit = matched_item['purchase_unit']
+            default_u_unit = matched_item['use_unit']
+            default_c_factor = float(matched_item['conversion_factor'])
+            default_safety = float(matched_item['safety_stock'])
 
-    with col_choice2:
-        chosen_input_name = st.text_input(
-            f"【首次登記】在此直接手動打字輸入新{item_type[:2]}名稱", 
-            value="",
-            key="clean_po_input_name",
-            disabled=has_selected_existing  
-        )
-
-    if chosen_input_name.strip() != "":
-        chosen_name = chosen_input_name.strip()
-        conn = sqlite3.connect('inventory.db')
-        cursor = conn.cursor()
-        cursor.execute("SELECT prod_id, purchase_unit, use_unit, conversion_factor, safety_stock FROM products WHERE prod_name = ?", (chosen_name,))
-        dup_check = cursor.fetchone()
-        conn.close()
-        
-        if dup_check:
-            default_id = dup_check[0]
-            default_p_unit, default_u_unit, default_c_factor, default_safety = dup_check[1], dup_check[2], float(dup_check[3]), float(dup_check[4])
-        else:
-            if prefix == 'R': default_id = get_next_raw_id()
-            elif prefix == 'S': default_id = get_next_supply_id()
-            else: default_id = get_next_bill_id()
-            default_p_unit, default_u_unit, default_c_factor, default_safety = "", "", 1.0, 0.0
-            
-    elif has_selected_existing:
-        matched_item = existing_items_df[existing_items_df['prod_name'] == chosen_select_name].iloc[0]
-        chosen_name = chosen_select_name
-        default_id = matched_item['prod_id']
-        default_p_unit = matched_item['purchase_unit']
-        default_u_unit = matched_item['use_unit']
-        default_c_factor = float(matched_item['conversion_factor'])
-        default_safety = float(matched_item['safety_stock'])
     else:
-        chosen_name, default_id, default_p_unit, default_u_unit, default_c_factor, default_safety = "", "", "", "", 1.0, 0.0
+        chosen_input_name = st.text_input(f"手動輸入新{item_type[:2]}名稱", value="")
+        if chosen_input_name.strip() != "":
+            chosen_name = chosen_input_name.strip()
+            
+            # 檢查輸入的新名稱是否在資料庫已存在（包含已下架的項目）
+            conn = sqlite3.connect('inventory.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT prod_id, purchase_unit, use_unit, conversion_factor, safety_stock FROM products WHERE prod_name = ?", (chosen_name,))
+            dup_check = cursor.fetchone()
+            conn.close()
+            
+            if dup_check:
+                default_id = dup_check[0]
+                default_p_unit, default_u_unit, default_c_factor, default_safety = dup_check[1], dup_check[2], float(dup_check[3]), float(dup_check[4])
+            else:
+                if prefix == 'R': default_id = get_next_raw_id()
+                elif prefix == 'S': default_id = get_next_supply_id()
+                else: default_id = get_next_bill_id()
+                default_p_unit, default_u_unit, default_c_factor, default_safety = "", "", 1.0, 0.0
 
     with st.form("clean_po_form"):
         final_id = st.text_input("項目編號", value=default_id, disabled=True)
@@ -143,6 +141,7 @@ with po_tabs[0]:
                 conn = sqlite3.connect('inventory.db')
                 cursor = conn.cursor()
                 
+                # 智慧自動上架：寫入 products 時一律強制將 status 設定為 1
                 cursor.execute('''INSERT OR REPLACE INTO products 
                                   (prod_id, prod_name, cost, price, safety_stock, purchase_unit, use_unit, conversion_factor, status)
                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)''', 
@@ -166,14 +165,18 @@ with po_tabs[0]:
                 else:
                     log_action = "採購進貨"
                     vendor_info = f" (供應商: {v_name})" if v_name else ""
-                    log_history(current_user, log_action, f"新單登記：{chosen_name}，數量：{po_qty}{p_unit}，總金額：${total_invoice_amount}{vendor_info}")
-                    trigger_toast(f"採購登記完成！【{chosen_name}】總金額：${total_invoice_amount}", icon="📥")
+                    
+                    is_auto_enabled = not existing_items_df.empty and chosen_name in existing_items_df['prod_name'].values and existing_items_df[existing_items_df['prod_name'] == chosen_name].iloc[0]['status'] == 0
+                    auto_enabled_log = " (偵測到下架食材，系統已在進貨時自動將其重新啟用上架！)" if is_auto_enabled else ""
+                    
+                    log_history(current_user, log_action, f"新單登記：{chosen_name}，數量：{po_qty}{p_unit}，總金額：${total_invoice_amount}{vendor_info}{auto_enabled_log}")
+                    trigger_toast(f"採購登記完成！【{chosen_name}】庫存已增加{auto_enabled_log}", icon="📥")
                 
                 st.rerun()
 
 
 # ==========================================
-# 分頁 2：歷史採購單錯誤修正 (完美修復核心問題 4)
+# 分頁 2：歷史採購單錯誤修正 (已修復欄位對齊 KeyError)
 # ==========================================
 with po_tabs[1]:
     st.markdown("##### 🔍 歷史採購單精準篩選面板：")
@@ -228,7 +231,7 @@ with po_tabs[1]:
     where_clause = " WHERE " + " AND ".join(query_conditions) if query_conditions else ""
 
     conn = sqlite3.connect('inventory.db')
-    # 💡 完美核心修復 4：在此 SQL 查詢欄位精準補上 p.safety_stock as 安全庫存
+    # 重點修正：對齊 SQL 欄位中文別名，防止 KeyError
     df_all_batches = pd.read_sql_query(f'''
         SELECT s.batch_id as 批次編號, s.prod_id as 商品編號, p.prod_name as 商品名稱, 
                s.qty as 當前小單位庫存, s.original_qty as 原始小單位庫存, p.purchase_unit as 進貨單位, p.use_unit as 使用單位,
@@ -309,6 +312,7 @@ with po_tabs[1]:
             st.markdown("##### 📦 填寫更正後的包裝規格與採購數據：")
             col_edit1, col_edit2, col_edit3 = st.columns(3)
             with col_edit1:
+                # 欄位對齊修復：使用 SQL Alias 對應的中文名稱，避免跳出 KeyError
                 new_p_unit = st.text_input("大包裝進貨單位 (如:台斤、箱)", value=str(matched_batch_row['進貨單位'])).strip()
                 new_po_qty = st.number_input("新設定的進貨大包裝總數量", min_value=0.0, value=float(max(matched_batch_row['進貨大包裝數'], 0.0)), step=1.0)
             with col_edit2:
@@ -316,7 +320,6 @@ with po_tabs[1]:
                 new_total_amount = st.number_input("本次進貨【採購總金額】($)", min_value=0.0, value=float(max(matched_batch_row['推估總金額'], 0.0)), step=10.0)
             with col_edit3:
                 new_c_factor = st.number_input("轉換率 (一大包等於多少小單位)", min_value=0.0001, value=float(max(matched_batch_row['轉換率'], 0.0001)), step=1.0)
-                # 💡 完美核心修復 4：在此精準引入轉換後的 float(matched_batch_row['安全庫存']) 作為預設 value，徹底告別 Key 遺失引發的彈錯
                 new_safety = st.number_input("設定最低安全預警量", min_value=0.0, value=float(matched_batch_row['安全庫存']), step=1.0)
                 
             col_edit4, col_edit5, col_edit6 = st.columns(3)
