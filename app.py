@@ -123,6 +123,22 @@ df_merged_stock = pd.read_sql_query(f'''
 cursor = conn.cursor()
 for _, row in df_merged_stock.iterrows():
     cursor.execute("UPDATE products SET cost = ? WHERE prod_id = ?", (float(row['移動平均單位成本']), row['編號']))
+
+# ==================== 【🔥 新增：成品餐點 P 類 BOM 成本自動即時重算更新邏輯】 ====================
+# 說明：依據系統 db_core.py 中定義的配方表 `bom`(parent_id, child_id, qty_needed)，
+# 當原料 R/S 類的即時最新加權移動平均成本(products.cost)同步完畢後，立即將每個 P 類餐點底下所有配方用量成本重新加總更新。
+cursor.execute('''
+    UPDATE products
+    SET cost = COALESCE((
+        SELECT SUM(b.qty_needed * child.cost)
+        FROM bom b
+        JOIN products child ON b.child_id = child.prod_id
+        WHERE b.parent_id = products.prod_id
+    ), 0.0)
+    WHERE products.prod_id LIKE 'P%'
+''')
+# ====================================================================================
+
 conn.commit()
 conn.close()
 

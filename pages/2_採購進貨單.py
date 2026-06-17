@@ -141,9 +141,17 @@ with po_tabs[0]:
                 conn = sqlite3.connect('inventory.db')
                 cursor = conn.cursor()
                 
-                cursor.execute('''INSERT OR REPLACE INTO products 
+                # 【優化點 1】：採用 ON CONFLICT DO UPDATE 語法，防止歷史定價 price 欄位被粗暴覆蓋
+                cursor.execute('''INSERT INTO products 
                                   (prod_id, prod_name, cost, price, safety_stock, purchase_unit, use_unit, conversion_factor, status)
-                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)''', 
+                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+                                  ON CONFLICT(prod_id) DO UPDATE SET
+                                      prod_name = excluded.prod_name,
+                                      safety_stock = excluded.safety_stock,
+                                      purchase_unit = excluded.purchase_unit,
+                                      use_unit = excluded.use_unit,
+                                      conversion_factor = excluded.conversion_factor,
+                                      status = 1''', 
                                (final_id, chosen_name, calculated_single_cost, 0.0, s_stock, p_unit, u_unit, c_factor))
                 
                 cursor.execute('''INSERT INTO stock_batches 
@@ -152,6 +160,24 @@ with po_tabs[0]:
                                (final_id, total_use_units, exp_str, today_str, v_name, v_phone, calculated_single_cost, total_use_units))
                 
                 new_batch_id = cursor.lastrowid
+                
+                # 【核心優化點 2】：即時加權移動平均計算 (防止陣發性財務數據錯誤)
+                # 送出登記時，直接在後台計算包含當前新進貨批次在內的所有在線有效庫存 (qty > 0) 真正的加權平均單位成本
+                cursor.execute('''
+                    SELECT 
+                        CASE 
+                            WHEN SUM(CASE WHEN qty > 0 THEN qty ELSE 0 END) > 0 
+                            THEN (SUM(CASE WHEN qty > 0 THEN qty * cost ELSE 0 END) / SUM(CASE WHEN qty > 0 THEN qty ELSE 0 END))
+                            ELSE ? 
+                        END
+                    FROM stock_batches 
+                    WHERE prod_id = ?
+                ''', (calculated_single_cost, final_id))
+                
+                real_moving_avg_cost = cursor.fetchone()[0]
+                
+                # 將真正實時算出的加權移動平均單位成本同步寫入主表
+                cursor.execute("UPDATE products SET cost = ? WHERE prod_id = ?", (float(real_moving_avg_cost), final_id))
                 
                 conn.commit()
                 conn.close()
