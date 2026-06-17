@@ -62,9 +62,10 @@ df_current_void_logs = pd.read_sql_query('''
       AND timestamp BETWEEN ? AND ?
 ''', conn, params=(start_str, end_str))
 
+# 【核心修改處】修改 WHERE 條件，將 '更正點餐數量' 與原先的 '多品項收銀結帳' 一併納入計算
 df_history_sales = pd.read_sql_query('''
     SELECT id, action, details, timestamp FROM history 
-    WHERE action = '多品項收銀結帳'
+    WHERE action IN ('多品項收銀結帳', '更正點餐數量')
       AND timestamp BETWEEN ? AND ?
 ''', conn, params=(start_str, end_str))
 

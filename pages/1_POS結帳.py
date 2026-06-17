@@ -519,6 +519,7 @@ with pos_tabs[1]:
                                     SELECT 
                                       CASE 
                                         WHEN COALESCE(SUM(CASE WHEN qty > 0 THEN qty ELSE 0 END), 0) > 0 
+                                        WHEN COALESCE(SUM(CASE WHEN qty > 0 THEN qty ELSE 0 END), 0) > 0 
                                         THEN (SUM(CASE WHEN qty > 0 THEN qty * cost ELSE 0 END) / SUM(CASE WHEN qty > 0 THEN qty ELSE 0 END))
                                         ELSE ?
                                       END as moving_avg
@@ -527,6 +528,11 @@ with pos_tabs[1]:
                                 calculated_avg_cost = cursor.fetchone()[0] or 0.0
                                 cursor.execute("UPDATE products SET cost = ? WHERE prod_id = ?", (float(calculated_avg_cost), m_id))
                             
+                            # ----------------- 【在此處插入修改指令】 -----------------
+                            # 將原本舊的那筆錯誤歷史紀錄 action 改掉，防止財務報告重複計算
+                            cursor.execute("UPDATE history SET action = '多品項收銀結帳-已微調更正' WHERE id = ?", (target_hist_id,))
+                            # --------------------------------------------------------
+
                             conn.commit()
                             cursor.close()
                             conn.close()

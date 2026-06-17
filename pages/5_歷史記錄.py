@@ -75,7 +75,7 @@ sql_params = [start_str, end_str]
 
 # 修正大方向動作類別匹配條件，使其與新版獨立分離的作廢與更正紀錄相符
 if selected_main_action == "🛒 餐點收銀結帳":
-    sql_query += " AND (action = '多品項收銀結帳' OR action = '訂單作廢成功' OR action = '更正點餐數量')"
+    sql_query += " AND (action = '多品項收銀結帳' OR action = '多品項收銀結帳-已微調更正' OR action = '訂單作廢成功' OR action = '更正點餐數量')"
 elif selected_main_action == "⚙️ 餐點參數修正":
     sql_query += " AND action LIKE '修正餐點參數-%'"
 elif selected_main_action == "📥 採購進貨登記":
