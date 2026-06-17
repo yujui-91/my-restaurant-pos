@@ -385,6 +385,7 @@ with pos_tabs[1]:
                         
                         if batches_info:
                             for b_info in batches_info:
+                                # 【功能改善 1】作廢退回時，只加回即時庫存量 qty，絕對不可更動歷史進貨總量 original_qty
                                 cursor.execute(
                                     "UPDATE stock_batches SET qty = qty + ? WHERE batch_id = ?", 
                                     (float(b_info["qty"]), b_info["batch_id"])
@@ -393,6 +394,7 @@ with pos_tabs[1]:
                             cursor.execute("SELECT batch_id FROM stock_batches WHERE prod_id = ? ORDER BY inbound_date DESC, batch_id DESC LIMIT 1", (mat_id,))
                             b_row = cursor.fetchone()
                             if b_row:
+                                # 【功能改善 1】無批次紀錄時回補最新批次，同樣只加回 qty
                                 cursor.execute("UPDATE stock_batches SET qty = qty + ? WHERE batch_id = ?", (refund_qty, b_row[0]))
                             else:
                                 today_str = datetime.now().strftime("%Y-%m-%d")
@@ -433,8 +435,10 @@ with pos_tabs[1]:
                         for mat in parsed_mats:
                             if mat.get("deducted_batches", []):
                                 for b_info in mat["deducted_batches"]:
+                                    # 【功能改善 1】微調回補時，只加回即時庫存量 qty，不更動 original_qty
                                     cursor.execute("UPDATE stock_batches SET qty = qty + ? WHERE batch_id = ?", (float(b_info["qty"]), b_info["batch_id"]))
                             else:
+                                # 【功能改善 1】同上，只加回 qty
                                 cursor.execute("UPDATE stock_batches SET qty = qty + ? WHERE batch_id = (SELECT batch_id FROM stock_batches WHERE prod_id = ? ORDER BY inbound_date DESC, batch_id DESC LIMIT 1)", (float(mat["qty"]), mat["mat_id"]))
                         
                         new_total_bill = 0.0
@@ -641,6 +645,7 @@ with pos_tabs[2]:
                                 cursor.execute("INSERT INTO bom VALUES (?, ?, ?)", (new_d_id, item['食材編號'], item['單位用量']))
                             conn.commit()
                             conn.close()
+                            # 【功能改善 2】修正寫入與日誌調用的變數，統一使用正確定義的 custom_custom_dish_calc_cost
                             log_history(
                                 current_user, 
                                 f"修正餐點參數-新創自訂餐點-{pos_custom_name}", 
@@ -798,7 +803,7 @@ with pos_tabs[2]:
                         st.rerun()
 
     st.markdown("---")
-    st.markdown("##### ⚙️ 2. 調整與管理現有餐點配方與售價：")
+    st.markdown("##### 📋 2. 調整與管理現有餐點配方與售價：")
     if existing_dishes.empty:
         st.info("目前尚無既有餐點可供修改。")
     else:
@@ -957,7 +962,6 @@ with pos_tabs[3]:
                         cursor.execute("UPDATE products SET status = 1 WHERE prod_id = ?", (del_dish_id,))
                         conn.commit()
                         conn.close()
-                        # 【修正動作類別】：由「餐點重新上架」更新為「修正餐點參數-餐點重新上架」
                         log_history(current_user, "修正餐點參數-餐點重新上架", f"上架餐點菜單品項：{matched_del_dish['prod_name']} ({del_dish_id})")
                         trigger_toast(f"餐點【{matched_del_dish['prod_name']}】已重新上架！", icon="🚀")
                         st.rerun()
@@ -968,7 +972,6 @@ with pos_tabs[3]:
                         cursor.execute("UPDATE products SET status = 0 WHERE prod_id = ?", (del_dish_id,))
                         conn.commit()
                         conn.close()
-                        # 【修正動作類別】：由「餐點下架」更新為「修正餐點參數-餐點下架隱藏」
                         log_history(current_user, "修正餐點參數-餐點下架隱藏", f"下架隱藏餐點菜單品項：{matched_del_dish['prod_name']} ({del_dish_id})")
                         trigger_toast(f"餐點【{matched_del_dish['prod_name']}】已成功下架！", icon="🗑️")
                         st.rerun()
@@ -1002,7 +1005,6 @@ with pos_tabs[3]:
                         cursor.execute("UPDATE products SET status = 1 WHERE prod_id = ?", (del_mat_id,))
                         conn.commit()
                         conn.close()
-                        # 【修正動作類別】：由「食材恢復使用」更新為「修正餐點參數-物料恢復使用」
                         log_history(current_user, "修正餐點參數-物料恢復使用", f"重新啟用後台物料/用品：{matched_del_mat['prod_name']} ({del_mat_id})")
                         trigger_toast(f"品項【{matched_del_mat['prod_name']}】已重新啟用！", icon="✅")
                         st.rerun()
@@ -1013,7 +1015,6 @@ with pos_tabs[3]:
                         cursor.execute("UPDATE products SET status = 0 WHERE prod_id = ?", (del_mat_id,))
                         conn.commit()
                         conn.close()
-                        # 【修正動作類別】：由「食材停用下架」更新為「修正餐點參數-物料停用下架」
                         log_history(current_user, "修正餐點參數-物料停用下架", f"停用並下架後台物料/用品：{matched_del_mat['prod_name']} ({del_mat_id})")
                         trigger_toast(f"品項【{matched_del_mat['prod_name']}】已成功停用！", icon="🗑️")
                         st.rerun()
