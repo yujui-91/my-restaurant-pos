@@ -283,7 +283,7 @@ with pos_tabs[0]:
 
 
 # ==========================================
-# 分頁 2：修改當日出餐數量與作廢
+# 分頁 2：修改當日出餐數量與作廢（優化健康同步與時間邊界版）
 # ==========================================
 with pos_tabs[1]:
     st.markdown("##### 📝 當日成功核准出餐紀錄管理面版")
@@ -308,6 +308,7 @@ with pos_tabs[1]:
         for idx, row in df_today_orders.iterrows():
             raw_text = row['details']
             hist_id = row['id']
+            orig_time = row['timestamp'] # 擷取原始交易時間
             
             if "||STRUCT_DATA||" in raw_text:
                 parts = raw_text.split("||STRUCT_DATA||")
@@ -320,12 +321,13 @@ with pos_tabs[1]:
                         "materials": payload["materials"],
                         "total_revenue": float(payload["total_revenue"]),
                         "total_cost": float(payload["total_cost"]),
-                        "is_structured": True
+                        "is_structured": True,
+                        "orig_timestamp": orig_time
                     }
                 except:
-                    parsed_orders_cache[hist_id] = {"is_structured": False}
+                    parsed_orders_cache[hist_id] = {"is_structured": False, "orig_timestamp": orig_time}
             else:
-                parsed_orders_cache[hist_id] = {"is_structured": False}
+                parsed_orders_cache[hist_id] = {"is_structured": False, "orig_timestamp": orig_time}
                 
             brief_match = re.search(r"出餐明細 (.+?)，總金額", raw_text)
             brief = brief_match.group(1) if brief_match else "明細解析失敗"
@@ -339,6 +341,8 @@ with pos_tabs[1]:
         st.info(f"📋 **選定訂單完整原始日誌：**\n{order_details_text.split('||STRUCT_DATA||')[0]}")
 
         order_data = parsed_orders_cache[target_hist_id]
+        orig_order_timestamp = order_data["orig_timestamp"] # 安全備用時間標籤
+
         if order_data["is_structured"]:
             parsed_dishes = [(d["prod_name"], d["qty"], d["prod_id"]) for d in order_data["dishes"]]
             parsed_total_revenue = order_data["total_revenue"]
@@ -394,7 +398,9 @@ with pos_tabs[1]:
                     
                     cursor.execute("DELETE FROM history WHERE id = ?", (target_hist_id,))
                     conn.commit()
-                    log_history(current_user, "訂單作廢成功", f"老闆作廢了單號 {target_hist_id} 的當日訂單，成功退回營業額 ${parsed_total_revenue} 元，庫存原物料已精準完整回補。")
+                    
+                    # 改善功能 2：加入原始訂單交易時間戳記標籤，防止財報邊界衝突
+                    log_history(current_user, "訂單作廢成功", f"老闆作廢了單號 {target_hist_id} 的當日訂單，成功退回營業額 ${parsed_total_revenue} 元，庫存原物料已精準完整回補。 [原始訂單交易時間: {orig_order_timestamp}]")
                     trigger_toast(f"已成功作廢單號 {target_hist_id} 的點餐紀錄，庫存已同步回補！", icon="🗑️")
                     st.rerun()
                 except Exception as e:
@@ -477,13 +483,35 @@ with pos_tabs[1]:
                             st.error(insufficient_msg)
                             conn.rollback()
                         else:
+                            # 改善功能 2：在歷史結構快照中同步附帶原始時間標籤 
                             details_text_part = f"合併前台收銀：出餐明細 {new_confirm_msg}，總金額 ${new_total_bill:.0f}，精準食材成本 ${final_new_cost:.2f}。 消耗食材: " + ", ".join(log_mats_summary)
-                            new_payload_struct = {"dishes": new_cart_payload, "materials": new_mats_payload, "total_revenue": new_total_bill, "total_cost": final_new_cost}
+                            new_payload_struct = {
+                                "dishes": new_cart_payload, 
+                                "materials": new_mats_payload, 
+                                "total_revenue": new_total_bill, 
+                                "total_cost": final_new_cost,
+                                "orig_timestamp": orig_order_timestamp
+                            }
                             updated_full_log = details_text_part + " ||STRUCT_DATA||" + json.dumps(new_payload_struct, ensure_ascii=False)
                             
                             cursor.execute("UPDATE history SET details = ? WHERE id = ?", (updated_full_log, target_hist_id))
+                            
+                            # 改善功能 1：核心健康同步優化！動態計算受影響原物料的最新即時移動平均成本並更新 products 表
+                            for m_id in total_mats_needed_new.keys():
+                                cursor.execute('''
+                                    SELECT 
+                                      CASE 
+                                        WHEN COALESCE(SUM(CASE WHEN qty > 0 THEN qty ELSE 0 END), 0) > 0 
+                                        THEN (SUM(CASE WHEN qty > 0 THEN qty * cost ELSE 0 END) / SUM(CASE WHEN qty > 0 THEN qty ELSE 0 END))
+                                        ELSE (SELECT cost FROM products WHERE prod_id = ?)
+                                      END as moving_avg
+                                    FROM stock_batches WHERE prod_id = ?
+                                ''', (m_id, m_id))
+                                calculated_avg_cost = cursor.fetchone()[0] or 0.0
+                                cursor.execute("UPDATE products SET cost = ? WHERE prod_id = ?", (float(calculated_avg_cost), m_id))
+                            
                             conn.commit()
-                            trigger_toast(f"🎉 單號 {target_hist_id} 的數量已成功更正！", icon="✏️")
+                            trigger_toast(f"🎉 單號 {target_hist_id} 的數量已成功更正，且後台庫存成本已完美同步！", icon="✏️")
                             st.rerun()
                     except Exception as e:
                         conn.rollback()

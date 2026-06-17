@@ -57,10 +57,16 @@ while current_ptr <= end_date:
 # ==========================================
 conn = sqlite3.connect('inventory.db')
 
-# 1. 撈取選定日期區間內發生的所有相關收銀與作廢紀錄
+# 1. 解除「作廢日誌」的時間限制（改為撈取全歷史），以便實現跨日追溯沖銷；
+#    而正常銷售紀錄依舊精準限制在選定的 start_str 到 end_str 之間。
+df_all_void_logs = pd.read_sql_query('''
+    SELECT id, action, details, timestamp FROM history 
+    WHERE action = '訂單作廢成功'
+''', conn)
+
 df_history_sales = pd.read_sql_query('''
     SELECT id, action, details, timestamp FROM history 
-    WHERE (action = '多品項收銀結帳' OR action = '訂單作廢成功')
+    WHERE action = '多品項收銀結帳'
       AND timestamp BETWEEN ? AND ?
 ''', conn, params=(start_str, end_str))
 
@@ -72,13 +78,24 @@ df_expenses_raw = pd.read_sql_query('''
 
 conn.close()
 
-# 收集該期間內已被作廢的單號池，以便進行雙向安全沖銷
+# 收集該期間內已被作廢的單號池，進行智慧雙向安全沖銷（支援跨日安全防護）
 canceled_order_ids = set()
-for _, row in df_history_sales.iterrows():
-    if row['action'] == "訂單作廢成功":
-        id_match = re.search(r"作廢了單號 (\d+)", row['details'])
-        if id_match:
-            canceled_order_ids.add(int(id_match.group(1)))
+for _, row in df_all_void_logs.iterrows():
+    id_match = re.search(r"作廢了單號 (\d+)", row['details'])
+    if id_match:
+        void_order_id = int(id_match.group(1))
+        
+        # 檢查作廢日誌中是否存在我們新埋入的 [原始訂單交易時間] 標籤
+        orig_time_match = re.search(r"\[原始訂單交易時間:\s*([\d\s:-]+)\]", row['details'])
+        if orig_time_match:
+            orig_timestamp = orig_time_match.group(1)
+            # 💡 只有當「原始交易時間」落在當前財報搜尋區間內，才將其納入沖銷池
+            if start_str <= orig_timestamp <= end_str:
+                canceled_order_ids.add(void_order_id)
+        else:
+            # 向下相容：若是舊款無標籤數據，則比照原邏輯判斷（檢查作廢時間是否在區間內）
+            if start_str <= row['timestamp'] <= end_str:
+                canceled_order_ids.add(void_order_id)
 
 # 初始化財務加總變數
 total_revenue = 0.0
@@ -92,9 +109,8 @@ material_usage = {}
 
 # A. 處理即時區間內的營業額、FIFO 食材成本與餐點銷售排行
 for _, row in df_history_sales.iterrows():
-    if row['action'] == "多品項收銀結帳" and row['id'] in canceled_order_ids:
-        continue
-    if row['action'] == "訂單作廢成功":
+    # 如果這筆訂單在符合時間邊界的作廢池中，則安全沖銷（不計入當期營收與成本）
+    if row['id'] in canceled_order_ids:
         continue
         
     txt = row['details']
@@ -105,6 +121,10 @@ for _, row in df_history_sales.iterrows():
             json_part = txt.split("||STRUCT_DATA||")[1]
             payload = json.loads(json_part)
             
+            # 💡 額外安全防護：若訂單在經過「數量微調」後快照內存有新的 orig_timestamp，且原始時間不在本區間，也應跳過
+            if "orig_timestamp" in payload and not (start_str <= payload["orig_timestamp"] <= end_str):
+                continue
+                
             total_revenue += float(payload.get("total_revenue", 0.0))
             total_food_cost += float(payload.get("total_cost", 0.0))
             
