@@ -386,14 +386,14 @@ with pos_tabs[1]:
                         if batches_info:
                             for b_info in batches_info:
                                 cursor.execute(
-                                    "UPDATE stock_batches SET qty = qty + ?, original_qty = original_qty + ? WHERE batch_id = ?", 
-                                    (float(b_info["qty"]), float(b_info["qty"]), b_info["batch_id"])
+                                    "UPDATE stock_batches SET qty = qty + ? WHERE batch_id = ?", 
+                                    (float(b_info["qty"]), b_info["batch_id"])
                                 )
                         else:
                             cursor.execute("SELECT batch_id FROM stock_batches WHERE prod_id = ? ORDER BY inbound_date DESC, batch_id DESC LIMIT 1", (mat_id,))
                             b_row = cursor.fetchone()
                             if b_row:
-                                cursor.execute("UPDATE stock_batches SET qty = qty + ?, original_qty = original_qty + ? WHERE batch_id = ?", (refund_qty, refund_qty, b_row[0]))
+                                cursor.execute("UPDATE stock_batches SET qty = qty + ? WHERE batch_id = ?", (refund_qty, b_row[0]))
                             else:
                                 today_str = datetime.now().strftime("%Y-%m-%d")
                                 cursor.execute("SELECT cost FROM products WHERE prod_id = ?", (mat_id,))
@@ -403,7 +403,6 @@ with pos_tabs[1]:
                     cursor.execute("DELETE FROM history WHERE id = ?", (target_hist_id,))
                     conn.commit()
                     
-                    # 改善功能 2：加入原始訂單交易時間戳記標籤，防止財報邊界衝突
                     log_history(current_user, "訂單作廢成功", f"老闆作廢了單號 {target_hist_id} 的當日訂單，成功退回營業額 ${parsed_total_revenue} 元，庫存原物料已精準完整回補。 [原始訂單交易時間: {orig_order_timestamp}]")
                     trigger_toast(f"已成功作廢單號 {target_hist_id} 的點餐紀錄，庫存已同步回補！", icon="🗑️")
                     st.rerun()
@@ -434,9 +433,9 @@ with pos_tabs[1]:
                         for mat in parsed_mats:
                             if mat.get("deducted_batches", []):
                                 for b_info in mat["deducted_batches"]:
-                                    cursor.execute("UPDATE stock_batches SET qty = qty + ?, original_qty = original_qty + ? WHERE batch_id = ?", (float(b_info["qty"]), float(b_info["qty"]), b_info["batch_id"]))
+                                    cursor.execute("UPDATE stock_batches SET qty = qty + ? WHERE batch_id = ?", (float(b_info["qty"]), b_info["batch_id"]))
                             else:
-                                cursor.execute("UPDATE stock_batches SET qty = qty + ?, original_qty = original_qty + ? WHERE batch_id = (SELECT batch_id FROM stock_batches WHERE prod_id = ? ORDER BY inbound_date DESC, batch_id DESC LIMIT 1)", (float(mat["qty"]), float(mat["qty"]), mat["mat_id"]))
+                                cursor.execute("UPDATE stock_batches SET qty = qty + ? WHERE batch_id = (SELECT batch_id FROM stock_batches WHERE prod_id = ? ORDER BY inbound_date DESC, batch_id DESC LIMIT 1)", (float(mat["qty"]), mat["mat_id"]))
                         
                         new_total_bill = 0.0
                         total_mats_needed_new = {} 
@@ -487,7 +486,6 @@ with pos_tabs[1]:
                             st.error(insufficient_msg)
                             conn.rollback()
                         else:
-                            # 改善功能 2：在歷史結構快照中同步附帶原始時間標籤 
                             details_text_part = f"合併前台收銀：出餐明細 {new_confirm_msg}，總金額 ${new_total_bill:.0f}，精準食材成本 ${final_new_cost:.2f}。 消耗食材: " + ", ".join(log_mats_summary)
                             new_payload_struct = {
                                 "dishes": new_cart_payload, 
@@ -500,16 +498,12 @@ with pos_tabs[1]:
                             
                             cursor.execute("UPDATE history SET details = ? WHERE id = ?", (updated_full_log, target_hist_id))
                             
-                            # 改善功能 1：拒絕直接偷抓 products 表的最新成本。改從 parsed_mats 歷史 JSON 快照中尋找該單成立當下的歷史成本。
                             for m_id in total_mats_needed_new.keys():
-                                # 先找出當下這筆訂單快照中，此物料紀錄的歷史成本
                                 matched_hist_mat = next((m for m in parsed_mats if m["mat_id"] == m_id), None)
                                 hist_cost_fallback = 0.0
                                 if matched_hist_mat and "deducted_batches" in matched_hist_mat and matched_hist_mat["deducted_batches"]:
-                                    # 如果有批次明細，取其第一個批次的歷史成本作為代表
                                     hist_cost_fallback = float(matched_hist_mat["deducted_batches"][0].get("cost", 0.0))
                                 else:
-                                    # 若無批次明細，則可能當時是由舊邏輯生成，抓取系統原先備用的對應值
                                     hist_cost_fallback = 0.0
 
                                 cursor.execute('''
@@ -520,7 +514,7 @@ with pos_tabs[1]:
                                         ELSE ?
                                       END as moving_avg
                                     FROM stock_batches WHERE prod_id = ?
-                                ''', (hist_cost_fallback, m_id)) # 改善功能 1：改用歷史成本替代原來的 (SELECT cost FROM products ...)
+                                ''', (hist_cost_fallback, m_id))
                                 calculated_avg_cost = cursor.fetchone()[0] or 0.0
                                 cursor.execute("UPDATE products SET cost = ? WHERE prod_id = ?", (float(calculated_avg_cost), m_id))
                             
@@ -556,7 +550,6 @@ with pos_tabs[2]:
                 dish_select_list = ["--- 請選擇食材 ---"] + all_raw_df['prod_name'].tolist()
                 cus_mat_name = st.selectbox("選擇要加入的食材/用品名稱", dish_select_list, key="cus_mat_selector")
             
-            # 【核心功能改善：移除選擇單位欄位，自動顯示並鎖定庫存預設小單位】
             db_unit_a = ""
             if cus_mat_name != "--- 請選擇食材 ---":
                 matched_row_a = all_raw_df[all_raw_df['prod_name'] == cus_mat_name].iloc[0]
@@ -577,7 +570,6 @@ with pos_tabs[2]:
                     st.error("請選擇有效原物料並輸入大於 0 的用量！")
                 else:
                     mat_info = all_raw_df[all_raw_df['prod_name'] == cus_mat_name].iloc[0]
-                    # 因為完全與進貨時定義的「廚房使用小單位」同步，不需再透過下拉選單做多餘的倍數轉換
                     final_conv = cus_mat_qty 
                     
                     ex_idx = next((i for i, item in enumerate(st.session_state.custom_recipe_pool) if item['食材編號'] == mat_info['prod_id']), None)
@@ -612,19 +604,19 @@ with pos_tabs[2]:
                     st.session_state.custom_recipe_pool = new_pool
                     st.rerun()
                 
-                custom_dish_calc_cost = 0.0
+                custom_custom_dish_calc_cost = 0.0
                 for p_item in st.session_state.custom_recipe_pool:
                     matched_raw = all_raw_df[all_raw_df['prod_id'] == p_item['食材編號']]
                     r_cost = float(matched_raw.iloc[0]['cost']) if not matched_raw.empty else 0.0
-                    custom_dish_calc_cost += p_item['單位用量'] * r_cost
+                    custom_custom_dish_calc_cost += p_item['單位用量'] * r_cost
                     
-                custom_profit = float(pos_custom_price) - custom_dish_calc_cost
+                custom_profit = float(pos_custom_price) - custom_custom_dish_calc_cost
                 custom_margin = (custom_profit / pos_custom_price * 100) if pos_custom_price > 0 else 0.0
                 
                 st.markdown(f"""
                 > 💡 **🆕 新創餐點定價與配方成本動態預估試算：**
                 > * 餐點暫定售價： **${pos_custom_price} 元**
-                > * 依目前庫存推算【**單份標準原物料成本**】： **${custom_dish_calc_cost:,.2f} 元**
+                > * 依目前庫存推算【**單份標準原物料成本**】： **${custom_custom_dish_calc_cost:,.2f} 元**
                 > * 預估【**單份毛利**】： **${custom_profit:,.2f} 元** ｜ 預估毛利率: **{custom_margin:.1f}%**
                 """)
                     
@@ -644,12 +636,16 @@ with pos_tabs[2]:
                             conn.close()
                         else:
                             new_d_id = get_next_dish_id()
-                            cursor.execute("INSERT INTO products VALUES (?, ?, ?, ?, 0.0, '份', '份', 1.0, 1)", (new_d_id, pos_custom_name, custom_dish_calc_cost, float(pos_custom_price)))
+                            cursor.execute("INSERT INTO products VALUES (?, ?, ?, ?, 0.0, '份', '份', 1.0, 1)", (new_d_id, pos_custom_name, custom_custom_dish_calc_cost, float(pos_custom_price)))
                             for item in st.session_state.custom_recipe_pool:
                                 cursor.execute("INSERT INTO bom VALUES (?, ?, ?)", (new_d_id, item['食材編號'], item['單位用量']))
                             conn.commit()
                             conn.close()
-                            log_history(current_user, f"新創自訂餐點-{pos_custom_name}", f"老闆創立了全新的新菜色：{pos_custom_name}({new_d_id})，定價 ${pos_custom_price}，設定基本單位配方成本 ${custom_dish_calc_cost:.2f}。")
+                            log_history(
+                                current_user, 
+                                f"修正餐點參數-新創自訂餐點-{pos_custom_name}", 
+                                f"創立了全新的新菜色：{pos_custom_name}({new_d_id})，定價 ${pos_custom_price}，設定基本單位配方成本 ${custom_custom_dish_calc_cost:.2f}。"
+                            )
                             trigger_toast(f"成功建立餐點 【{pos_custom_name}】 並加入菜單選單！", icon="🚀")
                             st.session_state.custom_recipe_pool = []
                             st.rerun()
@@ -677,7 +673,6 @@ with pos_tabs[2]:
                 b_dish_select_list = ["--- 請選擇食材 ---"] + all_raw_df['prod_name'].tolist()
                 b_mat_name = st.selectbox("選擇投入此鍋的食材/用品項目", b_dish_select_list, key="b_mat_selector")
             
-            # 【核心功能改善：移除選擇投入單位欄位，自動顯示並鎖定庫存預設小單位】
             db_unit_b = ""
             if b_mat_name != "--- 請選擇食材 ---":
                 matched_row_b = all_raw_df[all_raw_df['prod_name'] == b_mat_name].iloc[0]
@@ -697,7 +692,6 @@ with pos_tabs[2]:
                     st.error("請選擇有效原物料並輸入大於 0 的投入量！")
                 else:
                     mat_info = all_raw_df[all_raw_df['prod_name'] == b_mat_name].iloc[0]
-                    # 直接對齊後端基本小單位
                     final_conv = b_mat_qty
 
                     ex_idx = next((i for i, item in enumerate(st.session_state.pot_recipe_pool) if item['食材編號'] == mat_info['prod_id']), None)
@@ -794,7 +788,11 @@ with pos_tabs[2]:
                         conn.commit()
                         conn.close()
                         
-                        log_history(current_user, f"整鍋拆分配方-{pot_base_name}", f"老闆透過 B模式 創立整鍋基底餐點：{pot_base_name}。整鍋物料總成本 ${total_pot_cost:.2f}。成功產出大碗成本 ${single_large_cost:.2f}/小碗成本 ${single_small_cost:.2f}。")
+                        log_history(
+                            current_user, 
+                            f"修正餐點參數-整鍋拆分配方-{pot_base_name}", 
+                            f"透過 B模式 創立整鍋基底餐點：{pot_base_name}。整鍋物料總成本 ${total_pot_cost:.2f}。成功產出大碗成本 ${single_large_cost:.2f}/小碗成本 ${single_small_cost:.2f}。"
+                        )
                         trigger_toast(f"🎉 成功批次打包建立 【{pot_base_name}】 大/小碗成品餐點並加入菜單！", icon="🥣")
                         st.session_state.pot_recipe_pool = []
                         st.rerun()
@@ -959,7 +957,8 @@ with pos_tabs[3]:
                         cursor.execute("UPDATE products SET status = 1 WHERE prod_id = ?", (del_dish_id,))
                         conn.commit()
                         conn.close()
-                        log_history(current_user, f"餐點重新上架", f"上架餐點：{matched_del_dish['prod_name']}")
+                        # 【修正動作類別】：由「餐點重新上架」更新為「修正餐點參數-餐點重新上架」
+                        log_history(current_user, "修正餐點參數-餐點重新上架", f"上架餐點菜單品項：{matched_del_dish['prod_name']} ({del_dish_id})")
                         trigger_toast(f"餐點【{matched_del_dish['prod_name']}】已重新上架！", icon="🚀")
                         st.rerun()
                 else:
@@ -969,7 +968,8 @@ with pos_tabs[3]:
                         cursor.execute("UPDATE products SET status = 0 WHERE prod_id = ?", (del_dish_id,))
                         conn.commit()
                         conn.close()
-                        log_history(current_user, f"餐點下架", f"下架餐點：{matched_del_dish['prod_name']}")
+                        # 【修正動作類別】：由「餐點下架」更新為「修正餐點參數-餐點下架隱藏」
+                        log_history(current_user, "修正餐點參數-餐點下架隱藏", f"下架隱藏餐點菜單品項：{matched_del_dish['prod_name']} ({del_dish_id})")
                         trigger_toast(f"餐點【{matched_del_dish['prod_name']}】已成功下架！", icon="🗑️")
                         st.rerun()
 
@@ -1002,7 +1002,8 @@ with pos_tabs[3]:
                         cursor.execute("UPDATE products SET status = 1 WHERE prod_id = ?", (del_mat_id,))
                         conn.commit()
                         conn.close()
-                        log_history(current_user, f"食材恢復使用", f"恢復食材：{matched_del_mat['prod_name']}")
+                        # 【修正動作類別】：由「食材恢復使用」更新為「修正餐點參數-物料恢復使用」
+                        log_history(current_user, "修正餐點參數-物料恢復使用", f"重新啟用後台物料/用品：{matched_del_mat['prod_name']} ({del_mat_id})")
                         trigger_toast(f"品項【{matched_del_mat['prod_name']}】已重新啟用！", icon="✅")
                         st.rerun()
                 else:
@@ -1012,6 +1013,7 @@ with pos_tabs[3]:
                         cursor.execute("UPDATE products SET status = 0 WHERE prod_id = ?", (del_mat_id,))
                         conn.commit()
                         conn.close()
-                        log_history(current_user, f"食材停用下架", f"下架停用食材：{matched_del_mat['prod_name']}")
+                        # 【修正動作類別】：由「食材停用下架」更新為「修正餐點參數-物料停用下架」
+                        log_history(current_user, "修正餐點參數-物料停用下架", f"停用並下架後台物料/用品：{matched_del_mat['prod_name']} ({del_mat_id})")
                         trigger_toast(f"品項【{matched_del_mat['prod_name']}】已成功停用！", icon="🗑️")
                         st.rerun()

@@ -57,6 +57,13 @@ if not all_items_for_safety.empty:
         conn.commit()
         conn.close()
         
+        # 【新增歷史紀錄埋點】歸類在：⚙️ 餐點參數修正
+        log_history(
+            st.session_state.current_user, 
+            f"修正餐點參數-安全庫存變更", 
+            f"操作人員微調了安全庫存線：【{matched_safety_row['prod_name']}】({target_safety_id})，新安全線設定為: {new_safety_value} {matched_safety_row['use_unit']}。"
+        )
+        
         trigger_toast(f"已將 【{matched_safety_row['prod_name']}】 的安全線更新為 {new_safety_value}", icon="⚙️")
         st.rerun()
 
@@ -243,18 +250,16 @@ if not df_merged_stock.empty:
             if st.button("❌ 確認將此下架批次數量歸零（移出明細）", type="primary", key="clean_disabled_submit_btn"):
                 conn = sqlite3.connect('inventory.db')
                 cursor = conn.cursor()
-                
-                # 功能改善 1：同步更新 original_qty 為「原先已消耗的數量」
-                # 已消耗量 = 原始包裝量 - 當前殘留量
                 new_orig_qty = max(0.0, float(matched_del_row['original_qty']) - float(matched_del_row['qty']))
                 cursor.execute("UPDATE stock_batches SET qty = 0, original_qty = ? WHERE batch_id = ?", (new_orig_qty, target_batch_id))
                 conn.commit()
                 conn.close()
                 
+                # 【優化動作類別】改為 "手動調整庫存-下架殘留清理" -> 完美歸帳至 📋 庫存微調/報廢/盤點
                 log_history(
                     st.session_state.current_user, 
-                    "下架庫存清理", 
-                    f"老闆在首頁清空了已下架品項的殘留庫存量：{item_name} (批次:{target_batch_id}，原數量:{matched_del_row['qty']}{matched_del_row['use_unit']}，歷史 original_qty 已修正為已消耗量: {new_orig_qty}{matched_del_row['use_unit']})"
+                    "手動調整庫存-下架殘留清理", 
+                    f"清理了已下架品項的殘留庫存量：{item_name} (批次:{target_batch_id}，原數量:{matched_del_row['qty']}{matched_del_row['use_unit']}，歷史 original_qty 已修正為已消耗量: {new_orig_qty}{matched_del_row['use_unit']})"
                 )
                 
                 trigger_toast(f"已成功將 【{item_name}】 批次 {target_batch_id} 的庫存量歸零清除，並重整原始登記量！", icon="🗑️")

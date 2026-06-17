@@ -55,10 +55,12 @@ while current_ptr <= end_date:
 # ==========================================
 conn = sqlite3.connect('inventory.db')
 
-df_all_void_logs = pd.read_sql_query('''
+# 【修改點 1】只撈取「作廢動作發生在當前查詢區間內」的紀錄，用來扣減當日營收
+df_current_void_logs = pd.read_sql_query('''
     SELECT id, action, details, timestamp FROM history 
     WHERE action = '訂單作廢成功'
-''', conn)
+      AND timestamp BETWEEN ? AND ?
+''', conn, params=(start_str, end_str))
 
 df_history_sales = pd.read_sql_query('''
     SELECT id, action, details, timestamp FROM history 
@@ -73,32 +75,6 @@ df_expenses_raw = pd.read_sql_query('''
 
 conn.close()
 
-# 收集該期間內已被作廢的單號池，進行智慧雙向安全沖銷（支援跨日安全防護）
-canceled_order_ids = set()
-for _, row in df_all_void_logs.iterrows():
-    id_match = re.search(r"作廢了單號 (\d+)", row['details'])
-    if id_match:
-        void_order_id = int(id_match.group(1))
-        
-        orig_time_match = re.search(r"\[原始訂單交易時間:\s*([\d\s:-]+)\]", row['details'])
-        if orig_time_match:
-            orig_timestamp = orig_time_match.group(1)
-            if start_str <= orig_timestamp <= end_str:
-                canceled_order_ids.add(void_order_id)
-        else:
-            # 向下相容：若是舊款無時間戳記標籤數據，反查該單號當時成立時的真實時間
-            conn_v = sqlite3.connect('inventory.db')
-            cursor_v = conn_v.cursor()
-            cursor_v.execute("SELECT timestamp FROM history WHERE id = ? AND action = '多品項收銀結帳'", (void_order_id,))
-            orig_sale_row = cursor_v.fetchone()
-            conn_v.close()
-            
-            if orig_sale_row:
-                real_sale_timestamp = orig_sale_row[0]
-                # 只有當「原始交易成立時間」確實落在當前財報搜尋區間內，才納入沖銷池
-                if start_str <= real_sale_timestamp <= end_str:
-                    canceled_order_ids.add(void_order_id)
-
 total_revenue = 0.0
 total_food_cost = 0.0
 total_op_expense = 0.0
@@ -107,10 +83,8 @@ total_stock_loss = 0.0
 dish_sales = {}
 material_usage = {}
 
+# --- 處理正向銷售營收（不再剔除已被作廢的單號，保持歷史完整性） ---
 for _, row in df_history_sales.iterrows():
-    if row['id'] in canceled_order_ids:
-        continue
-        
     txt = row['details']
     
     if "||STRUCT_DATA||" in txt:
@@ -161,6 +135,66 @@ for _, row in df_history_sales.iterrows():
                 m_qty = float(match.group(3))
                 material_usage[m_name] = material_usage.get(m_name, 0.0) + m_qty
 
+# --- 【修改點 2】處理當期作廢扣減（在作廢當天扣減營收、成本與銷量） ---
+for _, row in df_current_void_logs.iterrows():
+    txt = row['details']
+    
+    # 優先嘗試解析 STRUCT_DATA
+    if "||STRUCT_DATA||" in txt:
+        try:
+            json_part = txt.split("||STRUCT_DATA||")[1]
+            payload = json.loads(json_part)
+            
+            # 從當期營收與成本中「扣除」作廢金額
+            total_revenue -= float(payload.get("total_revenue", 0.0))
+            total_food_cost -= float(payload.get("total_cost", 0.0))
+            
+            # 扣減餐點銷量排行
+            for d in payload.get("dishes", []):
+                d_name = d.get("prod_name")
+                d_qty = float(d.get("qty", 0.0))
+                if d_name:
+                    dish_sales[d_name] = dish_sales.get(d_name, 0.0) - d_qty
+                    
+            # 扣減食材消耗量（因為作廢代表沒賣出，如果是退回庫存，則當期消耗量需扣回）
+            for m in payload.get("materials", []):
+                m_name = m.get("mat_name")
+                m_qty = float(m.get("qty", 0.0))
+                if m_name:
+                    material_usage[m_name] = material_usage.get(m_name, 0.0) - m_qty
+            continue
+        except:
+            pass
+
+    # 向下相容：正則表達式解析舊款作廢格式
+    revenue_match = re.search(r"總金額 \$(\d+\.?\d*)", txt)
+    if revenue_match:
+        total_revenue -= float(revenue_match.group(1))
+        
+    cost_match = re.search(r"精準食材成本 \$([\d\.]+)", txt)
+    if cost_match:
+        total_food_cost -= float(cost_match.group(1))
+        
+    dish_items = re.findall(r"【(.+?) x ([\d\.]+)份】", txt)
+    for dish_name, qty_val in dish_items:
+        dish_sales[dish_name] = dish_sales.get(dish_name, 0.0) - float(qty_val)
+        
+    if "消耗食材:" in txt:
+        mats_part = txt.split("消耗食材:")[1].strip()
+        mats_list = mats_part.split(", ")
+        for m_str in mats_list:
+            match = re.match(r"([^\s_]+)_([RS]\d+)\(([\d\.]+)([^\)]+)\)", m_str)
+            if match:
+                m_name = match.group(1)
+                m_qty = float(match.group(3))
+                material_usage[m_name] = material_usage.get(m_name, 0.0) - m_qty
+
+# 清理排行與消耗量字典中因扣減產生的 0 或負數，維持圖表美觀
+dish_sales = {k: v for k, v in dish_sales.items() if v > 0}
+material_usage = {k: v for k, v in material_usage.items() if v > 0}
+
+
+# --- 以下維持原有費用與面板呈現功能，無任何刪減 ---
 c_expense_records = []
 
 for _, row in df_expenses_raw.iterrows():
