@@ -220,11 +220,15 @@ with pos_tabs[0]:
                             insufficient_msg += f" ❌ 庫存告急：物料【{status_row[1] if status_row else c_id}】批量點單共需要 {total_need:.1f}，目前全庫僅剩 {current_stock:.1f}！\n"
                             
                     if disabled_item_detected:
+                        st.session_state.show_checkout_confirm = False  # 改善功能 2：強迫關閉確認視窗
                         st.error(disabled_msg)
                         conn.close()
+                        st.button("🔄 重新載入畫面以調整數量", on_click=st.rerun) # 協助刷新介面
                     elif insufficient_flag:
+                        st.session_state.show_checkout_confirm = False  # 改善功能 2：強迫關閉確認視窗
                         st.error(insufficient_msg)
                         conn.close()
+                        st.button("🔄 重新載入畫面以調整數量", on_click=st.rerun) # 協助刷新介面
                     else:
                         try:
                             actual_total_cost = 0.0
@@ -496,17 +500,27 @@ with pos_tabs[1]:
                             
                             cursor.execute("UPDATE history SET details = ? WHERE id = ?", (updated_full_log, target_hist_id))
                             
-                            # 改善功能 1：核心健康同步優化！動態計算受影響原物料的最新即時移動平均成本並更新 products 表
+                            # 改善功能 1：拒絕直接偷抓 products 表的最新成本。改從 parsed_mats 歷史 JSON 快照中尋找該單成立當下的歷史成本。
                             for m_id in total_mats_needed_new.keys():
+                                # 先找出當下這筆訂單快照中，此物料紀錄的歷史成本
+                                matched_hist_mat = next((m for m in parsed_mats if m["mat_id"] == m_id), None)
+                                hist_cost_fallback = 0.0
+                                if matched_hist_mat and "deducted_batches" in matched_hist_mat and matched_hist_mat["deducted_batches"]:
+                                    # 如果有批次明細，取其第一個批次的歷史成本作為代表
+                                    hist_cost_fallback = float(matched_hist_mat["deducted_batches"][0].get("cost", 0.0))
+                                else:
+                                    # 若無批次明細，則可能當時是由舊邏輯生成，抓取系統原先備用的對應值
+                                    hist_cost_fallback = 0.0
+
                                 cursor.execute('''
                                     SELECT 
                                       CASE 
                                         WHEN COALESCE(SUM(CASE WHEN qty > 0 THEN qty ELSE 0 END), 0) > 0 
                                         THEN (SUM(CASE WHEN qty > 0 THEN qty * cost ELSE 0 END) / SUM(CASE WHEN qty > 0 THEN qty ELSE 0 END))
-                                        ELSE (SELECT cost FROM products WHERE prod_id = ?)
+                                        ELSE ?
                                       END as moving_avg
                                     FROM stock_batches WHERE prod_id = ?
-                                ''', (m_id, m_id))
+                                ''', (hist_cost_fallback, m_id)) # 改善功能 1：改用歷史成本替代原來的 (SELECT cost FROM products ...)
                                 calculated_avg_cost = cursor.fetchone()[0] or 0.0
                                 cursor.execute("UPDATE products SET cost = ? WHERE prod_id = ?", (float(calculated_avg_cost), m_id))
                             
