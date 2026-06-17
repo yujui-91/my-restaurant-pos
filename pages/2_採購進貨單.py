@@ -151,6 +151,10 @@ with po_tabs[0]:
                                   (prod_id, qty, expiry_date, inbound_date, vendor_name, vendor_phone, cost, original_qty) 
                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', 
                                (default_id, total_use_units, exp_str, today_str, v_name, v_phone, calculated_single_cost, total_use_units))
+                
+                # 獲取剛插入的實體批次 ID
+                new_batch_id = cursor.lastrowid
+                
                 conn.commit()
                 conn.close()
                 
@@ -160,7 +164,8 @@ with po_tabs[0]:
                     formatted_target_month = f"{current_year}-{month_digits:02d}"
                     
                     log_action = "帳單支出登記"
-                    log_history(current_user, log_action, f"新單登記：{chosen_name}，費用月份：{selected_month_str}，總金額：${total_invoice_amount}。 目標歸帳月份: {formatted_target_month}")
+                    # 功能改善：加入實體 (賬單批次: X)
+                    log_history(current_user, log_action, f"新單登記：{chosen_name}，費用月份：{selected_month_str}，總金額：${total_invoice_amount}。 目標歸帳月份: {formatted_target_month} (賬單批次: {new_batch_id})")
                     trigger_toast(f"帳單費用登記完成！【{chosen_name} ({selected_month_str}費用)】總金額：${total_invoice_amount}", icon="📥")
                 else:
                     log_action = "採購進貨"
@@ -169,7 +174,8 @@ with po_tabs[0]:
                     is_auto_enabled = not existing_items_df.empty and chosen_name in existing_items_df['prod_name'].values and existing_items_df[existing_items_df['prod_name'] == chosen_name].iloc[0]['status'] == 0
                     auto_enabled_log = " (偵測到下架食材，系統已在進貨時自動將其重新啟用上架！)" if is_auto_enabled else ""
                     
-                    log_history(current_user, log_action, f"新單登記：{chosen_name}，數量：{po_qty}{p_unit}，總金額：${total_invoice_amount}{vendor_info}{auto_enabled_log}")
+                    # 功能改善：加入實體 (賬單批次: X)
+                    log_history(current_user, log_action, f"新單登記：{chosen_name}，數量：{po_qty}{p_unit}，總金額：${total_invoice_amount}{vendor_info}{auto_enabled_log} (賬單批次: {new_batch_id})")
                     trigger_toast(f"採購登記完成！【{chosen_name}】庫存已增加{auto_enabled_log}", icon="📥")
                 
                 st.rerun()
@@ -353,13 +359,15 @@ with po_tabs[1]:
                     current_year = datetime.now().year
                     formatted_edit_month = f"{current_year}-{edit_month_digits:02d}"
                     
-                    audit_trail = f"歷史帳單修正【{matched_batch_row['商品名稱']}】:\n"
+                    # 功能改善：加入實體 (賬單批次: X)
+                    audit_trail = f"歷史帳單修正【{matched_batch_row['商品名稱']}】 (賬單批次: {target_batch_id}):\n"
                     audit_trail += f" * 費用月份：覆蓋調整為 {selected_month_str}\n"
                     if float(matched_batch_row['推估總金額']) != new_total_amount:
                         audit_trail += f" * 帳單金額：自 ${matched_batch_row['推估總金額']:.0f} 修改為 ${new_total_amount:.0f}\n"
                     audit_trail += f" 目標歸帳月份: {formatted_edit_month}"
                 else:
-                    audit_trail = f"採購歷史修正【批次 {target_batch_id} - {matched_batch_row['商品名稱']}】:\n"
+                    # 功能改善：加入實體 (賬單批次: X)
+                    audit_trail = f"採購歷史修正【批次 {target_batch_id} - {matched_batch_row['商品名稱']}】 (賬單批次: {target_batch_id}):\n"
                     if float(matched_batch_row['進貨大包裝數']) != new_po_qty:
                         audit_trail += f" *進貨數量：自 {matched_batch_row['進貨大包裝數']} 修改為 {new_po_qty}\n"
                     if float(matched_batch_row['推估總金額']) != new_total_amount:

@@ -56,7 +56,7 @@ def init_db():
                         qty_needed REAL,
                         PRIMARY KEY (parent_id, child_id))''')
     
-    # 4. 歷史紀錄表 (原有欄位完全不變，維持對既有資料的向下相容)
+    # 4. 歷史紀錄表
     cursor.execute('''CREATE TABLE IF NOT EXISTS history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT, 
                         timestamp TEXT, 
@@ -71,7 +71,6 @@ def init_db():
         exp_1 = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
         exp_2 = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
         
-        # 核心優化：明確指定欄位名稱插入，徹底解決 OperationalError 欄位數量不符問題
         cursor.executemany("""
             INSERT INTO products (
                 prod_id, prod_name, cost, price, safety_stock, 
@@ -125,16 +124,18 @@ def deduct_stock_fifo(prod_id, qty_to_deduct, cursor):
     batches = cursor.fetchall()
     total_available = sum([b[1] for b in batches])
     if total_available < qty_to_deduct:
-        return False, 0.0
+        return False, 0.0, []
     
     remains = qty_to_deduct
     total_deducted_cost = 0.0
+    deducted_batches = []
     
     for batch_id, batch_qty, batch_cost in batches:
         if remains <= 0: break
         
         deduct_qty = min(remains, batch_qty)
         total_deducted_cost += deduct_qty * batch_cost
+        deducted_batches.append({"batch_id": batch_id, "qty": deduct_qty, "cost": batch_cost})
         
         if batch_qty >= remains:
             cursor.execute("UPDATE stock_batches SET qty = qty - ? WHERE batch_id = ?", (remains, batch_id))
@@ -143,7 +144,7 @@ def deduct_stock_fifo(prod_id, qty_to_deduct, cursor):
             cursor.execute("UPDATE stock_batches SET qty = 0 WHERE batch_id = ?", (batch_id,))
             remains -= batch_qty
             
-    return True, total_deducted_cost
+    return True, total_deducted_cost, deducted_batches
 
 def get_next_raw_id():
     conn = sqlite3.connect('inventory.db')
