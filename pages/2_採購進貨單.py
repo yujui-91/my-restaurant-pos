@@ -84,17 +84,14 @@ with po_tabs[0]:
         
         if prefix == 'C':
             st.markdown("##### 💰 2. 請輸入本次帳單金額與對應歸帳年月（防止跨年財報錯誤）：")
-            col_bill1, col_bill2, col_bill3 = st.columns([2, 1, 1])
+            col_bill1, col_bill2 = st.columns([2, 2])
             with col_bill1:
                 total_invoice_amount = st.number_input("本次帳單【繳費總金額】($)", min_value=0.0, value=0.0, step=10.0)
             with col_bill2:
-                this_year = datetime.now().year
-                bill_year_options = [this_year, this_year - 1]
-                selected_year = st.selectbox("請選擇費用【所屬年份】", bill_year_options, index=0)
-            with col_bill3:
-                bill_months_options = [f"{i}月" for i in range(1, 13)]
-                current_month_idx = max(0, min(datetime.now().month - 1, 11))
-                selected_month_str = st.selectbox("請選擇費用【所屬月份】", bill_months_options, index=current_month_idx)
+                # 內建年月智慧選取，未來不需人工改扣碼
+                bill_date_input = st.date_input("請選取費用歸帳月份", value=datetime.now().date(), key="new_bill_date_picker")
+                selected_year = bill_date_input.year
+                selected_month_str = f"{bill_date_input.month}月"
                 
             p_unit, u_unit, c_factor, po_qty, s_stock = "次", "次", 1.0, 1.0, 0.0
             v_name, v_phone, exp_str = "公共事業/其他", "", ""
@@ -141,7 +138,6 @@ with po_tabs[0]:
                 conn = sqlite3.connect('inventory.db')
                 cursor = conn.cursor()
                 
-                # 【優化點 1】：採用 ON CONFLICT DO UPDATE 語法，防止歷史定價 price 欄位被粗暴覆蓋
                 cursor.execute('''INSERT INTO products 
                                   (prod_id, prod_name, cost, price, safety_stock, purchase_unit, use_unit, conversion_factor, status)
                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
@@ -161,8 +157,6 @@ with po_tabs[0]:
                 
                 new_batch_id = cursor.lastrowid
                 
-                # 【核心優化點 2】：即時加權移動平均計算 (防止陣發性財務數據錯誤)
-                # 送出登記時，直接在後台計算包含當前新進貨批次在內的所有在線有效庫存 (qty > 0) 真正的加權平均單位成本
                 cursor.execute('''
                     SELECT 
                         CASE 
@@ -175,8 +169,6 @@ with po_tabs[0]:
                 ''', (calculated_single_cost, final_id))
                 
                 real_moving_avg_cost = cursor.fetchone()[0]
-                
-                # 將真正實時算出的加權移動平均單位成本同步寫入主表
                 cursor.execute("UPDATE products SET cost = ? WHERE prod_id = ?", (float(real_moving_avg_cost), final_id))
                 
                 conn.commit()
@@ -297,7 +289,7 @@ with po_tabs[1]:
         
         if is_bill:
             st.markdown("##### 💰 填寫更正後的帳單金額與所屬年月（皆為必填）：")
-            col_bill_e1, col_bill_e2, col_bill_e3 = st.columns([2, 1, 1])
+            col_bill_e1, col_bill_e2 = st.columns([2, 2])
             
             with col_bill_e1:
                 new_total_amount = st.number_input(
@@ -309,11 +301,7 @@ with po_tabs[1]:
                 )
             
             # 從歷史稽核日誌反查先前設定的年份與月份作為預設回退依據
-            fallback_year = datetime.now().year
-            fallback_month_str = str(datetime.now().month) + "月"
-            current_year_val = fallback_year
-            current_month_str = fallback_month_str
-            
+            old_assigned_month_str = ""
             conn = sqlite3.connect('inventory.db')
             cursor = conn.cursor()
             cursor.execute("SELECT details FROM history WHERE details LIKE ? ORDER BY id DESC LIMIT 1", (f"%目標歸帳月份:%(賬單批次: {target_batch_id})%",))
@@ -323,39 +311,33 @@ with po_tabs[1]:
                 hist_row = cursor.fetchone()
             conn.close()
             
+            # 建立預設回退的 Date 物件
+            default_edit_date = datetime.now().date()
             if hist_row:
                 import re
                 target_month_match = re.search(r"目標歸帳月份:\s*(\d{4})-(\d{2})", hist_row[0])
                 if target_month_match:
-                    current_year_val = int(target_month_match.group(1))
-                    current_month_str = str(int(target_month_match.group(2))) + "月"
+                    old_assigned_month_str = target_month_match.group(1) + "-" + target_month_match.group(2)
+                    try:
+                        default_edit_date = datetime.strptime(old_assigned_month_str + "-01", "%Y-%m-%d").date()
+                    except:
+                        pass
                 else:
-                    month_match = re.search(r"費用月份：(?:(\d+)年)?(\d+月)", hist_row[0])
+                    month_match = re.search(r"費用月份：(?:(\d+)年)?(\d+)月", hist_row[0])
                     if month_match:
-                        if month_match.group(1):
-                            current_year_val = int(month_match.group(1))
-                        current_month_str = month_match.group(2)
+                        y_val = int(month_match.group(1)) if month_match.group(1) else datetime.now().year
+                        m_val = int(month_match.group(2))
+                        old_assigned_month_str = f"{y_val}-{m_val:02d}"
+                        try:
+                            default_edit_date = datetime.strptime(old_assigned_month_str + "-01", "%Y-%m-%d").date()
+                        except:
+                            pass
             
-            bill_year_options = [fallback_year, fallback_year - 1]
-            if current_year_val in bill_year_options:
-                default_year_idx = bill_year_options.index(current_year_val)
-            else:
-                default_year_idx = 0
-                
-            bill_months_options = [f"{i}月" for i in range(1, 13)]
-            if current_month_str and current_month_str in bill_months_options:
-                default_month_idx = bill_months_options.index(current_month_str)
-            else:
-                cleaned_m = current_month_str.lstrip('0') if current_month_str else ""
-                if cleaned_m in bill_months_options:
-                    default_month_idx = bill_months_options.index(cleaned_m)
-                else:
-                    default_month_idx = bill_months_options.index(fallback_month_str)
-                    
             with col_bill_e2:
-                selected_year = st.selectbox("請選擇費用【所屬年份】", bill_year_options, index=default_year_idx, key="edit_bill_year_select")
-            with col_bill_e3:
-                selected_month_str = st.selectbox("請選擇費用【所屬月份】", bill_months_options, index=default_month_idx, key="edit_bill_month_select")
+                # 智慧選取年月組件
+                edit_bill_date_input = st.date_input("請選取費用【所屬年月】", value=default_edit_date, key="edit_bill_date_picker")
+                selected_year = edit_bill_date_input.year
+                selected_month_str = f"{edit_bill_date_input.month}月"
                 
             new_p_unit, new_u_unit, new_c_factor, new_po_qty, new_safety = "次", "次", 1.0, 1.0, 0.0
             new_v_name, new_v_phone, new_exp_str = "公共事業/其他", "", ""
@@ -404,7 +386,13 @@ with po_tabs[1]:
                     formatted_edit_month = f"{selected_year}-{edit_month_digits:02d}"
                     
                     audit_trail = f"歷史帳單修正【{matched_batch_row['商品名稱']}】 (賬單批次: {target_batch_id}):\n"
-                    audit_trail += f" * 費用月份：覆蓋調整為 {selected_year}年{selected_month_str}\n"
+                    
+                    # 歷史月份修正前後對比
+                    if old_assigned_month_str and old_assigned_month_str != formatted_edit_month:
+                        audit_trail += f" * 費用月份：從原本 {old_assigned_month_str} 改成 {formatted_edit_month}\n"
+                    else:
+                        audit_trail += f" * 費用月份：覆蓋調整為 {selected_year}年{selected_month_str}\n"
+                        
                     if float(matched_batch_row['推估總金額']) != new_total_amount:
                         audit_trail += f" * 帳單金額：自 ${matched_batch_row['推估總金額']:.0f} 修改為 ${new_total_amount:.0f}\n"
                     audit_trail += f" 目標歸帳月份: {formatted_edit_month}"
@@ -414,6 +402,14 @@ with po_tabs[1]:
                         audit_trail += f" * 進貨數量：自 {matched_batch_row['進貨大包裝數']} 修改為 {new_po_qty}\n"
                     if float(matched_batch_row['推估總金額']) != new_total_amount:
                         audit_trail += f" * 採購總額：自 ${matched_batch_row['推估總金額']:.0f} 修改為 ${new_total_amount:.0f}\n"
+                    
+                    # 全面捕捉原物料規格變更軌跡
+                    if str(matched_batch_row['進貨單位']) != new_p_unit:
+                        audit_trail += f" * 大包裝進貨單位：自【{matched_batch_row['進貨單位']}】變更為【{new_p_unit}】\n"
+                    if str(matched_batch_row['使用單位']) != new_u_unit:
+                        audit_trail += f" * 廚房基本使用小單位：自【{matched_batch_row['使用單位']}】變更為【{new_u_unit}】\n"
+                    if float(matched_batch_row['轉換率']) != new_c_factor:
+                        audit_trail += f" * 轉換率：自 {matched_batch_row['轉換率']} 變更為 {new_c_factor}\n"
 
                 update_purchase_batch(target_batch_id, matched_batch_row['商品編號'], new_total_use_units, new_calculated_cost, new_p_unit, new_u_unit, new_c_factor, new_safety, new_v_name, new_v_phone, new_exp_str)
                 log_history(current_user, "採購單更正", audit_trail)

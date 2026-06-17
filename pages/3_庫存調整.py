@@ -63,6 +63,7 @@ if not df_unique_items.empty:
         
         with st.form("inventory_adjustment_form"):
             adj_type = st.radio("動作選擇", ["過期損耗/報廢 (扣減庫存)", "手動補正/盤盈回補 (增加庫存)"], horizontal=True)
+            # 🎯 依據您的要求，此處移除 min_value 限制，允許輸入負數
             adj_qty = st.number_input(f"請輸入異動變更的數量 ({unit_label})", value=1.0, step=1.0)
             
             st.markdown("###### 📅 請指定此筆損耗歸屬之完整年份與月份（確保跨年財報精確）：")
@@ -80,6 +81,7 @@ if not df_unique_items.empty:
             submit_adj = st.form_submit_button("🔧 確認執行庫存異動")
             
             if submit_adj:
+                # 🛑 核心防呆：只要輸入小於或等於 0 的數字，立刻拋出錯誤並全面阻斷後續流程
                 if adj_qty <= 0:
                     st.error(f"❌ 錯誤：異動變更的數量必須大於 0！您目前的輸入數值為 {adj_qty}")
                 else:
