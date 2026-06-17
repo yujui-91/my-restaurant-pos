@@ -237,7 +237,6 @@ with pos_tabs[0]:
                                 p_name = p_info[0] if p_info else c_id
                                 p_unit = p_info[1] if p_info else ""
                                 
-                                # 核心優化 1：接收精確扣除的批次清單
                                 success, deducted_cost_val, batch_list = deduct_stock_fifo(c_id, total_need, cursor)
                                 if not success:
                                     raise Exception(f"物料庫存即時 FIFO 扣減失敗：【{p_name}】需求量 {total_need:.1f}")
@@ -249,7 +248,7 @@ with pos_tabs[0]:
                                     "mat_name": p_name,
                                     "qty": total_need,
                                     "unit": p_unit,
-                                    "deducted_batches": batch_list  # 功能改善 1：精確將包含 batch_id 與扣量的清單寫入結構化 JSON
+                                    "deducted_batches": batch_list
                                 })
                                 
                             conn.commit()
@@ -371,7 +370,6 @@ with pos_tabs[1]:
                 conn = sqlite3.connect('inventory.db')
                 cursor = conn.cursor()
                 try:
-                    # 核心優化 2：功能改善 2 - 優先依據 JSON 中的 deducted_batches 進行精確批次庫存原路退回
                     for mat in parsed_mats:
                         mat_id = mat["mat_id"]
                         refund_qty = float(mat["qty"])
@@ -384,7 +382,6 @@ with pos_tabs[1]:
                                     (float(b_info["qty"]), float(b_info["qty"]), b_info["batch_id"])
                                 )
                         else:
-                            # 向下相容備援機制
                             cursor.execute("SELECT batch_id FROM stock_batches WHERE prod_id = ? ORDER BY inbound_date DESC, batch_id DESC LIMIT 1", (mat_id,))
                             b_row = cursor.fetchone()
                             if b_row:
@@ -424,7 +421,6 @@ with pos_tabs[1]:
                     conn = sqlite3.connect('inventory.db')
                     cursor = conn.cursor()
                     try:
-                        # 功能改善 2：數量微調時也優先原路精確退回原本整單扣除的所有批次量，再重新進行 FIFO 全額核算
                         for mat in parsed_mats:
                             if mat.get("deducted_batches", []):
                                 for b_info in mat["deducted_batches"]:
@@ -453,7 +449,6 @@ with pos_tabs[1]:
                                 for child_id, qty_needed in bom_rows:
                                     total_mats_needed_new[child_id] = total_mats_needed_new.get(child_id, 0.0) + (qty_needed * new_qty_val)
 
-                        # 對全新的總量需求重新執行精確 FIFO 扣減
                         final_new_cost = 0.0
                         insufficient_flag = False
                         insufficient_msg = ""
@@ -498,122 +493,268 @@ with pos_tabs[1]:
 
 
 # ==========================================
-# 分頁 3：餐點配方微調與臨時餐點創立
+# 分頁 3：餐點配方微調與臨時餐點創立 (已移除手動單位，改為自動追隨)
 # ==========================================
 with pos_tabs[2]:
     st.markdown("##### 🆕 1. 現場食材加料 / 臨時自訂新餐點創立區")
     
-    with st.expander("🛠️ 展開自訂臨時餐點與即時配方調配面板", expanded=True):
-        col_new_dish1, col_new_dish2 = st.columns(2)
-        with col_new_dish1:
-            pos_custom_name = st.text_input("手動輸入臨時/新創餐點名稱", value="", key="custom_dish_name_input").strip()
-        with col_new_dish2:
-            pos_custom_price = st.number_input("設定販售價格 (必須大於 0 的整數)", min_value=0, value=0, step=1, key="custom_dish_price_input")
-            
-        st.markdown("###### ➕ 請調配此項客製餐點的專屬物料與用量：")
-        col_cus_mat1, col_cus_mat2, col_cus_mat3 = st.columns([2, 1, 1])
-        with col_cus_mat1:
-            dish_select_list = ["--- 請選擇食材 ---"] + all_raw_df['prod_name'].tolist()
-            cus_mat_name = st.selectbox("選擇要加入的食材/用品名稱", dish_select_list, key="cus_mat_selector")
-        with col_cus_mat2:
-            cus_unit_choice = st.selectbox("選擇使用的單位", ["公克 (g)", "公斤 (kg)", "台斤", "毫升 (ml)", "公升 (L)", "個/顆/份"], index=0, key="cus_unit_selector")
-        with col_cus_mat3:
-            cus_mat_qty = st.number_input("單份餐點用量", min_value=0.0, value=0.0, step=1.0, key="cus_qty_selector")
-            
-        if 'custom_recipe_pool' not in st.session_state:
-            st.session_state.custom_recipe_pool = []
-            
-        if st.button("➕ 將此原物料揉入暫存配方", key="add_cus_recipe_btn"):
-            if cus_mat_name == "--- 請選擇食材 ---" or cus_mat_qty <= 0:
-                st.error("請選擇有效原物料並輸入大於 0 的用量！")
-            else:
-                mat_info = all_raw_df[all_raw_df['prod_name'] == cus_mat_name].iloc[0]
-                base_qty = cus_mat_qty
+    creation_mode = st.radio("🛠️ 請選擇餐點建立模式：", ["A模式：單份獨立餐點建立（原有功能）", "B模式：整鍋物料拆分建立（大/小碗成本攤算）"], horizontal=True)
+
+    if creation_mode == "A模式：單份獨立餐點建立（原有功能）":
+        with st.expander("🛠️ 展開自訂臨時餐點與即時配方調配面板 (A模式)", expanded=True):
+            col_new_dish1, col_new_dish2 = st.columns(2)
+            with col_new_dish1:
+                pos_custom_name = st.text_input("手動輸入臨時/新創餐點名稱", value="", key="custom_dish_name_input").strip()
+            with col_new_dish2:
+                pos_custom_price = st.number_input("設定販售價格 (必須大於 0 的整數)", min_value=0, value=0, step=1, key="custom_dish_price_input")
                 
-                unit_clean = cus_unit_choice.strip()
-                if "公斤" in unit_clean or "kg" in unit_clean: base_qty *= 1000.0
-                elif "台斤" in unit_clean: base_qty *= 600.0
-                elif "公升" in unit_clean or "L" in unit_clean: base_qty *= 1000.0
+            st.markdown("###### ➕ 請調配此項客製餐點的專屬物料與用量：")
+            col_cus_mat1, col_cus_mat2, col_cus_mat3 = st.columns([2, 1, 1])
+            with col_cus_mat1:
+                dish_select_list = ["--- 請選擇食材 ---"] + all_raw_df['prod_name'].tolist()
+                cus_mat_name = st.selectbox("選擇要加入的食材/用品名稱", dish_select_list, key="cus_mat_selector")
+            
+            # 【核心功能改善：移除選擇單位欄位，自動顯示並鎖定庫存預設小單位】
+            db_unit_a = ""
+            if cus_mat_name != "--- 請選擇食材 ---":
+                matched_row_a = all_raw_df[all_raw_df['prod_name'] == cus_mat_name].iloc[0]
+                db_unit_a = matched_row_a['use_unit'].strip()
                 
-                final_conv = base_qty
-                sys_u = mat_info['use_unit'].strip().lower()
-                if sys_u in ['kg', '公斤']: final_conv /= 1000.0
-                elif sys_u in ['台斤']: final_conv /= 600.0
-                elif sys_u in ['l', '公升']: final_conv /= 1000.0
+            with col_cus_mat2:
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown(f"**使用單位：** `{db_unit_a if db_unit_a else '未選擇'}`")
                 
-                ex_idx = next((i for i, item in enumerate(st.session_state.custom_recipe_pool) if item['食材編號'] == mat_info['prod_id']), None)
-                new_pool_dict = {"食材名稱": mat_info['prod_name'], "食材編號": mat_info['prod_id'], "單位用量": final_conv, "單位": mat_info['use_unit']}
-                if ex_idx is not None:
-                    st.session_state.custom_recipe_pool[ex_idx] = new_pool_dict
+            with col_cus_mat3:
+                cus_mat_qty = st.number_input("單份餐點用量", min_value=0.0, value=0.0, step=1.0, key="cus_qty_selector")
+                
+            if 'custom_recipe_pool' not in st.session_state:
+                st.session_state.custom_recipe_pool = []
+                
+            if st.button("➕ 將此原物料揉入暫存配方", key="add_cus_recipe_btn"):
+                if cus_mat_name == "--- 請選擇食材 ---" or cus_mat_qty <= 0:
+                    st.error("請選擇有效原物料並輸入大於 0 的用量！")
                 else:
-                    st.session_state.custom_recipe_pool.append(new_pool_dict)
-                st.rerun()
-                
-        if st.session_state.custom_recipe_pool:
-            df_pool = pd.DataFrame(st.session_state.custom_recipe_pool)
-            df_pool['移除'] = False
-            edited_pool = st.data_editor(
-                df_pool,
-                column_config={"食材編號": st.column_config.TextColumn("編號", disabled=True), "食材名稱": st.column_config.TextColumn("名稱", disabled=True), "單位用量": st.column_config.NumberColumn("用量", format="%.4f"), "移除": st.column_config.CheckboxColumn("移除")},
-                disabled=["食材編號", "食材名稱", "單位"],
-                key="pool_editor",
-                use_container_width=True
-            )
-            
-            pool_changed = False
-            new_pool = []
-            for idx, r in edited_pool.iterrows():
-                if r['移除']:
-                    pool_changed = True
-                    continue
-                if r['單位用量'] != st.session_state.custom_recipe_pool[idx]['單位用量']:
-                    pool_changed = True
-                new_pool.append({"食材名稱": r['食材名稱'], "食材編號": r['食材編號'], "單位用量": float(r['單位用量']), "單位": r['單位']})
-            if pool_changed:
-                st.session_state.custom_recipe_pool = new_pool
-                st.rerun()
-            
-            custom_dish_calc_cost = 0.0
-            for p_item in st.session_state.custom_recipe_pool:
-                matched_raw = all_raw_df[all_raw_df['prod_id'] == p_item['食材編號']]
-                r_cost = float(matched_raw.iloc[0]['cost']) if not matched_raw.empty else 0.0
-                custom_dish_calc_cost += p_item['單位用量'] * r_cost
-                
-            custom_profit = float(pos_custom_price) - custom_dish_calc_cost
-            custom_margin = (custom_profit / pos_custom_price * 100) if pos_custom_price > 0 else 0.0
-            
-            st.markdown(f"""
-            > 💡 **🆕 新創餐點定價與配方成本動態預估試算：**
-            > * 餐點暫定售價： **${pos_custom_price} 元**
-            > * 依目前庫存推算【**單份標準原物料成本**】： **${custom_dish_calc_cost:,.2f} 元**
-            > * 預估【**單份毛利**】： **${custom_profit:,.2f} 元** ｜ 預估毛利率: **{custom_margin:.1f}%**
-            """)
-                
-            if st.button("💾 確定打包此新創餐點並寫入正式菜單", type="primary"):
-                if not pos_custom_name:
-                    st.error("❌ 錯誤：請輸入臨時/新創餐點名稱！")
-                elif pos_custom_price <= 0:
-                    st.error("❌ 錯誤：販售價格必須為大於 0 的整數！")
-                # 核心優化 3：功能改善 3 - 防呆阻斷無配方發布Bug
-                elif not st.session_state.custom_recipe_pool:
-                    st.error("❌ 錯誤變更：新創餐點必須至少包含一項原物料配方，不可做「無本生意」！")
-                else:
-                    conn = sqlite3.connect('inventory.db')
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT prod_id FROM products WHERE prod_name = ? AND status = 1", (pos_custom_name,))
-                    if cursor.fetchone():
-                        st.error(f"❌ 錯誤：【{pos_custom_name}】已存在於正式菜單中，請直接至下方區塊修正參數，切勿重複建立！")
-                        conn.close()
+                    mat_info = all_raw_df[all_raw_df['prod_name'] == cus_mat_name].iloc[0]
+                    # 因為完全與進貨時定義的「廚房使用小單位」同步，不需再透過下拉選單做多餘的倍數轉換
+                    final_conv = cus_mat_qty 
+                    
+                    ex_idx = next((i for i, item in enumerate(st.session_state.custom_recipe_pool) if item['食材編號'] == mat_info['prod_id']), None)
+                    new_pool_dict = {"食材名稱": mat_info['prod_name'], "食材編號": mat_info['prod_id'], "單位用量": final_conv, "單位": mat_info['use_unit']}
+                    if ex_idx is not None:
+                        st.session_state.custom_recipe_pool[ex_idx] = new_pool_dict
                     else:
-                        new_d_id = get_next_dish_id()
-                        cursor.execute("INSERT INTO products VALUES (?, ?, ?, ?, 0.0, '份', '份', 1.0, 1)", (new_d_id, pos_custom_name, custom_dish_calc_cost, float(pos_custom_price)))
-                        for item in st.session_state.custom_recipe_pool:
-                            cursor.execute("INSERT INTO bom VALUES (?, ?, ?)", (new_d_id, item['食材編號'], item['單位用量']))
+                        st.session_state.custom_recipe_pool.append(new_pool_dict)
+                    st.rerun()
+                    
+            if st.session_state.custom_recipe_pool:
+                df_pool = pd.DataFrame(st.session_state.custom_recipe_pool)
+                df_pool['移除'] = False
+                edited_pool = st.data_editor(
+                    df_pool,
+                    column_config={"食材編號": st.column_config.TextColumn("編號", disabled=True), "食材名稱": st.column_config.TextColumn("名稱", disabled=True), "單位用量": st.column_config.NumberColumn("用量", format="%.4f"), "移除": st.column_config.CheckboxColumn("移除")},
+                    disabled=["食材編號", "食材名稱", "單位"],
+                    key="pool_editor",
+                    use_container_width=True
+                )
+                
+                pool_changed = False
+                new_pool = []
+                for idx, r in edited_pool.iterrows():
+                    if r['移除']:
+                        pool_changed = True
+                        continue
+                    if r['單位用量'] != st.session_state.custom_recipe_pool[idx]['單位用量']:
+                        pool_changed = True
+                    new_pool.append({"食材名稱": r['食材名稱'], "食材編號": r['食材編號'], "單位用量": float(r['單位用量']), "單位": r['單位']})
+                if pool_changed:
+                    st.session_state.custom_recipe_pool = new_pool
+                    st.rerun()
+                
+                custom_dish_calc_cost = 0.0
+                for p_item in st.session_state.custom_recipe_pool:
+                    matched_raw = all_raw_df[all_raw_df['prod_id'] == p_item['食材編號']]
+                    r_cost = float(matched_raw.iloc[0]['cost']) if not matched_raw.empty else 0.0
+                    custom_dish_calc_cost += p_item['單位用量'] * r_cost
+                    
+                custom_profit = float(pos_custom_price) - custom_dish_calc_cost
+                custom_margin = (custom_profit / pos_custom_price * 100) if pos_custom_price > 0 else 0.0
+                
+                st.markdown(f"""
+                > 💡 **🆕 新創餐點定價與配方成本動態預估試算：**
+                > * 餐點暫定售價： **${pos_custom_price} 元**
+                > * 依目前庫存推算【**單份標準原物料成本**】： **${custom_dish_calc_cost:,.2f} 元**
+                > * 預估【**單份毛利**】： **${custom_profit:,.2f} 元** ｜ 預估毛利率: **{custom_margin:.1f}%**
+                """)
+                    
+                if st.button("💾 確定打包此新創餐點並寫入正式菜單", type="primary"):
+                    if not pos_custom_name:
+                        st.error("❌ 錯誤：請輸入臨時/新創餐點名稱！")
+                    elif pos_custom_price <= 0:
+                        st.error("❌ 錯誤：販售價格必須為大於 0 的整數！")
+                    elif not st.session_state.custom_recipe_pool:
+                        st.error("❌ 錯誤變更：新創餐點必須至少包含一項原物料配方，不可做「無本生意」！")
+                    else:
+                        conn = sqlite3.connect('inventory.db')
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT prod_id FROM products WHERE prod_name = ? AND status = 1", (pos_custom_name,))
+                        if cursor.fetchone():
+                            st.error(f"❌ 錯誤：【{pos_custom_name}】已存在於正式菜單中，請直接至下方區塊修正參數，切勿重複建立！")
+                            conn.close()
+                        else:
+                            new_d_id = get_next_dish_id()
+                            cursor.execute("INSERT INTO products VALUES (?, ?, ?, ?, 0.0, '份', '份', 1.0, 1)", (new_d_id, pos_custom_name, custom_dish_calc_cost, float(pos_custom_price)))
+                            for item in st.session_state.custom_recipe_pool:
+                                cursor.execute("INSERT INTO bom VALUES (?, ?, ?)", (new_d_id, item['食材編號'], item['單位用量']))
+                            conn.commit()
+                            conn.close()
+                            log_history(current_user, f"新創自訂餐點-{pos_custom_name}", f"老闆創立了全新的新菜色：{pos_custom_name}({new_d_id})，定價 ${pos_custom_price}，設定基本單位配方成本 ${custom_dish_calc_cost:.2f}。")
+                            trigger_toast(f"成功建立餐點 【{pos_custom_name}】 並加入菜單選單！", icon="🚀")
+                            st.session_state.custom_recipe_pool = []
+                            st.rerun()
+
+    elif creation_mode == "B模式：整鍋物料拆分建立（大/小碗成本攤算）":
+        with st.expander("🛠️ 展開自訂臨時餐點與即時配方調配面板 (B模式)", expanded=True):
+            col_b_name, col_b_price1, col_b_price2 = st.columns([2, 1, 1])
+            with col_b_name:
+                pot_base_name = st.text_input("輸入此鍋餐點基底名稱 (如: 招牌麻辣火鍋)", value="", key="pot_base_name_input").strip()
+            with col_b_price1:
+                pot_large_price = st.number_input("設定【大碗】販售價格", min_value=0, value=0, step=1, key="pot_large_price_input")
+            with col_b_price2:
+                pot_small_price = st.number_input("設定【小碗】販售價格", min_value=0, value=0, step=1, key="pot_small_price_input")
+
+            st.markdown("###### 📊 填寫此整鍋預計可拆分的銷售碗數：")
+            col_split1, col_split2 = st.columns(2)
+            with col_split1:
+                pot_large_servings = st.number_input("整鍋可做成【大碗】的總碗數", min_value=0.0, value=0.0, step=1.0, key="pot_large_servings")
+            with col_split2:
+                pot_small_servings = st.number_input("整鍋可做成【小碗】的總碗數", min_value=0.0, value=0.0, step=1.0, key="pot_small_servings")
+
+            st.markdown("###### ➕ 請添加此「整鍋」投入的所有食材與總用量：")
+            col_b_mat1, col_b_mat2, col_b_mat3 = st.columns([2, 1, 1])
+            with col_b_mat1:
+                b_dish_select_list = ["--- 請選擇食材 ---"] + all_raw_df['prod_name'].tolist()
+                b_mat_name = st.selectbox("選擇投入此鍋的食材/用品項目", b_dish_select_list, key="b_mat_selector")
+            
+            # 【核心功能改善：移除選擇投入單位欄位，自動顯示並鎖定庫存預設小單位】
+            db_unit_b = ""
+            if b_mat_name != "--- 請選擇食材 ---":
+                matched_row_b = all_raw_df[all_raw_df['prod_name'] == b_mat_name].iloc[0]
+                db_unit_b = matched_row_b['use_unit'].strip()
+
+            with col_b_mat2:
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown(f"**投入單位：** `{db_unit_b if db_unit_b else '未選擇'}`")
+            with col_b_mat3:
+                b_mat_qty = st.number_input("投入此整鍋的總用量", min_value=0.0, value=0.0, step=1.0, key="b_qty_selector")
+
+            if 'pot_recipe_pool' not in st.session_state:
+                st.session_state.pot_recipe_pool = []
+
+            if st.button("➕ 將食材計入整鍋總配方中", key="add_pot_recipe_btn"):
+                if b_mat_name == "--- 請選擇食材 ---" or b_mat_qty <= 0:
+                    st.error("請選擇有效原物料並輸入大於 0 的投入量！")
+                else:
+                    mat_info = all_raw_df[all_raw_df['prod_name'] == b_mat_name].iloc[0]
+                    # 直接對齊後端基本小單位
+                    final_conv = b_mat_qty
+
+                    ex_idx = next((i for i, item in enumerate(st.session_state.pot_recipe_pool) if item['食材編號'] == mat_info['prod_id']), None)
+                    new_pool_dict = {"食材名稱": mat_info['prod_name'], "食材編號": mat_info['prod_id'], "單位用量": final_conv, "單位": mat_info['use_unit']}
+                    if ex_idx is not None:
+                        st.session_state.pot_recipe_pool[ex_idx] = new_pool_dict
+                    else:
+                        st.session_state.pot_recipe_pool.append(new_pool_dict)
+                    st.rerun()
+
+            if st.session_state.pot_recipe_pool:
+                df_pot_pool = pd.DataFrame(st.session_state.pot_recipe_pool)
+                df_pot_pool['移除'] = False
+                edited_pot_pool = st.data_editor(
+                    df_pot_pool,
+                    column_config={"食材編號": st.column_config.TextColumn("編號", disabled=True), "食材名稱": st.column_config.TextColumn("名稱", disabled=True), "單位用量": st.column_config.NumberColumn("整鍋總用量", format="%.4f"), "移除": st.column_config.CheckboxColumn("移除")},
+                    disabled=["食材編號", "食材名稱", "單位"],
+                    key="pot_pool_editor",
+                    use_container_width=True
+                )
+                
+                pot_pool_changed = False
+                new_pot_pool = []
+                for idx, r in edited_pot_pool.iterrows():
+                    if r['移除']:
+                        pot_pool_changed = True
+                        continue
+                    if r['單位用量'] != st.session_state.pot_recipe_pool[idx]['單位用量']:
+                        pot_pool_changed = True
+                    new_pot_pool.append({"食材名稱": r['食材名稱'], "食材編號": r['食材編號'], "單位用量": float(r['單位用量']), "單位": r['單位']})
+                if pot_pool_changed:
+                    st.session_state.pot_recipe_pool = new_pot_pool
+                    st.rerun()
+
+                total_pot_cost = 0.0
+                for p_item in st.session_state.pot_recipe_pool:
+                    matched_raw = all_raw_df[all_raw_df['prod_id'] == p_item['食材編號']]
+                    r_cost = float(matched_raw.iloc[0]['cost']) if not matched_raw.empty else 0.0
+                    total_pot_cost += p_item['單位用量'] * r_cost
+
+                total_shares = (pot_large_servings * 1.5) + (pot_small_servings * 1.0)
+                
+                if total_shares > 0:
+                    cost_per_share = total_pot_cost / total_shares
+                    single_large_cost = cost_per_share * 1.5
+                    single_small_cost = cost_per_share * 1.0
+                else:
+                    single_large_cost, single_small_cost = 0.0, 0.0
+
+                st.markdown(f"""
+                > 📊 **🥣 整鍋成本拆分攤算即時面板：**
+                > * 投入這整鍋的【**原物料總成本**】： **${total_pot_cost:,.2f} 元**
+                > * 拆分估算：**【單碗大碗成本】**： **${single_large_cost:,.2f} 元** (售價:${pot_large_price}，預估毛利率:{(pot_large_price-single_large_cost)/pot_large_price*100 if pot_large_price>0 else 0:.1f}%)
+                > * 拆分估算：**【單碗小碗成本】**： **${single_small_cost:,.2f} 元** (售價:${pot_small_price}，預估毛利率:{(pot_small_price-single_small_cost)/pot_small_price*100 if pot_small_price>0 else 0:.1f}%)
+                """)
+
+                if st.button("💾 打包打包大/小碗餐點同時寫入菜單", type="primary", key="save_pot_dishes_btn"):
+                    if not pot_base_name:
+                        st.error("❌ 錯誤：請輸入餐點基底名稱！")
+                    elif pot_large_servings <= 0 and pot_small_servings <= 0:
+                        st.error("❌ 錯誤：大碗與小碗的預計可做數量不能同時為 0！")
+                    elif (pot_large_servings > 0 and pot_large_price <= 0) or (pot_small_servings > 0 and pot_small_price <= 0):
+                        st.error("❌ 錯誤：只要有分配碗數，對應的販售價格必須大於 0！")
+                    else:
+                        conn = sqlite3.connect('inventory.db')
+                        cursor = conn.cursor()
+                        
+                        if pot_large_servings > 0:
+                            l_name = f"{pot_base_name}(大碗)"
+                            cursor.execute("SELECT prod_id FROM products WHERE prod_name = ? AND status = 1", (l_name,))
+                            if cursor.fetchone():
+                                st.error(f"❌ 錯誤：【{l_name}】已存在於菜單中，請更換名稱或刪除舊品項！")
+                                conn.close()
+                                st.stop()
+                            l_id = get_next_dish_id()
+                            cursor.execute("INSERT INTO products VALUES (?, ?, ?, ?, 0.0, '碗', '碗', 1.0, 1)", (l_id, l_name, single_large_cost, float(pot_large_price)))
+                            for item in st.session_state.pot_recipe_pool:
+                                single_l_qty = (item['單位用量'] / total_shares) * 1.5
+                                cursor.execute("INSERT INTO bom VALUES (?, ?, ?)", (l_id, item['食材編號'], single_l_qty))
+                        
+                        if pot_small_servings > 0:
+                            s_name = f"{pot_base_name}(小碗)"
+                            cursor.execute("SELECT prod_id FROM products WHERE prod_name = ? AND status = 1", (s_name,))
+                            if cursor.fetchone():
+                                st.error(f"❌ 錯誤：【{s_name}】已存在於菜單中，請更換名稱或刪除舊品項！")
+                                conn.close()
+                                st.stop()
+                            s_id = get_next_dish_id()
+                            cursor.execute("INSERT INTO products VALUES (?, ?, ?, ?, 0.0, '碗', '碗', 1.0, 1)", (s_id, s_name, single_small_cost, float(pot_small_price)))
+                            for item in st.session_state.pot_recipe_pool:
+                                single_s_qty = (item['單位用量'] / total_shares) * 1.0
+                                cursor.execute("INSERT INTO bom VALUES (?, ?, ?)", (s_id, item['食材編號'], single_s_qty))
+                                
                         conn.commit()
                         conn.close()
-                        log_history(current_user, f"新創自訂餐點-{pos_custom_name}", f"老闆創立了全新的新菜色：{pos_custom_name}({new_d_id})，定價 ${pos_custom_price}，設定基本單位配方成本 ${custom_dish_calc_cost:.2f}。")
-                        trigger_toast(f"成功建立餐點 【{pos_custom_name}】 並加入菜單選單！", icon="🚀")
-                        st.session_state.custom_recipe_pool = []
+                        
+                        log_history(current_user, f"整鍋拆分配方-{pot_base_name}", f"老闆透過 B模式 創立整鍋基底餐點：{pot_base_name}。整鍋物料總成本 ${total_pot_cost:.2f}。成功產出大碗成本 ${single_large_cost:.2f}/小碗成本 ${single_small_cost:.2f}。")
+                        trigger_toast(f"🎉 成功批次打包建立 【{pot_base_name}】 大/小碗成品餐點並加入菜單！", icon="🥣")
+                        st.session_state.pot_recipe_pool = []
                         st.rerun()
 
     st.markdown("---")
