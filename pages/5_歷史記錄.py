@@ -17,14 +17,14 @@ with col_f1:
     # 篩選器 1：時間區間篩選
     history_time_option = st.selectbox(
         "📅 選擇查看時間區間",
-        ["今天", "過去 7 定", "過去 7 天", "過去 30 天", "自訂區間 (自選起訖日期)"],
+        ["今天", "過去 7 天", "過去 7 天", "過去 30 天", "自訂區間 (自選起訖日期)"],
         index=1,  # 修正防呆
         key="history_filter"
     )
     # 若不小心選到錯字，自動導回
     if history_time_option == "今天":
         pass
-    elif history_time_option in ["過去 7 定", "過去 7 天"]:
+    elif history_time_option in ["過去 7 天", "過去 7 天"]:
         history_time_option = "過去 7 天"
 
 # 處理時間區間邏輯

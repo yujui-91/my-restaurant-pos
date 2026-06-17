@@ -113,4 +113,4 @@ if not df_products_in_stock.empty:
     else:
         st.warning("⚠️ 找不到該商品的有效庫存批次，請重新整理頁面。")
 else:
-    st.info(f"💡 目前 【audit_cate_filter】 類別中沒有任何在庫庫存資料可供盤點。")
+    st.info(f"💡 目前 【{audit_cate_filter}】 類別中沒有任何在庫庫存資料可供盤點。")

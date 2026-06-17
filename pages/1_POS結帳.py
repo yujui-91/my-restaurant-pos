@@ -519,7 +519,6 @@ with pos_tabs[1]:
                                     SELECT 
                                       CASE 
                                         WHEN COALESCE(SUM(CASE WHEN qty > 0 THEN qty ELSE 0 END), 0) > 0 
-                                        WHEN COALESCE(SUM(CASE WHEN qty > 0 THEN qty ELSE 0 END), 0) > 0 
                                         THEN (SUM(CASE WHEN qty > 0 THEN qty * cost ELSE 0 END) / SUM(CASE WHEN qty > 0 THEN qty ELSE 0 END))
                                         ELSE ?
                                       END as moving_avg
