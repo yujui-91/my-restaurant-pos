@@ -91,7 +91,7 @@ elif stock_filter == "僅看用品 (S)":
 else:
     query_condition = "WHERE (p.prod_id LIKE 'R%' OR p.prod_id LIKE 'S%')"
 
-# 核心優化：不再直接用 p.cost 算總值，而是將各批次 (剩餘量 * 該批單價) 加總，回推真正無誤的浮動移動平均單位成本
+# 核心優化：計算各批次 (剩餘量 * 該批單價) 加總，回推真正無誤的浮動移動平均單位成本
 df_merged_stock = pd.read_sql_query(f'''
     SELECT p.prod_id as 編號, 
            p.prod_name as 商品名稱, 
@@ -212,7 +212,7 @@ if not df_merged_stock.empty:
     if not df_unique_disabled_items.empty:
         st.markdown("---")
         st.markdown("##### 🗑️ 清理已下架品項的殘留庫存紀錄")
-        st.caption("如果您不想在上方看到這些紅色高亮的下架品項，可以在下方依序選擇品項與特定批次，將其數量歸零：")
+        st.caption("如果您不想在上方看到 these 紅色高亮的下架品項，可以在下方依序選擇品項與特定批次，將其數量歸零：")
         
         disabled_item_options = df_unique_disabled_items.apply(lambda r: f"{r['prod_id']} - {r['prod_name']}", axis=1).tolist()
         selected_disabled_item_str = st.selectbox("🔍 1. 請選取欲清理的下架商品/食材：", disabled_item_options, key="clean_disabled_item_box")
@@ -220,7 +220,7 @@ if not df_merged_stock.empty:
         
         conn = sqlite3.connect('inventory.db')
         df_disabled_batches = pd.read_sql_query('''
-            SELECT s.batch_id, s.qty, p.use_unit, s.inbound_date, s.expiry_date
+            SELECT s.batch_id, s.qty, s.original_qty, p.use_unit, s.inbound_date, s.expiry_date
             FROM stock_batches s 
             JOIN products p ON s.prod_id = p.prod_id 
             WHERE s.prod_id = ? AND s.qty > 0
@@ -243,17 +243,21 @@ if not df_merged_stock.empty:
             if st.button("❌ 確認將此下架批次數量歸零（移出明細）", type="primary", key="clean_disabled_submit_btn"):
                 conn = sqlite3.connect('inventory.db')
                 cursor = conn.cursor()
-                cursor.execute("UPDATE stock_batches SET qty = 0 WHERE batch_id = ?", (target_batch_id,))
+                
+                # 功能改善 1：同步更新 original_qty 為「原先已消耗的數量」
+                # 已消耗量 = 原始包裝量 - 當前殘留量
+                new_orig_qty = max(0.0, float(matched_del_row['original_qty']) - float(matched_del_row['qty']))
+                cursor.execute("UPDATE stock_batches SET qty = 0, original_qty = ? WHERE batch_id = ?", (new_orig_qty, target_batch_id))
                 conn.commit()
                 conn.close()
                 
                 log_history(
                     st.session_state.current_user, 
                     "下架庫存清理", 
-                    f"老闆在首頁清空了已下架品項的殘留庫存量：{item_name} (批次:{target_batch_id}，原數量:{matched_del_row['qty']}{matched_del_row['use_unit']})"
+                    f"老闆在首頁清空了已下架品項的殘留庫存量：{item_name} (批次:{target_batch_id}，原數量:{matched_del_row['qty']}{matched_del_row['use_unit']}，歷史 original_qty 已修正為已消耗量: {new_orig_qty}{matched_del_row['use_unit']})"
                 )
                 
-                trigger_toast(f"已成功將 【{item_name}】 批次 {target_batch_id} 的庫存量歸零清除！", icon="🗑️")
+                trigger_toast(f"已成功將 【{item_name}】 批次 {target_batch_id} 的庫存量歸零清除，並重整原始登記量！", icon="🗑️")
                 st.rerun()
         else:
             st.info("該品項目前無有效殘留批次。")

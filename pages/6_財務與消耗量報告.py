@@ -64,10 +64,10 @@ df_history_sales = pd.read_sql_query('''
       AND timestamp BETWEEN ? AND ?
 ''', conn, params=(start_str, end_str))
 
-# 2. 撈取全歷史中所有涉及手動調整或採購的日誌 (用來後續過濾 target_month)
+# 2. 撈取全歷史中所有涉及手動調整與採購/更正的日誌 (用來後續過濾 target_month)
 df_expenses_raw = pd.read_sql_query('''
     SELECT action, details, timestamp FROM history 
-    WHERE action LIKE '手動調整庫存-%' OR action LIKE '採購進貨-%'
+    WHERE action LIKE '手動調整庫存-%' OR action LIKE '採購進貨-%' OR action = '採購單更正'
 ''', conn)
 
 conn.close()
@@ -90,17 +90,16 @@ total_stock_loss = 0.0
 dish_sales = {}
 material_usage = {}
 
-# A. 處理即時區間內的營業額、FIFO 食材成本與餐點銷售排行 (全面結構化 JSON 解析)
+# A. 處理即時區間內的營業額、FIFO 食材成本與餐點銷售排行
 for _, row in df_history_sales.iterrows():
-    # 核心改善 1：如果該筆「多品項收銀結帳」單號存在於作廢池中，直接予以財務沖銷排除
     if row['action'] == "多品項收銀結帳" and row['id'] in canceled_order_ids:
         continue
     if row['action'] == "訂單作廢成功":
-        continue # 作廢紀錄本身不提供正向營收
+        continue
         
     txt = row['details']
     
-    # 強度升級：優先嘗試 JSON 結構化解析
+    # 優先嘗試 JSON 結構化解析
     if "||STRUCT_DATA||" in txt:
         try:
             json_part = txt.split("||STRUCT_DATA||")[1]
@@ -122,11 +121,11 @@ for _, row in df_history_sales.iterrows():
                 m_qty = float(m.get("qty", 0.0))
                 if m_name:
                     material_usage[m_name] = material_usage.get(m_name, 0.0) + m_qty
-            continue # 解析成功，跳過傳統舊正則匹配
+            continue
         except:
-            pass # 萬一 JSON 損毀則降級退回舊模式
+            pass
 
-    # 向下相容：傳統正則表達式解析舊資料
+    # 向下相容：傳統舊正則匹配
     revenue_match = re.search(r"總金額 \$(\d+\.?\d*)", txt)
     if revenue_match:
         total_revenue += float(revenue_match.group(1))
@@ -173,12 +172,14 @@ for _, row in df_expenses_raw.iterrows():
                     if start_str <= timestamp_str <= end_str:
                         total_stock_loss += abs(change_amt) if change_amt < 0 else 0.0
                         
-        elif "採購進貨" in row['action'] and "C" in row['action']:
-            tot_match = re.search(r"總金額:?\s*\$(\d+)", details)
+        # 功能改善 4：將模糊篩選條件擴大，支援「採購進貨」以及修正歷史錯誤的「採購單更正」
+        elif ("採購進貨" in row['action'] or "採購單更正" in row['action']) and "C" in details:
+            # 由於更正可能包含歷史修正明細，需相容舊總額與更正後總額的匹配
+            tot_match = re.search(r"修改為 \$(\d+)", details) or re.search(r"總金額:?\s*\$(\d+)", details)
             if tot_match:
                 expense_val = float(tot_match.group(1))
                 total_op_expense += expense_val
-                c_expense_records.append({"費用項目": f"採購進貨-{row['action']}", "金額": expense_val})
+                c_expense_records.append({"費用項目": f"歷史修正/採購-{row['action']}", "金額": expense_val})
 
 # 會計損益表公式平衡 (P&L)
 gross_profit = total_revenue - total_food_cost

@@ -306,7 +306,7 @@ with pos_tabs[1]:
     conn.close()
 
     if df_today_orders.empty:
-        st.info("💡 今天目前尚無 any 收銀出餐紀錄可供修改。")
+        st.info("💡 今天目前尚無收銀出餐紀錄可供修改。")
     else:
         order_options = []
         parsed_orders_cache = {}
@@ -371,18 +371,22 @@ with pos_tabs[1]:
         manage_action = st.radio("請選擇維護類型：", ["❌ 整單作廢（全數退款並回補庫存）", "✏️ 數量微調（更正點餐數量）"], horizontal=True)
 
         if "整單作廢" in manage_action:
-            st.warning("⚠️ **注意：** 作廢後，該筆營業額將在报表中消失，且系統將會把消耗的原物料 100% 歸還至庫存批次中。")
+            st.warning("⚠️ **注意：** 作廢後，該筆營業額將在報表中消失，且系統將依據當時結帳扣料時的「原始精準數量」完整歸還至庫存中。")
             if st.button("🔥 確定執行整單作廢", type="primary", use_container_width=True):
                 conn = sqlite3.connect('inventory.db')
                 cursor = conn.cursor()
                 try:
+                    # 功能改善 2：前台作廢精準回補到原本品項的現有/最早批次，並同步更新 qty 與 original_qty
                     for mat_name, mat_id, qty_val, unit_str in parsed_mats:
                         refund_qty = float(qty_val)
-                        cursor.execute("SELECT batch_id, cost FROM stock_batches WHERE prod_id = ? AND qty > 0 ORDER BY inbound_date ASC LIMIT 1", (mat_id,))
+                        # 尋找該品項在 stock_batches 中目前仍有剩餘的批次（或最新的批次）
+                        cursor.execute("SELECT batch_id, cost FROM stock_batches WHERE prod_id = ? ORDER BY inbound_date DESC, batch_id DESC LIMIT 1", (mat_id,))
                         b_row = cursor.fetchone()
                         if b_row:
+                            # 直接回補到該批次中，同時調整剩餘量與原始包裝量
                             cursor.execute("UPDATE stock_batches SET qty = qty + ?, original_qty = original_qty + ? WHERE batch_id = ?", (refund_qty, refund_qty, b_row[0]))
                         else:
+                            # 萬一該品項完全沒有庫存批次，則抓取 products 設定的基準成本建立
                             today_str = datetime.now().strftime("%Y-%m-%d")
                             cursor.execute("SELECT cost FROM products WHERE prod_id = ?", (mat_id,))
                             p_cost = cursor.fetchone()[0] or 0.0
@@ -390,7 +394,7 @@ with pos_tabs[1]:
                     
                     cursor.execute("DELETE FROM history WHERE id = ?", (target_hist_id,))
                     conn.commit()
-                    log_history(current_user, "訂單作廢成功", f"老闆作廢了單號 {target_hist_id} 的當日訂單，成功退回營業額 ${parsed_total_revenue} 元，庫存原物料已完整回補。")
+                    log_history(current_user, "訂單作廢成功", f"老闆作廢了單號 {target_hist_id} 的當日訂單，成功退回營業額 ${parsed_total_revenue} 元，庫存原物料已精準完整回補。")
                     trigger_toast(f"已成功作廢單號 {target_hist_id} 的點餐紀錄，庫存已同步回補！", icon="🗑️")
                     st.rerun()
                 except Exception as e:
@@ -464,14 +468,14 @@ with pos_tabs[1]:
                                     insufficient_flag = True
                                     insufficient_msg += f"❌ 修正失敗：原物料【{m_name}】庫存剩餘 {avail}，不足以補扣額外的 {diff_volume} {m_unit}！\n"
                                 else:
-                                    # 💡 核心優化：嚴格判定追加扣料時的成功狀態，失敗則立刻拋出異常觸發事務安全回滾，徹底消滅會計與結構化數據不對等 Bug
                                     success, deducted_cost_val = deduct_stock_fifo(m_id, diff_volume, cursor)
                                     if not success:
                                         raise Exception(f"微調追加庫存時 FIFO 扣減失敗：【{m_name}】追加量 {diff_volume:.1f}")
                                     actual_cost_adjustment += deducted_cost_val
                             elif diff_volume < 0: 
+                                # 功能改善 2：當縮減數量而需要退回原物料庫存時，精準回補並調整 qty 與 original_qty
                                 refund_vol = abs(diff_volume)
-                                cursor.execute("SELECT batch_id, cost FROM stock_batches WHERE prod_id = ? AND qty > 0 ORDER BY inbound_date ASC LIMIT 1", (m_id,))
+                                cursor.execute("SELECT batch_id, cost FROM stock_batches WHERE prod_id = ? ORDER BY inbound_date DESC, batch_id DESC LIMIT 1", (m_id,))
                                 b_row = cursor.fetchone()
                                 if b_row:
                                     batch_id_target, b_cost = b_row[0], float(b_row[1])
@@ -544,7 +548,7 @@ with pos_tabs[2]:
         with col_new_dish2:
             pos_custom_price = st.number_input("設定販售價格 (必須大於 0 的整數)", min_value=0, value=0, step=1, key="custom_dish_price_input")
             
-        st.markdown("###### ➕ 請調配此項客製餐點的專專屬物料與用量：")
+        st.markdown("###### ➕ 請調配此項客製餐點的專屬物料與用量：")
         col_cus_mat1, col_cus_mat2, col_cus_mat3 = st.columns([2, 1, 1])
         with col_cus_mat1:
             dish_select_list = ["--- 請選擇食材 ---"] + all_raw_df['prod_name'].tolist()
@@ -841,7 +845,7 @@ with pos_tabs[3]:
     conn.close()
     
     if all_mats_raw.empty:
-        st.info("系統中尚無食材或用品. ")
+        st.info("系統中尚無食材或用品.")
     else:
         all_mats_raw['狀態'] = all_mats_raw['status'].apply(lambda s: "🔴 已停用下架" if s == 0 else "🟢 正常進貨使用中")
         st.dataframe(all_mats_raw[['prod_id', 'prod_name', 'use_unit', '狀態']], use_container_width=True, hide_index=True)

@@ -67,9 +67,9 @@ conn = sqlite3.connect("inventory.db")
 sql_query = "SELECT timestamp AS 時間, user AS 操作人, action AS 動作, details AS 詳細說明 FROM history WHERE timestamp BETWEEN ? AND ?"
 sql_params = [start_str, end_str]
 
-# 💡 核心技術：使用 SQL 'LIKE' 關鍵字進行大方向模糊比對
+# 功能改善 3：修正大方向動作類別匹配條件，使其與實際寫入端（多品項收銀結帳）相符，避免搜尋不到
 if selected_main_action == "🛒 餐點收銀結帳":
-    sql_query += " AND action LIKE '餐點收銀結帳-%'"
+    sql_query += " AND (action = '多品項收銀結帳' OR action = '訂單作廢成功')"
 elif selected_main_action == "⚙️ 餐點參數修正":
     sql_query += " AND action LIKE '修正餐點參數-%'"
 elif selected_main_action == "📥 採購進貨登記":
@@ -77,7 +77,7 @@ elif selected_main_action == "📥 採購進貨登記":
 elif selected_main_action == "💰 帳單費用登記":
     sql_query += " AND action = '帳單支出登記'"
 elif selected_main_action == "📋 庫存微調/報廢/盤點":
-    sql_query += " AND (action LIKE '庫存微調-%' OR action LIKE '存貨盤點-%')"
+    sql_query += " AND (action LIKE '庫存微調-%' OR action LIKE '存貨盤點-%' OR action LIKE '手動調整庫存-%')"
 
 sql_query += " ORDER BY id DESC"
 
@@ -111,10 +111,8 @@ if not df_hist.empty:
         # 手機/平板版檢視：直式卡片清單，點開卡片即會輸出所有細項文字
         st.markdown("---")
         for idx, row in df_hist.iterrows():
-            # 標題輸出動態細項動作 (如：餐點收銀結帳-招牌牛肉麵)
             with st.expander(f"⏰ {row['時間']} | {row['動作']} ({row['操作人']})"):
                 st.markdown("**📄 詳細更動軌跡說明：**")
-                # 內部直接輸出最完整的冗長細節
                 st.info(row['詳細說明'])
 else:
     st.info("💡 目前此大方向篩選條件與時間區間內，沒有任何歷史操作紀錄。")
