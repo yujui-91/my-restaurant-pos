@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -57,11 +58,12 @@ if not all_items_for_safety.empty:
         conn.commit()
         conn.close()
         
-        # 【新增歷史紀錄埋點】歸類在：⚙️ 餐點參數修正
+        # 🔥 【歷史紀錄埋點優化】改為指定大分類為：⚙️ 餐點參數修正
         log_history(
             st.session_state.current_user, 
             f"修正餐點參數-安全庫存變更", 
-            f"操作人員微調了安全庫存線：【{matched_safety_row['prod_name']}】({target_safety_id})，新安全線設定為: {new_safety_value} {matched_safety_row['use_unit']}。"
+            f"操作人員微調了安全庫存線：【{matched_safety_row['prod_name']}】({target_safety_id})，新安全線設定為: {new_safety_value} {matched_safety_row['use_unit']}。",
+            main_category="⚙️ 餐點參數修正"
         )
         
         trigger_toast(f"已將 【{matched_safety_row['prod_name']}】 的安全線更新為 {new_safety_value}", icon="⚙️")
@@ -124,9 +126,7 @@ cursor = conn.cursor()
 for _, row in df_merged_stock.iterrows():
     cursor.execute("UPDATE products SET cost = ? WHERE prod_id = ?", (float(row['移動平均單位成本']), row['編號']))
 
-# ==================== 【🔥 新增：成品餐點 P 類 BOM 成本自動即時重算更新邏輯】 ====================
-# 說明：依據系統 db_core.py 中定義的配方表 `bom`(parent_id, child_id, qty_needed)，
-# 當原料 R/S 類的即時最新加權移動平均成本(products.cost)同步完畢後，立即將每個 P 類餐點底下所有配方用量成本重新加總更新。
+# ==================== 【成品餐點 P 類 BOM 成本自動即時重算更新邏輯】 ====================
 cursor.execute('''
     UPDATE products
     SET cost = COALESCE((
@@ -270,11 +270,12 @@ if not df_merged_stock.empty:
                 conn.commit()
                 conn.close()
                 
-                # 【優化動作類別】改為 "手動調整庫存-下架殘留清理" -> 完美歸帳至 📋 庫存微調/報廢/盤點
+                # 🔥 【優化動作與指定大類】完美落入 📋 庫存微調/報廢/盤點 分類中
                 log_history(
                     st.session_state.current_user, 
                     "手動調整庫存-下架殘留清理", 
-                    f"清理了已下架品項的殘留庫存量：{item_name} (批次:{target_batch_id}，原數量:{matched_del_row['qty']}{matched_del_row['use_unit']}，歷史 original_qty 已修正為已消耗量: {new_orig_qty}{matched_del_row['use_unit']})"
+                    f"清理了已下架品項的殘留庫存量：{item_name} (批次:{target_batch_id}，原數量:{matched_del_row['qty']}{matched_del_row['use_unit']}，歷史 original_qty 已修正為已消耗量: {new_orig_qty}{matched_del_row['use_unit']})",
+                    main_category="📋 庫存微調/報廢/盤點"
                 )
                 
                 trigger_toast(f"已成功將 【{item_name}】 批次 {target_batch_id} 的庫存量歸零清除，並重整原始登記量！", icon="🗑️")

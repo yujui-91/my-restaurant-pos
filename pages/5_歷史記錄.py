@@ -66,24 +66,17 @@ with col_f2:
 st.caption(f"目前查看審計區間：{start_dt.strftime('%Y-%m-%d %H:%M:%S')} ～ {end_dt.strftime('%Y-%m-%d %H:%M:%S')}")
 
 # ==========================================
-# 📊 依據「大方向」條件組合 SQL 撈出最終歷史紀錄
+# 📊 依據「大方向」條件組合 SQL 撈出最終歷史紀錄（🔥 改為精準索引查詢）
 # ==========================================
 conn = sqlite3.connect("inventory.db")
 
 sql_query = "SELECT timestamp AS 時間, user AS 操作人, action AS 動作, details AS 詳細說明 FROM history WHERE timestamp BETWEEN ? AND ?"
 sql_params = [start_str, end_str]
 
-# 修正大方向動作類別匹配條件，使其與新版獨立分離的作廢與更正紀錄相符
-if selected_main_action == "🛒 餐點收銀結帳":
-    sql_query += " AND (action = '多品項收銀結帳' OR action = '多品項收銀結帳-已微調更正' OR action = '訂單作廢成功' OR action = '更正點餐數量')"
-elif selected_main_action == "⚙️ 餐點參數修正":
-    sql_query += " AND action LIKE '修正餐點參數-%'"
-elif selected_main_action == "📥 採購進貨登記":
-    sql_query += " AND (action = '採購進貨' OR action = '採購單更正')"
-elif selected_main_action == "💰 帳單費用登記":
-    sql_query += " AND action = '帳單支出登記'"
-elif selected_main_action == "📋 庫存微調/報廢/盤點":
-    sql_query += " AND (action LIKE '庫存微調-%' OR action LIKE '存貨盤點-%' OR action LIKE '手動調整庫存-%')"
+# 核心優化：不再使用 LIKE 進行字串模糊匹配，改用全表主索引 main_category 進行等值精準查詢
+if selected_main_action != "--- 全部動作項目 ---":
+    sql_query += " AND main_category = ?"
+    sql_params.append(selected_main_action)
 
 sql_query += " ORDER BY id DESC"
 

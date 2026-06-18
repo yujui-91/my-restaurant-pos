@@ -51,29 +51,60 @@ while current_ptr <= end_date:
     current_ptr += timedelta(days=1)
 
 # ==========================================
-# 📊 資料庫核心撈取與智慧歸帳解析
+# 📊 資料庫核心撈取與高速 SQL 底層聚合（徹底抗卡頓）
 # ==========================================
 conn = sqlite3.connect('inventory.db')
 
-# 只撈取「作廢動作發生在當前查詢區間內」的紀錄，用來扣減當日營收
-df_current_void_logs = pd.read_sql_query('''
-    SELECT id, action, details, timestamp FROM history 
-    WHERE action = '訂單作廢成功'
-      AND timestamp BETWEEN ? AND ?
+# 1. 直接由 SQL SUM 聚合出營收與精準食材成本 (status = 1 正常計入財報的單據)
+df_sales_summary = pd.read_sql_query('''
+    SELECT COALESCE(SUM(total_revenue), 0.0) AS rev, COALESCE(SUM(total_cost), 0.0) AS cst
+    FROM orders 
+    WHERE status = 1 AND timestamp BETWEEN ? AND ?
 ''', conn, params=(start_str, end_str))
 
-# 將時間過濾完全交給下方的 Python 歸帳邏輯處理，確保跨日更正 100% 能夠對上。
-df_history_sales = pd.read_sql_query('''
-    SELECT id, action, details, timestamp FROM history 
-    WHERE action IN ('多品項收銀結帳', '更正點餐數量', '多品項收銀結帳-已微調更正')
-''', conn)
+total_revenue = float(df_sales_summary.iloc[0]['rev'])
+total_food_cost = float(df_sales_summary.iloc[0]['cst'])
 
+# 2. 直接由 SQL GROUP BY 聚合出餐點排行
+df_dish_rank_raw = pd.read_sql_query('''
+    SELECT oi.prod_name AS 餐點名稱, SUM(oi.qty) AS 銷售份數
+    FROM order_items oi
+    JOIN orders o ON oi.order_id = o.order_id
+    WHERE o.status = 1 AND o.timestamp BETWEEN ? AND ?
+    GROUP BY oi.prod_name
+    ORDER BY 銷售份數 DESC
+''', conn, params=(start_str, end_str))
+
+dish_sales = dict(zip(df_dish_rank_raw['餐點名稱'], df_dish_rank_raw['銷售份數']))
+
+# 3. 直接由 SQL GROUP BY 聚合出原物料消耗排行
+df_mat_rank_raw = pd.read_sql_query('''
+    SELECT om.mat_name AS 食材物料, SUM(om.qty) AS 消耗總數量
+    FROM order_materials om
+    JOIN orders o ON om.order_id = o.order_id
+    WHERE o.status = 1 AND o.timestamp BETWEEN ? AND ?
+    GROUP BY om.mat_name
+    ORDER BY 消耗總數量 DESC
+''', conn, params=(start_str, end_str))
+
+material_usage = dict(zip(df_mat_rank_raw['食材物料'], df_mat_rank_raw['消耗總數量']))
+
+# 4. 處理庫存微調所產生的報廢損耗 (保持時間區間篩選)
 df_expenses_raw = pd.read_sql_query('''
     SELECT action, details, timestamp FROM history 
-    WHERE action LIKE '手動調整庫存-%' OR action LIKE '採購進貨-%' OR action = '採購單更正'
-''', conn)
+    WHERE action LIKE '手動調整庫存-%' AND timestamp BETWEEN ? AND ?
+''', conn, params=(start_str, end_str))
 
-# 【修改點】撈取當前選擇時間區間內的精準實際進貨歷史明細（支援 R、S、C 所有大類）
+total_stock_loss = 0.0
+for _, row in df_expenses_raw.iterrows():
+    if "品項:C" not in row['action']:
+        details = row['details']
+        amt_match = re.search(r"總值變動:?\s*\$?(-?[\d\.]+)", details)
+        if amt_match:
+            change_amt = float(amt_match.group(1))
+            total_stock_loss += abs(change_amt) if change_amt < 0 else 0.0
+
+# 5. 撈取當前選擇時間區間內的精準實際進貨歷史明細（支援 R、S、C 所有大類）
 df_actual_purchase_details = pd.read_sql_query('''
     SELECT s.batch_id, s.prod_id, p.prod_name, s.original_qty, s.cost, s.inbound_date, p.purchase_unit
     FROM stock_batches s
@@ -83,21 +114,13 @@ df_actual_purchase_details = pd.read_sql_query('''
     ORDER BY s.inbound_date DESC, s.batch_id DESC
 ''', conn, params=(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")))
 
-conn.close()
-
-total_revenue = 0.0
-total_food_cost = 0.0
-total_op_expense = 0.0
-total_stock_loss = 0.0
-total_purchase_cost = 0.0  
-
 # 計算進貨總金額與明細建立
+total_purchase_cost = 0.0
 purchase_records = []
 for _, row in df_actual_purchase_details.iterrows():
     this_purchase_amt = float(row['original_qty'] * row['cost'])
     total_purchase_cost += this_purchase_amt
     
-    # 根據代號前綴給予易讀的分類標籤
     p_id = row['prod_id']
     if p_id.startswith('R'):
         cate_label = "食材 (R)"
@@ -116,126 +139,7 @@ for _, row in df_actual_purchase_details.iterrows():
         "進貨總額": this_purchase_amt
     })
 
-dish_sales = {}
-material_usage = {}
-
-# --- 處理正向銷售營收（修正跨日微調 Bug 版） ---
-for _, row in df_history_sales.iterrows():
-    if row['action'] == '多品項收銀結帳-已微調更正':
-        continue
-        
-    txt = row['details']
-    
-    if "||STRUCT_DATA||" in txt:
-        try:
-            json_part = txt.split("||STRUCT_DATA||")[1]
-            payload = json.loads(json_part)
-            
-            record_target_time = payload.get("orig_timestamp", row['timestamp'])
-            if not (start_str <= record_target_time <= end_str):
-                continue  
-                
-            total_revenue += float(payload.get("total_revenue", 0.0))
-            total_food_cost += float(payload.get("total_cost", 0.0))
-            
-            for d in payload.get("dishes", []):
-                d_name = d.get("prod_name")
-                d_qty = float(d.get("qty", 0.0))
-                if d_name:
-                    dish_sales[d_name] = dish_sales.get(d_name, 0.0) + d_qty
-                    
-            for m in payload.get("materials", []):
-                m_name = m.get("mat_name")
-                m_qty = float(m.get("qty", 0.0))
-                if m_name:
-                    material_usage[m_name] = material_usage.get(m_name, 0.0) + m_qty
-            continue
-        except:
-            pass
-
-    if not (start_str <= row['timestamp'] <= end_str):
-        continue
-
-    revenue_match = re.search(r"總金額 \$(\d+\.?\d*)", txt)
-    if revenue_match:
-        total_revenue += float(revenue_match.group(1))
-        
-    cost_match = re.search(r"精準食材成本 \$([\d\.]+)", txt)
-    if cost_match:
-        total_food_cost += float(cost_match.group(1))
-        
-    dish_items = re.findall(r"【(.+?) x ([\d\.]+)份】", txt)
-    for dish_name, qty_val in dish_items:
-        dish_sales[dish_name] = dish_sales.get(dish_name, 0.0) + float(qty_val)
-        
-    if "消耗食材:" in txt:
-        mats_part = txt.split("消耗食材:")[1].strip()
-        mats_list = mats_part.split(", ")
-        for m_str in mats_list:
-            match = re.match(r"([^\s_]+)_([RS]\d+)\(([\d\.]+)([^\)]+)\)", m_str)
-            if match:
-                m_name = match.group(1)
-                m_qty = float(match.group(3))
-                material_usage[m_name] = material_usage.get(m_name, 0.0) + m_qty
-
-# --- 處理當期作廢扣減 ---
-for _, row in df_current_void_logs.iterrows():
-    txt = row['details']
-    if "||STRUCT_DATA||" in txt:
-        try:
-            json_part = txt.split("||STRUCT_DATA||")[1]
-            payload = json.loads(json_part)
-            total_revenue -= float(payload.get("total_revenue", 0.0))
-            total_food_cost -= float(payload.get("total_cost", 0.0))
-            for d in payload.get("dishes", []):
-                d_name = d.get("prod_name")
-                d_qty = float(d.get("qty", 0.0))
-                if d_name:
-                    dish_sales[d_name] = dish_sales.get(d_name, 0.0) - d_qty
-            for m in payload.get("materials", []):
-                m_name = m.get("mat_name")
-                m_qty = float(m.get("qty", 0.0))
-                if m_name:
-                    material_usage[m_name] = material_usage.get(m_name, 0.0) - m_qty
-            continue
-        except:
-            pass
-
-    revenue_match = re.search(r"總金額 \$(\d+\.?\d*)", txt)
-    if revenue_match:
-        total_revenue -= float(revenue_match.group(1))
-    cost_match = re.search(r"精準食材成本 \$([\d\.]+)", txt)
-    if cost_match:
-        total_food_cost -= float(cost_match.group(1))
-    dish_items = re.findall(r"【(.+?) x ([\d\.]+)份】", txt)
-    for dish_name, qty_val in dish_items:
-        dish_sales[dish_name] = dish_sales.get(dish_name, 0.0) - float(qty_val)
-    if "消耗食材:" in txt:
-        mats_part = txt.split("消耗食材:")[1].strip()
-        mats_list = mats_part.split(", ")
-        for m_str in mats_list:
-            match = re.match(r"([^\s_]+)_([RS]\d+)\(([\d\.]+)([^\)]+)\)", m_str)
-            if match:
-                m_name = match.group(1)
-                m_qty = float(match.group(3))
-                material_usage[m_name] = material_usage.get(m_name, 0.0) - m_qty
-
-dish_sales = {k: v for k, v in dish_sales.items() if v > 0}
-material_usage = {k: v for k, v in material_usage.items() if v > 0}
-
-# --- 費用與帳單歸帳資料處理 ---
-c_expense_records = []
-for _, row in df_expenses_raw.iterrows():
-    if "手動調整庫存" in row['action'] and "品項:C" not in row['action']:
-        details = row['details']
-        timestamp_str = row['timestamp']
-        if start_str <= timestamp_str <= end_str:
-            amt_match = re.search(r"總值變動:?\s*\$?(-?[\d\.]+)", details)
-            if amt_match:
-                change_amt = float(amt_match.group(1))
-                total_stock_loss += abs(change_amt) if change_amt < 0 else 0.0
-
-conn = sqlite3.connect('inventory.db')
+# 6. 保留並優化原有：固定資產費用與營運帳單（C類物料）的特殊跨月會計歸帳邏輯
 df_c_batches = pd.read_sql_query('''
     SELECT s.batch_id, s.prod_id, p.prod_name, s.qty, s.cost, s.inbound_date
     FROM stock_batches s
@@ -262,6 +166,8 @@ for _, log_row in df_c_history.iterrows():
             if b_id_str:
                 batch_target_months[int(b_id_str)] = assigned_month
 
+total_op_expense = 0.0
+c_expense_records = []
 for _, row in df_c_batches.iterrows():
     b_id = int(row['batch_id'])
     if b_id in batch_target_months:
@@ -311,7 +217,7 @@ left_col, right_col = st.columns(2)
 with left_col:
     st.markdown("### 餐點銷售排行")
     if dish_sales:
-        rank_df = pd.DataFrame(dish_sales.items(), columns=["餐點名稱", "銷售份數"]).sort_values(by="銷售份數", ascending=False)
+        rank_df = pd.DataFrame(list(dish_sales.items()), columns=["餐點名稱", "銷售份數"]).sort_values(by="銷售份數", ascending=False)
         st.dataframe(rank_df, hide_index=True, use_container_width=True)
     else:
         st.info("💡 當前選定期間內尚無餐點銷售紀錄。")
@@ -319,7 +225,7 @@ with left_col:
 with right_col:
     st.markdown("### 原物料消耗排行")  
     if material_usage:
-        mat_df = pd.DataFrame(material_usage.items(), columns=["食材物料", "消耗總數量"]).sort_values(by="消耗總數量", ascending=False)
+        mat_df = pd.DataFrame(list(material_usage.items()), columns=["食材物料", "消耗總數量"]).sort_values(by="消耗總數量", ascending=False)
         st.dataframe(mat_df, hide_index=True, use_container_width=True)
     else:
         st.info("💡 當前選定期間內尚無食材消耗數據。")

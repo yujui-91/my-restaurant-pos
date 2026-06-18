@@ -2,6 +2,7 @@
 import sqlite3
 import re
 from datetime import datetime, timedelta
+import streamlit as st
 
 def init_db():
     conn = sqlite3.connect('inventory.db', timeout=30.0)
@@ -57,13 +58,58 @@ def init_db():
                         qty_needed REAL,
                         PRIMARY KEY (parent_id, child_id))''')
     
-    # 4. 歷史紀錄表
+    # 4. 歷史紀錄表 (新增大方向分類欄位 main_category 提升多年查詢效能)
     cursor.execute('''CREATE TABLE IF NOT EXISTS history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT, 
                         timestamp TEXT, 
                         user TEXT, 
                         action TEXT, 
-                        details TEXT)''')
+                        details TEXT,
+                        main_category TEXT DEFAULT '')''')
+    
+    # 升級檢查：舊歷史紀錄表可能沒有 main_category 欄位
+    cursor.execute("PRAGMA table_info(history)")
+    hist_columns = [info[1] for info in cursor.fetchall()]
+    if 'main_category' not in hist_columns:
+        cursor.execute("ALTER TABLE history ADD COLUMN main_category TEXT DEFAULT ''")
+        # 同步刷舊資料的大方向分類（確保升級舊資料後老報表不失效）
+        cursor.execute("UPDATE history SET main_category = '🛒 餐點收銀結帳' WHERE action IN ('多品項收銀結帳', '多品項收銀結帳-已微調更正', '訂單作廢成功', '更正點餐數量')")
+        cursor.execute("UPDATE history SET main_category = '⚙️ 餐點參數修正' WHERE action LIKE '修正餐點參數-%'")
+        cursor.execute("UPDATE history SET main_category = '📥 採購進貨登記' WHERE action IN ('採購進貨', '採購單更正')")
+        cursor.execute("UPDATE history SET main_category = '💰 帳單費用登記' WHERE action = '帳單支出登記'")
+        cursor.execute("UPDATE history SET main_category = '📋 庫存微調/報廢/盤點' WHERE action LIKE '庫存微調-%' OR action LIKE '存貨盤點-%' OR action LIKE '手動調整庫存-%'")
+
+    # ==========================================
+    # 🔥 核心優化：建立獨立結構化銷售表（應對多年大數據防卡死）
+    # ==========================================
+    # 訂單主表 (status: 1=正常, 2=已更正, 0=已作廢)
+    cursor.execute('''CREATE TABLE IF NOT EXISTS orders (
+                        order_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TEXT,
+                        user TEXT,
+                        total_revenue REAL,
+                        total_cost REAL,
+                        status INTEGER DEFAULT 1,
+                        history_id INTEGER)''')
+                        
+    # 銷貨餐點明細表
+    cursor.execute('''CREATE TABLE IF NOT EXISTS order_items (
+                        item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        order_id INTEGER,
+                        prod_id TEXT,
+                        prod_name TEXT,
+                        qty REAL,
+                        price REAL)''')
+                        
+    # 物料消耗明細表 (包含當次 FIFO 批次扣減資訊的 JSON 結構，以便完美回補或更正)
+    cursor.execute('''CREATE TABLE IF NOT EXISTS order_materials (
+                        mat_record_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        order_id INTEGER,
+                        mat_id TEXT,
+                        mat_name TEXT,
+                        qty REAL,
+                        unit TEXT,
+                        deducted_batches_json TEXT)''')
     
     # 預設測試資料
     cursor.execute("SELECT COUNT(*) FROM products")
@@ -109,17 +155,44 @@ def init_db():
             ('P001', 'R004', 5.0)
         ])
         
+    # 建立與升級優化索引（確保大分類等查詢均走高精準索引）
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_timestamp_action ON history (timestamp, action);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_main_category ON history (main_category, timestamp);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_stock_batches_prod_date ON stock_batches (prod_id, inbound_date);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_timestamp_status ON orders (timestamp, status);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items (order_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_order_materials_order_id ON order_materials (order_id);")
+        
     conn.commit()
     conn.close()
 
-def log_history(user, action, details):
+def log_history(user, action, details, main_category=""):
     conn = sqlite3.connect('inventory.db', timeout=30.0)
     conn.execute("PRAGMA journal_mode=WAL;")
     cursor = conn.cursor()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cursor.execute("INSERT INTO history (timestamp, user, action, details) VALUES (?, ?, ?, ?)", (now, user, action, details))
+    
+    # 智慧型自動大方向類別歸納（防呆防漏傳補位機制）
+    if not main_category:
+        if action in ['多品項收銀結帳', '多品項收銀結帳-已微調更正', '訂單作廢成功', '更正點餐數量']:
+            main_category = "🛒 餐點收銀結帳"
+        elif action.startswith("修正餐點參數-"):
+            main_category = "⚙️ 餐點參數修正"
+        elif action in ['採購進貨', '採購單更正']:
+            main_category = "📥 採購進貨登記"
+        elif action == "帳單支出登記":
+            main_category = "💰 帳單費用登記"
+        elif action.startswith("手動調整庫存-") or action.startswith("存貨盤點-") or action.startswith("庫存微調"):
+            main_category = "📋 庫存微調/報廢/盤點"
+            
+    cursor.execute(
+        "INSERT INTO history (timestamp, user, action, details, main_category) VALUES (?, ?, ?, ?, ?)", 
+        (now, user, action, details, main_category)
+    )
+    last_id = cursor.lastrowid
     conn.commit()
     conn.close()
+    return last_id
 
 def deduct_stock_fifo(prod_id, qty_to_deduct, cursor):
     cursor.execute("SELECT batch_id, qty, cost FROM stock_batches WHERE prod_id = ? AND qty > 0 ORDER BY expiry_date ASC, inbound_date ASC", (prod_id,))
@@ -234,11 +307,9 @@ def update_dish_and_bom(dish_id, new_price, recipe_list):
     conn.close()
 
 def trigger_toast(text, icon="🔔"):
-    import streamlit as st
     st.session_state.toast_queue = {"text": text, "icon": icon}
 
 def show_pending_toast():
-    import streamlit as st
     if 'toast_queue' in st.session_state and st.session_state.toast_queue:
         q = st.session_state.toast_queue
         st.toast(q["text"], icon=q["icon"])

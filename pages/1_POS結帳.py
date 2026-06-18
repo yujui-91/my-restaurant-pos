@@ -258,10 +258,8 @@ with pos_tabs[0]:
                                     "deducted_batches": batch_list
                                 })
                                 
-                            conn.commit()
-                            cursor.close()
-                            conn.close()
-                            
+                            # 1. 寫入傳統歷史日誌
+                            now_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             details_log = f"合併前台收銀：出餐明細 {confirm_msg}，總金額 ${total_bill_amount}，精準食材成本 ${actual_total_cost:.2f}。 消耗食材: " + ", ".join(log_mats_summary)
                             
                             structured_payload = {
@@ -272,7 +270,28 @@ with pos_tabs[0]:
                             }
                             final_log_entry = details_log + " ||STRUCT_DATA||" + json.dumps(structured_payload, ensure_ascii=False)
                             
-                            log_history(current_user, "多品項收銀結帳", final_log_entry)
+                            # 調用歷史儲存並取得自增 history_id
+                            hist_id = log_history(current_user, "多品項收銀結帳", final_log_entry)
+                            
+                            # 2. 🔥 同步寫入新版結構化關聯銷售明細表（解決多年數據卡頓的核心防線）
+                            cursor.execute('''INSERT INTO orders (timestamp, user, total_revenue, total_cost, status, history_id)
+                                              VALUES (?, ?, ?, ?, 1, ?)''', 
+                                           (now_time_str, current_user, float(total_bill_amount), float(actual_total_cost), hist_id))
+                            new_order_id = cursor.lastrowid
+                            
+                            for d_item in st.session_state.pos_shopping_cart:
+                                cursor.execute('''INSERT INTO order_items (order_id, prod_id, prod_name, qty, price)
+                                                  VALUES (?, ?, ?, ?, ?)''',
+                                               (new_order_id, d_item["prod_id"], d_item["prod_name"], float(d_item["qty"]), float(d_item["price"])))
+                                               
+                            for m_item in mats_json_list:
+                                cursor.execute('''INSERT INTO order_materials (order_id, mat_id, mat_name, qty, unit, deducted_batches_json)
+                                                  VALUES (?, ?, ?, ?, ?, ?)''',
+                                               (new_order_id, m_item["mat_id"], m_item["mat_name"], float(m_item["qty"]), m_item["unit"], json.dumps(m_item["deducted_batches"], ensure_ascii=False)))
+                            
+                            conn.commit()
+                            cursor.close()
+                            conn.close()
                             
                             trigger_toast(f"🎉 批量出餐結帳成功！總金額：${total_bill_amount}，實際成本：${actual_total_cost:.2f}", icon="🎉")
                             st.session_state.pos_shopping_cart = []
@@ -407,6 +426,9 @@ with pos_tabs[1]:
                                 cursor.execute("SELECT cost FROM products WHERE prod_id = ?", (mat_id,))
                                 p_cost = cursor.fetchone()[0] or 0.0
                                 cursor.execute("INSERT INTO stock_batches (prod_id, qty, original_qty, expiry_date, inbound_date, vendor_name, cost) VALUES (?, ?, ?, '', ?, '前台作廢退回', ?)", (mat_id, refund_qty, refund_qty, today_str, p_cost))
+                    
+                    # 🔥 同步更新新版訂單結構狀態 (0=已作廢)
+                    cursor.execute("UPDATE orders SET status = 0 WHERE history_id = ?", (target_hist_id,))
                     
                     conn.commit()
                     cursor.close()
@@ -560,6 +582,10 @@ with pos_tabs[1]:
                                 calculated_avg_cost = cursor.fetchone()[0] or 0.0
                                 cursor.execute("UPDATE products SET cost = ? WHERE prod_id = ?", (float(calculated_avg_cost), m_id))
 
+                            # 修改舊歷史單據與正向銷售結構狀態 (2=已微調更正)
+                            cursor.execute("UPDATE history SET action = '多品項收銀結帳-已微調更正' WHERE id = ?", (target_hist_id,))
+                            cursor.execute("UPDATE orders SET status = 2 WHERE history_id = ?", (target_hist_id,))
+
                             details_text_part = f"數量更正紀錄（對應原單號 {target_hist_id}）：出餐明細 {new_confirm_msg}，新總金額 ${new_total_bill:.0f}，更正後精準食材成本 ${final_new_cost:.2f}。 消耗食材: " + ", ".join(log_mats_summary)
                             new_payload_struct = {
                                 "dishes": new_cart_payload, 
@@ -572,15 +598,28 @@ with pos_tabs[1]:
                             }
                             updated_full_log = details_text_part + " ||STRUCT_DATA||" + json.dumps(new_payload_struct, ensure_ascii=False)
                             
-                            # 修改舊歷史單據狀態防止財報重複計算
-                            cursor.execute("UPDATE history SET action = '多品項收銀結帳-已微調更正' WHERE id = ?", (target_hist_id,))
+                            # 獨立寫入新動作審計軌跡並拿取新 ID
+                            new_hist_id = log_history(current_user, "更正點餐數量", updated_full_log)
+                            
+                            # 🔥 同步在新版訂單結構中，為這次更正獨立建立一張新訂單單據 (status=1 正常參與財報計算)
+                            cursor.execute('''INSERT INTO orders (timestamp, user, total_revenue, total_cost, status, history_id)
+                                              VALUES (?, ?, ?, ?, 1, ?)''', 
+                                           (orig_order_timestamp, current_user, float(new_total_bill), float(final_new_cost), new_hist_id))
+                            new_order_id = cursor.lastrowid
+                            
+                            for d_item in new_cart_payload:
+                                cursor.execute('''INSERT INTO order_items (order_id, prod_id, prod_name, qty, price)
+                                                  VALUES (?, ?, ?, ?, ?)''',
+                                               (new_order_id, d_item["prod_id"], d_item["prod_name"], float(d_item["qty"]), float(d_item["price"])))
+                                               
+                            for m_item in new_mats_payload:
+                                cursor.execute('''INSERT INTO order_materials (order_id, mat_id, mat_name, qty, unit, deducted_batches_json)
+                                                  VALUES (?, ?, ?, ?, ?, ?)''',
+                                               (new_order_id, m_item["mat_id"], m_item["mat_name"], float(m_item["qty"]), m_item["unit"], json.dumps(m_item["deducted_batches"], ensure_ascii=False)))
 
                             conn.commit()
                             cursor.close()
                             conn.close()
-                            
-                            # 獨立寫入新動作審計軌跡
-                            log_history(current_user, "更正點餐數量", updated_full_log)
                             
                             # 清除該訂單的臨時加點暫存池
                             if add_pool_key in st.session_state:
@@ -870,7 +909,7 @@ with pos_tabs[2]:
                         log_history(
                             current_user, 
                              f"修正餐點參數-整鍋拆分配方-{pot_base_name}", 
-                             f"透過 B模式 創立整鍋基底餐點：{pot_base_name}。整鍋物料總成本 ${total_pot_cost:.2f}。成功產出大碗成本 ${single_large_cost:.2f}/小碗成本 ${single_small_cost:.2f}。"
+                             f"透過 B模式 創立整鍋基底餐點：{pot_base_name}。整鍋物料總成本 ${total_pot_cost:.2f}。成功產出大碗成本 ${single_large_cost:.2f}/小碗成本 ${single_small_cost:.2f}."
                         )
                         trigger_toast(f"🎉 成功建立 【{pot_base_name}】 大/小碗成品餐點並加入菜單！", icon="🥣")
                         st.session_state.pot_recipe_pool = []
