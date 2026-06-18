@@ -292,7 +292,7 @@ with pos_tabs[0]:
 
 
 # ==========================================
-# 分頁 2：修改當日出餐數量與作廢（分離獨立紀錄歷史版）
+# 分頁 2：修改當日出餐數量與作廢（新增：支援補加漏點餐點）
 # ==========================================
 with pos_tabs[1]:
     st.markdown("##### 📝 當日成功核准出餐紀錄管理面版")
@@ -303,7 +303,7 @@ with pos_tabs[1]:
     conn = sqlite3.connect('inventory.db', timeout=20.0)
     df_today_orders = pd.read_sql_query('''
         SELECT id, timestamp, user, details FROM history 
-        WHERE action = '多品項收銀結帳' AND timestamp BETWEEN ? AND ?
+        WHERE action IN ('多品項收銀結帳', '更正點餐數量') AND timestamp BETWEEN ? AND ?
         ORDER BY id DESC
     ''', conn, params=(today_start, today_end))
     conn.close()
@@ -338,11 +338,12 @@ with pos_tabs[1]:
             else:
                 parsed_orders_cache[hist_id] = {"is_structured": False, "orig_timestamp": orig_time}
                 
-            brief_match = re.search(r"出餐明細 (.+?)，總金額", raw_text)
+            brief_match = re.search(r"出餐明細 (.+?)，(?:新)?總金額", raw_text)
             brief = brief_match.group(1) if brief_match else "明細解析失敗"
             order_options.append(f"單號 {hist_id} | 時間: {row['timestamp'].split(' ')[1]} | 明細: {brief}")
 
-        selected_order_str = st.selectbox("🎯 請選擇欲更正或作廢的當日出餐紀錄：", order_options)
+        # 使用更明確的 key 防止跨分頁狀態干擾
+        selected_order_str = st.selectbox("🎯 請選擇欲更正或作廢的當日出餐紀錄：", order_options, key="void_order_select_box")
         target_hist_id = int(selected_order_str.split("單號 ")[1].split(" |")[0])
         matched_order_row = df_today_orders[df_today_orders['id'] == target_hist_id].iloc[0]
         order_details_text = matched_order_row['details']
@@ -352,6 +353,7 @@ with pos_tabs[1]:
         order_data = parsed_orders_cache[target_hist_id]
         orig_order_timestamp = order_data["orig_timestamp"] 
 
+        # 解析現有餐點品項
         if order_data["is_structured"]:
             parsed_dishes = [(d["prod_name"], d["qty"], d["prod_id"]) for d in order_data["dishes"]]
             parsed_total_revenue = order_data["total_revenue"]
@@ -422,23 +424,66 @@ with pos_tabs[1]:
                     st.error(f"執行作廢失敗：{e}")
 
         elif "數量微調" in manage_action:
+            # ==========================================
+            # ✨ 【關鍵新增功能】：現場補加當初漏點的餐點區
+            # ==========================================
+            st.markdown("----")
+            st.markdown("##### ➕ 補加當初漏點的餐點品項：")
+            
+            # 使用 Session State 初始化這筆單據獨立的「額外加點暫存池」
+            add_pool_key = f"order_add_pool_{target_hist_id}"
+            if add_pool_key not in st.session_state:
+                st.session_state[add_pool_key] = []
+                
+            col_add_order1, col_add_order2 = st.columns([3, 1])
+            with col_add_order1:
+                # 排除已經點購的品項，避免下拉重複選取
+                existing_names = [d[0] for d in parsed_dishes]
+                available_dishes = existing_dishes[~existing_dishes['prod_name'].isin(existing_names)]
+                
+                dish_append_options = ["--- 請選取欲補加的餐點 ---"] + available_dishes['prod_name'].tolist()
+                selected_append_dish = st.selectbox("選取菜單上要補加的品項", dish_append_options, key=f"append_dish_select_{target_hist_id}")
+            with col_add_order2:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("➕ 補加進清單", use_container_width=True, key=f"append_dish_btn_{target_hist_id}"):
+                    if selected_append_dish == "--- 請選取欲補加的餐點 ---":
+                        st.error("請先選擇要補加的餐點品項！")
+                    else:
+                        matched_append = existing_dishes[existing_dishes['prod_name'] == selected_append_dish].iloc[0]
+                        # 檢查加加池是否已有，沒有就新增
+                        if not any(x[0] == matched_append['prod_name'] for x in st.session_state[add_pool_key]):
+                            st.session_state[add_pool_key].append((matched_append['prod_name'], 1, matched_append['prod_id']))
+                            trigger_toast(f"已將漏點的 【{matched_append['prod_name']}】 補配至修改畫面上！", icon="➕")
+                            st.rerun()
+                            
+            # 將補加暫存池裡面的東西合併進當前要顯示的餐點清單中
+            for app_item in st.session_state[add_pool_key]:
+                if not any(x[0] == app_item[0] for x in parsed_dishes):
+                    parsed_dishes.append(app_item)
+            # ==========================================
+
             st.markdown("###### 📝 請在下方輸入該單「正確」的餐點數量：")
             new_dish_qtys = {}
             has_qty_changed = False
             
             for d_name, d_qty, d_id in parsed_dishes:
-                new_q = st.number_input(f"【{d_name}】之正確出餐份數 (原為 {d_qty} 份)", min_value=0, value=int(d_qty), step=1, key=f"edit_qty_{d_name}")
+                # 如果是剛剛新補加進來的餐點，原數量提示顯示為 0 份
+                is_new_appended = any(x[0] == d_name for x in st.session_state.get(add_pool_key, []))
+                label_txt = f"【{d_name}】之正確出餐份數 (原單無此餐點)" if is_new_appended else f"【{d_name}】之正確出餐份數 (原為 {d_qty} 份)"
+                
+                new_q = st.number_input(label_txt, min_value=0, value=int(d_qty), step=1, key=f"edit_qty_{d_name}_{target_hist_id}")
                 new_dish_qtys[d_name] = new_q
                 if new_q != int(d_qty):
                     has_qty_changed = True
 
-            if st.button("💾 儲存出餐數量變更", type="primary", use_container_width=True):
+            if st.button("💾 儲存出餐數量變更", type="primary", use_container_width=True, key=f"save_qty_edit_btn_{target_hist_id}"):
                 if not has_qty_changed:
                     st.info("數量沒有任何變動，無需修正。")
                 else:
                     conn = sqlite3.connect('inventory.db', timeout=20.0)
                     cursor = conn.cursor()
                     try:
+                        # 先將舊單先前消耗的原物料全部加回 (回滾庫存)
                         for mat in parsed_mats:
                             if mat.get("deducted_batches", []):
                                 for b_info in mat["deducted_batches"]:
@@ -451,6 +496,7 @@ with pos_tabs[1]:
                         new_confirm_msg = ""
                         new_cart_payload = []
 
+                        # 依據畫面上填寫的新數量，重新核算所有的餐點與物料需求
                         for d_name, _, d_id in parsed_dishes:
                             new_qty_val = new_dish_qtys[d_name]
                             cursor.execute("SELECT prod_id, price FROM products WHERE prod_name = ?", (d_name,))
@@ -473,6 +519,7 @@ with pos_tabs[1]:
                         new_mats_payload = []
                         log_mats_summary = []
 
+                        # 重新執行 FIFO 扣減新用量
                         for m_id, total_need in total_mats_needed_new.items():
                             cursor.execute("SELECT prod_name, use_unit FROM products WHERE prod_id = ?", (m_id,))
                             m_info = cursor.fetchone()
@@ -497,7 +544,7 @@ with pos_tabs[1]:
                             cursor.close()
                             conn.close()
                         else:
-                            # 功能改善 1 修正：扣除新用量（上面已執行 deduct_stock_fifo）後，才計算移動平均成本，確保取得最終正確庫存狀態下的成本！
+                            # 重新計算移動平均成本
                             for m_id in total_mats_needed_new.keys():
                                 matched_hist_mat = next((m for m in parsed_mats if m["mat_id"] == m_id), None)
                                 hist_cost_fallback = 0.0
@@ -528,19 +575,21 @@ with pos_tabs[1]:
                             }
                             updated_full_log = details_text_part + " ||STRUCT_DATA||" + json.dumps(new_payload_struct, ensure_ascii=False)
                             
-                            # ----------------- 【在此處插入修改指令】 -----------------
-                            # 將原本舊的那筆錯誤歷史紀錄 action 改掉，防止財務報告重複計算
+                            # 修改舊歷史單據狀態防止財報重複計算
                             cursor.execute("UPDATE history SET action = '多品項收銀結帳-已微調更正' WHERE id = ?", (target_hist_id,))
-                            # --------------------------------------------------------
 
                             conn.commit()
                             cursor.close()
                             conn.close()
                             
-                            # 💡 核心安全修正：將 log_history 移到外部獨立 conn 之後執行，防止 cursor 重疊造成的鎖死
+                            # 獨立寫入新動作審計軌跡
                             log_history(current_user, "更正點餐數量", updated_full_log)
                             
-                            trigger_toast(f"🎉 單號 {target_hist_id} 的數量更正單已獨立成立，庫存成本完美同步！", icon="✏️")
+                            # 清除該訂單的臨時加點暫存池
+                            if add_pool_key in st.session_state:
+                                del st.session_state[add_pool_key]
+                                
+                            trigger_toast(f"🎉 單號 {target_hist_id} 的數量更正單已獨立成立（包含補加漏點餐點），庫存與成本完美同步！", icon="✏️")
                             st.rerun()
                     except Exception as e:
                         conn.rollback()
@@ -581,7 +630,7 @@ with pos_tabs[2]:
                 st.markdown(f"**使用單位：** `{db_unit_a if db_unit_a else '未選擇'}`")
                 
             with col_cus_mat3:
-                custom_max_val = 100000.0  # 提供一個合理的上限，避免 Streamlit 報錯
+                custom_max_val = 100000.0  
                 cus_mat_qty = st.number_input("單份餐點用量", min_value=0.0, max_value=custom_max_val, value=0.0, step=1.0, key="cus_qty_selector")
                 
             if 'custom_recipe_pool' not in st.session_state:
@@ -758,7 +807,6 @@ with pos_tabs[2]:
 
                 total_shares = (pot_large_servings * 1.5) + (pot_small_servings * 1.0)
                 
-                # 功能改善 2 修正：極致防呆，若某種碗數設定為 0，其分配成本直接歸零！
                 if total_shares > 0:
                     cost_per_share = total_pot_cost / total_shares
                     single_large_cost = cost_per_share * 1.5 if pot_large_servings > 0 else 0.0
@@ -766,7 +814,6 @@ with pos_tabs[2]:
                 else:
                     single_large_cost, single_small_cost = 0.0, 0.0
 
-                # 💡 Bug 修正 1：極致安全判定，防止 pot_large_price 或 pot_small_price 為 0 時造成的 ZeroDivisionError
                 st.markdown(f"""
                 > 📊 **🥣 整鍋成本拆分攤算即時面板：**
                 > * 投入這整鍋的【**原物料總成本**】： **${total_pot_cost:,.2f} 元**
@@ -890,7 +937,7 @@ with pos_tabs[2]:
                     column_config={
                         "食材編號": st.column_config.TextColumn("物料編號", disabled=True),
                         "食材名稱": st.column_config.TextColumn("物料名稱", disabled=True),
-                        "單位用量": st.column_config.NumberColumn("單份標準用量", format="%.4f", min_value=0.0), # 允許使用者在此輸入 0 以配合刪除或歸零意圖
+                        "單位用量": st.column_config.NumberColumn("單份標準用量", format="%.4f", min_value=0.0), 
                         "單位": st.column_config.TextColumn("單位", disabled=True),
                         "移除": st.column_config.CheckboxColumn("勾選移除", default=False)
                     },
@@ -919,8 +966,6 @@ with pos_tabs[2]:
 
             new_dish_price = st.number_input("💵 調整此餐點最終門市售價 (必須為大於 0 的整數)", step=1, key="edit_price_input", value=max(old_price, 1))
             
-            # 💡 Bug 修正 2：極致防呆優化。我們應該只檢查「確定要保留，且沒有被勾選移除」的物料。如果店家將用量改為 0 或者是勾選移除，就不應該阻斷存檔。
-            # 由於在上面經由 data_editor 觸發 rerun 時已過濾掉勾選移除的項目，此處直接判斷當前清單中是否有真正小於等於 0 且需要留著的品項。
             recipe_has_negative = any(float(item["單位用量"]) <= 0 for item in st.session_state.editing_recipe_list)
             
             if st.button("💾 確認儲存餐點售價與完整配方變更", type="primary", use_container_width=True):
@@ -929,7 +974,7 @@ with pos_tabs[2]:
                 elif recipe_has_negative:
                     st.error("❌ 錯誤變更：保留的配方用量必須大於 0！(若要刪除物料請勾選後方的「移除」並重試)。儲存失敗。")
                 elif not st.session_state.editing_recipe_list:
-                    st.error("❌ 錯誤變更：修改後的配方清單不能為空！儲存失敗。")
+                    st.error("❌ 錯誤變更：修改後的配方清單不能為空！儲存失敗. ")
                 else:
                     change_details = f"修改餐點【{target_dish_name}({td_id})】配置：\n"
                     if new_dish_price != old_price:
