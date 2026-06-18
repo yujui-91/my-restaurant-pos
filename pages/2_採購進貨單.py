@@ -4,7 +4,8 @@ import pandas as pd
 import sqlite3
 import re
 from datetime import datetime, timedelta
-from database.db_core import log_history, get_next_raw_id, get_next_supply_id, get_next_bill_id, update_purchase_batch, trigger_toast, show_pending_toast
+# ✨ 關鍵相容修正：引入 get_db_conn
+from database.db_core import log_history, get_next_raw_id, get_next_supply_id, get_next_bill_id, update_purchase_batch, trigger_toast, show_pending_toast, get_db_conn
 
 # 檢查 session_state 中的登入狀態，若未登入則阻斷畫面並提示
 # if not st.session_state.get("password_correct", False):
@@ -28,17 +29,16 @@ with po_tabs[0]:
     elif "用品" in item_type: prefix = 'S'
     else: prefix = 'C'
 
-    # 安全替換：讀取既有項目清單
-    conn = sqlite3.connect('inventory.db')
+    # ✨ 關鍵相容修正：改為 get_db_conn 與 cursor fetch 轉 DataFrame
+    conn = get_db_conn()
     cursor = conn.cursor()
     cursor.execute(
         "SELECT prod_id, prod_name, purchase_unit, use_unit, conversion_factor, safety_stock, status FROM products WHERE prod_id LIKE ?", 
         (f"{prefix}%",)
     )
-    rows_items = cursor.fetchall()
-    cols_items = [desc[0] for desc in cursor.description]
-    existing_items_df = pd.DataFrame(rows_items, columns=cols_items)
-    cursor.close()
+    rows_po = cursor.fetchall()
+    cols_po = [desc[0] for desc in cursor.description]
+    existing_items_df = pd.DataFrame(rows_po, columns=cols_po)
     conn.close()
 
     st.markdown("##### 🔍 1. 品項選取：")
@@ -54,7 +54,7 @@ with po_tabs[0]:
             if row['status'] == 0:
                 options_display.append(f"{row['prod_name']} (🔴 已下架，採購將自動啟用)")
             else:
-                options_display.append(row['prod_name'])
+                options_display.append(row['status'] == 0 and f"{row['prod_name']} (🔴 已下架，採購將自動啟用)" or row['prod_name'])
                 
         chosen_select_display = st.selectbox("下拉搜尋現有品項", options_display, index=0)
         
@@ -72,7 +72,8 @@ with po_tabs[0]:
         if chosen_input_name.strip() != "":
             chosen_name = chosen_input_name.strip()
             
-            conn = sqlite3.connect('inventory.db')
+            # ✨ 關鍵相容修正：改為 get_db_conn
+            conn = get_db_conn()
             cursor = conn.cursor()
             cursor.execute("SELECT prod_id, purchase_unit, use_unit, conversion_factor, safety_stock FROM products WHERE prod_name = ?", (chosen_name,))
             dup_check = cursor.fetchone()
@@ -142,7 +143,8 @@ with po_tabs[0]:
                 st.error("❌ 錯誤：【本次進貨採購總金額】必須大於 0！")
             else:
                 today_str = datetime.now().strftime("%Y-%m-%d")
-                conn = sqlite3.connect('inventory.db')
+                # ✨ 關鍵相容修正：改為 get_db_conn
+                conn = get_db_conn()
                 cursor = conn.cursor()
                 
                 cursor.execute('''INSERT INTO products 
@@ -254,8 +256,8 @@ with po_tabs[1]:
         
     where_clause = " WHERE " + " AND ".join(query_conditions) if query_conditions else ""
 
-    # 安全替換：讀取歷史採購單
-    conn = sqlite3.connect('inventory.db')
+    # ✨ 關鍵相容修正：改為 get_db_conn
+    conn = get_db_conn()
     cursor = conn.cursor()
     cursor.execute(f'''
         SELECT s.batch_id as 批次編號, s.prod_id as 商品編號, p.prod_name as 商品名稱, 
@@ -268,10 +270,9 @@ with po_tabs[1]:
         {where_clause}
         ORDER BY s.batch_id DESC
     ''', query_params)
-    rows_batches = cursor.fetchall()
-    cols_batches = [desc[0] for desc in cursor.description]
-    df_all_batches = pd.DataFrame(rows_batches, columns=cols_batches)
-    cursor.close()
+    rows_hist_b = cursor.fetchall()
+    cols_hist_b = [desc[0] for desc in cursor.description]
+    df_all_batches = pd.DataFrame(rows_hist_b, columns=cols_hist_b)
     conn.close()
     
     st.divider()
@@ -311,8 +312,10 @@ with po_tabs[1]:
                     key="edit_bill_amount_input"
                 )
             
+            # 從歷史稽核日誌反查先前設定的年份與月份作為預設回退依據
             old_assigned_month_str = ""
-            conn = sqlite3.connect('inventory.db')
+            # ✨ 關鍵相容修正：改為 get_db_conn
+            conn = get_db_conn()
             cursor = conn.cursor()
             cursor.execute("SELECT details FROM history WHERE details LIKE ? ORDER BY id DESC LIMIT 1", (f"%目標歸帳月份:%(賬單批次: {target_batch_id})%",))
             hist_row = cursor.fetchone()
@@ -321,6 +324,7 @@ with po_tabs[1]:
                 hist_row = cursor.fetchone()
             conn.close()
             
+            # 建立預設回退的 Date 物件
             default_edit_date = datetime.now().date()
             if hist_row:
                 target_month_match = re.search(r"目標歸帳月份:\s*(\d{4})-(\d{2})", hist_row[0])

@@ -3,8 +3,8 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 from datetime import datetime
-from database.db_core import log_history, trigger_toast, show_pending_toast
-import streamlit as st
+# ✨ 關鍵相容修正：引入 get_db_conn
+from database.db_core import log_history, trigger_toast, show_pending_toast, get_db_conn
 
 # 檢查 session_state 中的登入狀態，若未登入則阻斷畫面並提示
 # if not st.session_state.get("password_correct", False):
@@ -26,14 +26,19 @@ if "食材" in stock_adj_cate:
 else: 
     prefix_filter = "S%"
 
-conn = sqlite3.connect('inventory.db')
-df_unique_items = pd.read_sql_query('''
+# ✨ 關鍵相容修正：改為 get_db_conn
+conn = get_db_conn()
+cursor = conn.cursor()
+cursor.execute('''
     SELECT DISTINCT p.prod_id, p.prod_name 
     FROM products p
     JOIN stock_batches s ON p.prod_id = s.prod_id
     WHERE p.prod_id LIKE ? AND p.status = 1 AND s.qty > 0
     ORDER BY p.prod_id
-''', conn, params=(prefix_filter,))
+''', (prefix_filter,))
+rows_unique = cursor.fetchall()
+cols_unique = [desc[0] for desc in cursor.description]
+df_unique_items = pd.DataFrame(rows_unique, columns=cols_unique)
 conn.close()
 
 if not df_unique_items.empty:
@@ -41,21 +46,23 @@ if not df_unique_items.empty:
     selected_item_str = st.selectbox("🔍 1. 請先選取欲調整的項目名稱：", item_options)
     target_prod_id = selected_item_str.split(" - ")[0]
     
-    conn = sqlite3.connect('inventory.db')
-    df_batches = pd.read_sql_query('''
+    # ✨ 關鍵相容修正：改為 get_db_conn
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute('''
         SELECT s.batch_id, s.qty, p.use_unit, s.expiry_date, s.inbound_date, s.vendor_name 
         FROM stock_batches s 
         JOIN products p ON s.prod_id = p.prod_id
         WHERE s.prod_id = ? AND s.qty > 0
         ORDER BY s.expiry_date ASC, s.inbound_date ASC
-    ''', conn, params=(target_prod_id,))
+    ''', (target_prod_id,))
+    rows_batches = cursor.fetchall()
+    cols_batches = [desc[0] for desc in cursor.description]
+    df_batches = pd.DataFrame(rows_batches, columns=cols_batches)
     conn.close()
     
     if not df_batches.empty:
-        
-        # 根據開關狀態切換「選擇批次」的外觀排版
         if use_mobile_view:
-            # 📱 手機模式排版：精簡、資訊換行、改用直式單選鈕，避免溢出並方便點擊
             st.markdown("🎯 **2. 請點擊該品項欲更動的進貨批次：**")
             
             mobile_options_map = {}
@@ -76,7 +83,6 @@ if not df_unique_items.empty:
             batch_id_part = mobile_options_map[selected_mobile_label]
             
         else:
-            # 💻 桌機傳統模式排版：保留原有一長條下拉選單
             batch_options = df_batches.apply(
                 lambda r: f"【批次編號: {r['batch_id']}】進貨日: {r['inbound_date']} | 現存: {r['qty']}{r['use_unit']} | 效期: {r['expiry_date'] if r['expiry_date'] else '無'}", 
                 axis=1
@@ -85,7 +91,6 @@ if not df_unique_items.empty:
             selected_batch_row = st.selectbox("🎯 2. 請選擇該品項欲更動的進貨批次：", batch_options)
             batch_id_part = int(selected_batch_row.split("【批次編號: ")[1].split("】")[0])
         
-        # 🛠️ 核心優化：使用安全判斷式，防止 iloc[0] 瞬間找不到資料造成紅色錯誤閃爍
         matched_rows = df_batches[df_batches['batch_id'] == batch_id_part]
         if not matched_rows.empty:
             matched_row = matched_rows.iloc[0]
@@ -99,8 +104,6 @@ if not df_unique_items.empty:
             
             with st.form("inventory_adjustment_form"):
                 adj_type = st.radio("動作選擇", ["過期損耗/報廢 (扣減庫存)", "手動補正(增加庫存)"], horizontal=True)
-                
-                # 🎯 加上明確且唯一的 key="adjust_qty_input" 以綁定會話狀態
                 st.number_input(f"請輸入異動變更的數量 ({unit_label})  ", value=1.0, step=1.0, key="adjust_qty_input")
                 
                 st.markdown("###### 📅 請指定此筆損耗歸屬之完整年份與月份（確保跨年財報精確）：")
@@ -118,10 +121,8 @@ if not df_unique_items.empty:
                 submit_adj = st.form_submit_button("🔧 確認執行庫存異動")
                 
                 if submit_adj:
-                    # 🛑 核心優化：改為讀取 st.session_state 確保同步獲取最新輸入值
                     adj_qty_val = st.session_state.adjust_qty_input
                     
-                    # 🛑 核心防呆：只要輸入小於或等於 0 的數字，立刻拋出錯誤並全面阻斷後續流程
                     if adj_qty_val <= 0:
                         st.error(f"❌ 錯誤：異動變更的數量必須大於 0！您目前的輸入數值為 {adj_qty_val}")
                     else:
@@ -133,7 +134,8 @@ if not df_unique_items.empty:
                         else:
                             final_reason = reason_txt.strip() if reason_txt.strip() != "" else "未填寫原因"
 
-                            conn = sqlite3.connect('inventory.db')
+                            # ✨ 關鍵相容修正：改為 get_db_conn
+                            conn = get_db_conn()
                             cursor = conn.cursor()
                             cursor.execute("SELECT cost FROM products WHERE prod_id = ?", (target_prod_id,))
                             unit_cost = cursor.fetchone()[0] or 0.0

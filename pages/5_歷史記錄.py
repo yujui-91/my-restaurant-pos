@@ -3,6 +3,8 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 from datetime import datetime, timedelta
+# ✨ 關鍵相容修正：引入 get_db_conn
+from database.db_core import get_db_conn
 
 # 檢查 session_state 中的登入狀態，若未登入則阻斷畫面並提示
 # if not st.session_state.get("password_correct", False):
@@ -29,7 +31,6 @@ with col_f1:
     elif history_time_option in ["過去 7 天"]:
         history_time_option = "過去 7 天"
 
-# 處理時間區間邏輯
 now = datetime.now()
 if history_time_option == "今天":
     start_dt = now.replace(hour=0, minute=0, second=0)
@@ -69,7 +70,8 @@ st.caption(f"目前查看審計區間：{start_dt.strftime('%Y-%m-%d %H:%M:%S')}
 # ==========================================
 # 📊 依據「大方向」條件組合 SQL 撈出最終歷史紀錄
 # ==========================================
-conn = sqlite3.connect("inventory.db")
+# ✨ 關鍵相容修正：改為 get_db_conn 與 手動 cursor.fetchall
+conn = get_db_conn()
 cursor = conn.cursor()
 
 sql_query = "SELECT timestamp AS 時間, user AS 操作人, action AS 動作, details AS 詳細說明 FROM history WHERE timestamp BETWEEN ? AND ?"
@@ -81,12 +83,10 @@ if selected_main_action != "--- 全部動作項目 ---":
 
 sql_query += " ORDER BY id DESC"
 
-# 安全替換：手動讀取歷史軌跡
 cursor.execute(sql_query, sql_params)
 rows_hist = cursor.fetchall()
 cols_hist = [desc[0] for desc in cursor.description]
 df_hist = pd.DataFrame(rows_hist, columns=cols_hist)
-cursor.close()
 conn.close()
 
 # ==========================================

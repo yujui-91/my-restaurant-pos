@@ -6,7 +6,8 @@ import re
 import json
 import plotly.express as px
 from datetime import datetime, timedelta
-from database.db_core import show_pending_toast
+# ✨ 關鍵相容修正：引入 get_db_conn
+from database.db_core import show_pending_toast, get_db_conn
 
 # 檢查 session_state 中的登入狀態，若未登入則阻斷畫面並提示
 # if not st.session_state.get("password_correct", False):
@@ -24,7 +25,7 @@ use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=Fal
 # ==========================================
 report_option = st.selectbox(
     "📅 請選擇財務統計區間：", 
-    ["今天", "過去 7 天", "過去 30 定", "自訂區間 (自選起訖日期)"], 
+    ["今天", "過去 7 天", "過去 30 天", "自訂區間 (自選起訖日期)"], 
     key="finance_time_filter"
 )
 
@@ -58,25 +59,26 @@ while current_ptr <= end_date:
     current_ptr += timedelta(days=1)
 
 # ==========================================
-# 📊 資料庫核心撈取與高速 SQL 底層聚合（徹底抗卡頓）
+# 📊 資料庫核心撈取與高速 SQL 底層聚合
 # ==========================================
-conn = sqlite3.connect('inventory.db')
+# ✨ 關鍵相容修正：改為 get_db_conn
+conn = get_db_conn()
 cursor = conn.cursor()
 
-# 1. 營收總計安全替換
+# 1. 營業額與精準成本摘要
 cursor.execute('''
     SELECT COALESCE(SUM(total_revenue), 0.0) AS rev, COALESCE(SUM(total_cost), 0.0) AS cst
     FROM orders 
     WHERE status = 1 AND timestamp BETWEEN ? AND ?
 ''', (start_str, end_str))
-rows_sales = cursor.fetchall()
-cols_sales = [desc[0] for desc in cursor.description]
-df_sales_summary = pd.DataFrame(rows_sales, columns=cols_sales)
+r_summary = cursor.fetchall()
+c_summary = [desc[0] for desc in cursor.description]
+df_sales_summary = pd.DataFrame(r_summary, columns=c_summary)
 
 total_revenue = float(df_sales_summary.iloc[0]['rev'])
 total_food_cost = float(df_sales_summary.iloc[0]['cst'])
 
-# 2. 餐點排行安全替換
+# 2. 餐點排行明細
 cursor.execute('''
     SELECT oi.prod_name AS 餐點名稱, SUM(oi.qty) AS 銷售份數
     FROM order_items oi
@@ -85,13 +87,12 @@ cursor.execute('''
     GROUP BY oi.prod_name
     ORDER BY 銷售份數 DESC
 ''', (start_str, end_str))
-rows_dish_rank = cursor.fetchall()
-cols_dish_rank = [desc[0] for desc in cursor.description]
-df_dish_rank_raw = pd.DataFrame(rows_dish_rank, columns=cols_dish_rank)
-
+r_dish = cursor.fetchall()
+c_dish = [desc[0] for desc in cursor.description]
+df_dish_rank_raw = pd.DataFrame(r_dish, columns=c_dish)
 dish_sales = dict(zip(df_dish_rank_raw['餐點名稱'], df_dish_rank_raw['銷售份數']))
 
-# 3. 原物料排行安全替換
+# 3. 原物料消耗明細
 cursor.execute('''
     SELECT om.mat_name AS 食材物料, SUM(om.qty) AS 消耗總數量
     FROM order_materials om
@@ -100,32 +101,32 @@ cursor.execute('''
     GROUP BY om.mat_name
     ORDER BY 消耗總數量 DESC
 ''', (start_str, end_str))
-rows_mat_rank = cursor.fetchall()
-cols_mat_rank = [desc[0] for desc in cursor.description]
-df_mat_rank_raw = pd.DataFrame(rows_mat_rank, columns=cols_mat_rank)
-
+r_mat = cursor.fetchall()
+c_mat = [desc[0] for desc in cursor.description]
+df_mat_rank_raw = pd.DataFrame(r_mat, columns=c_mat)
 material_usage = dict(zip(df_mat_rank_raw['食材物料'], df_mat_rank_raw['消耗總數量']))
 
-# 4. 損耗費用安全替換
+# 4. 損耗記錄
 cursor.execute('''
     SELECT action, details, timestamp FROM history 
     WHERE action LIKE '手動調整庫存-%'
 ''')
-rows_expenses = cursor.fetchall()
-cols_expenses = [desc[0] for desc in cursor.description]
-df_expenses_raw = pd.DataFrame(rows_expenses, columns=cols_expenses)
+r_exp = cursor.fetchall()
+c_exp = [desc[0] for desc in cursor.description]
+df_expenses_raw = pd.DataFrame(r_exp, columns=c_exp)
 
 total_stock_loss = 0.0
 for _, row in df_expenses_raw.iterrows():
     if "品項:C" not in row['action']:
         details = row['details']
-        
         target_month_match = re.search(r"目標歸帳月份:\s*(\d{4}-\d{2})", details)
         if target_month_match:
             assigned_month = target_month_match.group(1)
         else:
-            try: assigned_month = datetime.strptime(row['timestamp'], "%Y-%m-%d %H:%M:%S").strftime("%Y-%m")
-            except: assigned_month = ""
+            try:
+                assigned_month = datetime.strptime(row['timestamp'], "%Y-%m-%d %H:%M:%S").strftime("%Y-%m")
+            except:
+                assigned_month = ""
         
         if assigned_month in covered_target_months:
             amt_match = re.search(r"總值變動:?\s*\$?(-?[\d\.]+)", details)
@@ -133,7 +134,7 @@ for _, row in df_expenses_raw.iterrows():
                 change_amt = float(amt_match.group(1))
                 total_stock_loss += abs(change_amt) if change_amt < 0 else 0.0
 
-# 5. 進貨明細安全替換
+# 5. 物料進貨明細
 cursor.execute('''
     SELECT s.batch_id, s.prod_id, p.prod_name, s.original_qty, s.cost, s.inbound_date, p.purchase_unit
     FROM stock_batches s
@@ -142,9 +143,9 @@ cursor.execute('''
       AND s.inbound_date BETWEEN ? AND ?
     ORDER BY s.inbound_date DESC, s.batch_id DESC
 ''', (start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")))
-rows_purchase = cursor.fetchall()
-cols_purchase = [desc[0] for desc in cursor.description]
-df_actual_purchase_details = pd.DataFrame(rows_purchase, columns=cols_purchase)
+r_actual = cursor.fetchall()
+c_actual = [desc[0] for desc in cursor.description]
+df_actual_purchase_details = pd.DataFrame(r_actual, columns=c_actual)
 
 total_purchase_cost = 0.0
 purchase_records = []
@@ -153,10 +154,14 @@ for _, row in df_actual_purchase_details.iterrows():
     total_purchase_cost += this_purchase_amt
     
     p_id = row['prod_id']
-    if p_id.startswith('R'): cate_label = "食材 (R)"
-    elif p_id.startswith('C'): cate_label = "營運帳單 (C)"
-    elif p_id.startswith('S'): cate_label = "用品 (S)"
-    else: cate_label = "其他"
+    if p_id.startswith('R'):
+        cate_label = "食材 (R)"
+    elif p_id.startswith('C'):
+        cate_label = "營運帳單 (C)"
+    elif p_id.startswith('S'):
+        cate_label = "用品 (S)"
+    else:
+        cate_label = "其他"
 
     purchase_records.append({
         "進貨日期": row['inbound_date'],
@@ -166,27 +171,25 @@ for _, row in df_actual_purchase_details.iterrows():
         "進貨總額": this_purchase_amt
     })
 
-# 6. C類特殊月度歸帳安全替換
+# 6. 固定費用特殊歸帳歷史
 cursor.execute('''
     SELECT s.batch_id, s.prod_id, p.prod_name, s.qty, s.cost, s.inbound_date
     FROM stock_batches s
     JOIN products p ON s.prod_id = p.prod_id
     WHERE s.prod_id LIKE 'C%'
 ''')
-rows_c_batches = cursor.fetchall()
-cols_c_batches = [desc[0] for desc in cursor.description]
-df_c_batches = pd.DataFrame(rows_c_batches, columns=cols_c_batches)
+r_cb = cursor.fetchall()
+c_cb = [desc[0] for desc in cursor.description]
+df_c_batches = pd.DataFrame(r_cb, columns=c_cb)
 
 cursor.execute('''
     SELECT id, action, details, timestamp FROM history
     WHERE details LIKE '%目標歸帳月份:%'
     ORDER BY id ASC
 ''')
-rows_c_hist = cursor.fetchall()
-cols_c_hist = [desc[0] for desc in cursor.description]
-df_c_history = pd.DataFrame(rows_c_hist, columns=cols_c_hist)
-
-cursor.close()
+r_ch = cursor.fetchall()
+c_ch = [desc[0] for desc in cursor.description]
+df_c_history = pd.DataFrame(r_ch, columns=c_ch)
 conn.close()
 
 batch_target_months = {}
@@ -205,10 +208,13 @@ total_op_expense = 0.0
 c_expense_records = []
 for _, row in df_c_batches.iterrows():
     b_id = int(row['batch_id'])
-    if b_id in batch_target_months: assigned_month = batch_target_months[b_id]
+    if b_id in batch_target_months:
+        assigned_month = batch_target_months[b_id]
     else:
-        try: assigned_month = datetime.strptime(row['inbound_date'], "%Y-%m-%d").strftime("%Y-%m")
-        except: assigned_month = ""
+        try:
+            assigned_month = datetime.strptime(row['inbound_date'], "%Y-%m-%d").strftime("%Y-%m")
+        except:
+            assigned_month = ""
             
     if assigned_month in covered_target_months:
         expense_val = float(row['qty'] * row['cost'])
@@ -260,7 +266,8 @@ if use_mobile_view:
     if dish_sales:
         rank_df = pd.DataFrame(list(dish_sales.items()), columns=["餐點名稱", "銷售份數"]).sort_values(by="銷售份數", ascending=False)
         st.dataframe(rank_df, hide_index=True, use_container_width=True)
-    else: st.info("💡 當前選定期間內尚無餐點銷售紀錄。")
+    else:
+        st.info("💡 當前選定期間內尚無餐點銷售紀錄。")
         
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -268,22 +275,26 @@ if use_mobile_view:
     if material_usage:
         mat_df = pd.DataFrame(list(material_usage.items()), columns=["食材物料", "消耗總數量"]).sort_values(by="消耗總數量", ascending=False)
         st.dataframe(mat_df, hide_index=True, use_container_width=True)
-    else: st.info("💡 當前選定期間內尚無食材消耗數據。")
+    else:
+        st.info("💡 當前選定期間內尚無食材消耗數據。")
 else:
     left_col, right_col = st.columns(2)
+
     with left_col:
         st.markdown("### 餐點銷售排行")
         if dish_sales:
             rank_df = pd.DataFrame(list(dish_sales.items()), columns=["餐點名稱", "銷售份數"]).sort_values(by="銷售份數", ascending=False)
             st.dataframe(rank_df, hide_index=True, use_container_width=True)
-        else: st.info("💡 當前選定期間內尚無餐點銷售紀錄。")
+        else:
+            st.info("💡 當前選定期間內尚無餐點銷售紀錄。")
 
     with right_col:
         st.markdown("### 原物料消耗排行")  
         if material_usage:
             mat_df = pd.DataFrame(list(material_usage.items()), columns=["食材物料", "消耗總數量"]).sort_values(by="消耗總數量", ascending=False)
             st.dataframe(mat_df, hide_index=True, use_container_width=True)
-        else: st.info("💡 當前選定期間內尚無食材消耗數據。")
+        else:
+            st.info("💡 當前選定期間內尚無食材消耗數據。")
 
 st.divider()
 

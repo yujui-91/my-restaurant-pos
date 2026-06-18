@@ -3,8 +3,8 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 from datetime import datetime
-from database.db_core import log_history, trigger_toast, show_pending_toast
-import streamlit as st
+# ✨ 關鍵相容修正：引入 get_db_conn
+from database.db_core import log_history, trigger_toast, show_pending_toast, get_db_conn
 
 # 檢查 session_state 中的登入狀態，若未登入則阻斷畫面並提示
 # if not st.session_state.get("password_correct", False):
@@ -22,13 +22,18 @@ current_user = st.session_state.get('current_user', '老 闆')
 audit_cate_filter = st.radio("🗂️ 請選擇盤點項目類別：", ["食材 (R)", "用品 (S)"], horizontal=True)
 prefix_char = "R%" if "食材" in audit_cate_filter else "S%"
 
-conn = sqlite3.connect('inventory.db')
-df_products_in_stock = pd.read_sql_query('''
+# ✨ 關鍵相容修正：改為 get_db_conn
+conn = get_db_conn()
+cursor = conn.cursor()
+cursor.execute('''
     SELECT DISTINCT s.prod_id as 商品編號, p.prod_name as 商品名稱 
     FROM stock_batches s 
     JOIN products p ON s.prod_id = p.prod_id 
     WHERE s.prod_id LIKE ? AND s.qty > 0
-''', conn, params=(prefix_char,))
+''', (prefix_char,))
+rows_audit = cursor.fetchall()
+cols_audit = [desc[0] for desc in cursor.description]
+df_products_in_stock = pd.DataFrame(rows_audit, columns=cols_audit)
 conn.close()
 
 if not df_products_in_stock.empty:
@@ -38,24 +43,25 @@ if not df_products_in_stock.empty:
     )
     target_prod_id = selected_product_str.split(" - ")[0]
     
-    conn = sqlite3.connect('inventory.db')
-    df_batches = pd.read_sql_query('''
+    # ✨ 關鍵相容修正：改為 get_db_conn
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute('''
         SELECT s.batch_id, s.qty, s.expiry_date, s.inbound_date, s.vendor_name, s.vendor_phone, p.use_unit, p.cost
         FROM stock_batches s
         JOIN products p ON s.prod_id = p.prod_id
         WHERE s.prod_id = ? AND s.qty > 0
         ORDER BY s.inbound_date ASC, s.batch_id ASC
-    ''', conn, params=(target_prod_id,))
+    ''', (target_prod_id,))
+    rows_batches = cursor.fetchall()
+    cols_batches = [desc[0] for desc in cursor.description]
+    df_batches = pd.DataFrame(rows_batches, columns=cols_batches)
     conn.close()
     
     if not df_batches.empty:
-        
-        # 根據是否啟用手機模式，決定第二步「選擇批次」的渲染外觀
         if use_mobile_view:
-            # 📱 手機模式排版：將字串優化換行，並改用直式單選鈕鋪開，方便大拇指直接點擊
             st.markdown("🎯 **2. 請點擊欲核實數量的特定進貨批次：**")
             
-            # 建立易讀的對照字典，將簡化且換行的直式格式作為 radio 的標籤顯示
             mobile_options_map = {}
             for _, r in df_batches.iterrows():
                 label = (
@@ -74,7 +80,6 @@ if not df_products_in_stock.empty:
             target_batch_id = mobile_options_map[selected_mobile_label]
             
         else:
-            # 💻 桌機傳統模式排版：保留傳統一長條下拉選單
             batch_options = df_batches.apply(
                 lambda r: f"【批次 {int(r['batch_id'])}】進貨日: {r['inbound_date']} | 現存: {r['qty']}{r['use_unit']} | 效期: {r['expiry_date'] if r['expiry_date'] else '無'} | 供應商: {r['vendor_name'] if r['vendor_name'] else '未填'}", 
                 axis=1
@@ -83,7 +88,6 @@ if not df_products_in_stock.empty:
             selected_batch_str = st.selectbox("🎯 2. 請選擇欲核實數量的特定批次編號：", batch_options)
             target_batch_id = int(selected_batch_str.split("【批次 ")[1].split("】")[0])
         
-        # 🛠️ 核心優化：使用安全判斷式，防止 iloc[0] 瞬間找不到資料造成頁面底部紅色錯誤閃爍
         matched_rows = df_batches[df_batches['batch_id'] == target_batch_id]
         if not matched_rows.empty:
             matched_batch = matched_rows.iloc[0]
@@ -99,12 +103,11 @@ if not df_products_in_stock.empty:
             st.markdown(f"""
             > 📊 **當前選定批次防呆面板：**
             > * 商品名稱：**{item_name}** ({target_prod_id})
-            > * 盤點批次：**批次編號 {target_batch_id}** (進貨日期: {orig_inbound})
+            > * 盤點批次：**盤點批次編號 {target_batch_id}** (進貨日期: {orig_inbound})
             > * 系統理論庫存：**{theoretical_qty:,.2f} {unit_label}**
             """)
             
             with st.form("precise_audit_form"):
-                # 🎯 移除 min_value 限制，並加上明確且唯一的 key="audit_qty_input" 以綁定會話狀態
                 st.number_input(
                     f"填寫該批次現場數量 ({unit_label})", 
                     value=theoretical_qty, 
@@ -115,10 +118,8 @@ if not df_products_in_stock.empty:
                 submit_audit = st.form_submit_button("💾 更新此批次庫存")
                 
                 if submit_audit:
-                    # 🛑 核心優化：改為讀取 st.session_state 確保同步獲取最新實盤輸入值
                     actual_qty_val = st.session_state.audit_qty_input
                     
-                    # 🛑 核心防呆：現場實盤數量絕不可能低於 0，若小於 0 則立刻拋錯阻斷
                     if actual_qty_val < 0:
                         st.error(f"❌ 錯誤：現場【實盤總數量】絕對不能小於 0！您目前的輸入數值為 {actual_qty_val}")
                     else:
@@ -131,7 +132,8 @@ if not df_products_in_stock.empty:
                         else:
                             audit_status = "完全吻合 (無誤差)"
                         
-                        conn = sqlite3.connect('inventory.db')
+                        # ✨ 關鍵相容修正：改為 get_db_conn
+                        conn = get_db_conn()
                         cursor = conn.cursor()
                         cursor.execute('''
                             UPDATE stock_batches 
@@ -152,7 +154,7 @@ if not df_products_in_stock.empty:
                         st.success(f"🎉 [批次 {target_batch_id}] 數據更新成功！盤點結果：{audit_status}")
                         st.rerun()
         else:
-            st.stop()  # 若在頁面刷新的斷層瞬間找不到該批次，優雅中斷防止噴出紅色錯誤
+            st.stop()
     else:
         st.warning("⚠️ 找不到該商品的有效庫存批次，請重新整理頁面。")
 else:
