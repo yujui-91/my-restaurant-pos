@@ -5,7 +5,12 @@ import sqlite3
 import re
 from datetime import datetime, timedelta
 from database.db_core import log_history, get_next_raw_id, get_next_supply_id, get_next_bill_id, update_purchase_batch, trigger_toast, show_pending_toast
+import streamlit as st
 
+# 檢查 session_state 中的登入狀態，若未登入則阻斷畫面並提示
+if not st.session_state.get("password_correct", False):
+    st.warning("🔒 請先前往首頁登入管理系統！")
+    st.stop()
 show_pending_toast()
 
 st.subheader("📝 採購進貨與費用登記單")

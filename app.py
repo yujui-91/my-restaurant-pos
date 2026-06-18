@@ -6,6 +6,42 @@ from database.db_core import init_db, trigger_toast, show_pending_toast, log_his
 
 st.set_page_config(layout="wide")
 
+def check_password():
+    """如果密碼正確則返回 True，否則顯示登入畫面並返回 False。"""
+    
+    # 1. 優先從 st.secrets 讀取密碼，若雲端尚未設定，則提供一個本地端預設密碼 (例如: 1234)
+    # 建議之後在 Streamlit Cloud 的 Secrets 中設定後台密碼
+    correct_password = st.secrets.get("PASSWORD", "1234")
+
+    if "password_correct" not in st.session_state:
+        st.session_state.password_correct = False
+
+    # 已經成功登入，直接放行
+    if st.session_state.password_correct:
+        return True
+
+    # 顯示登入表單
+    st.markdown("<h3 style='text-align: center;'>🍳 赤山堡砂鍋 後台管理系統</h3>", unsafe_allow_html=True)
+    
+    with st.form("login_form", clear_on_submit=False):
+        st.markdown("#### 🔒 請輸入管理員密碼以進入後台")
+        password_input = st.text_input("密碼", type="password")
+        submit_button = st.form_submit_button("🔑 登入系統")
+        
+        if submit_button:
+            if password_input == correct_password:
+                st.session_state.password_correct = True
+                st.success("🎉 密碼正確！正在進入系統...")
+                st.rerun()
+            else:
+                st.error("❌ 密碼錯誤，請重新輸入！")
+                
+    return False
+
+# 執行密碼檢查，若未登入則全面中斷後續主程式的渲染
+if not check_password():
+    st.stop()
+
 st.markdown("""
     <style>
         [data-testid="stDataFrame"] td, [data-testid="stDataFrame"] th {
