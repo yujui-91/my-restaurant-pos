@@ -1,12 +1,11 @@
 # pages/1_POS結帳.py
 import streamlit as st
 import pandas as pd
-import sqlite3
 import re
 import json
 from datetime import datetime
 from database.db_core import log_history, deduct_stock_fifo, get_next_dish_id, update_dish_and_bom, trigger_toast, show_pending_toast
-import streamlit as st
+from database.db_core import get_db_conn
 
 # 檢查 session_state 中的登入狀態，若未登入則阻斷畫面並提示
 # if not st.session_state.get("password_correct", False):
@@ -24,7 +23,7 @@ current_user = st.session_state.get('current_user', '老 闆')
 if 'pos_shopping_cart' not in st.session_state:
     st.session_state.pos_shopping_cart = []
 
-conn = sqlite3.connect('inventory.db', timeout=20.0)
+conn = get_db_conn()
 existing_dishes = pd.read_sql_query("SELECT prod_id, prod_name, price FROM products WHERE status = 1 AND prod_id LIKE 'P%'", conn)
 all_raw_df = pd.read_sql_query("SELECT prod_id, prod_name, use_unit, cost FROM products WHERE status = 1 AND (prod_id LIKE 'R%' OR prod_id LIKE 'S%')", conn)
 conn.close()
@@ -33,7 +32,7 @@ def calculate_cart_estimated_cost(cart_items):
     if not cart_items:
         return 0.0, {}
         
-    conn = sqlite3.connect('inventory.db', timeout=20.0)
+    conn = get_db_conn()
     cursor = conn.cursor()
     
     total_mats_needed = {}
@@ -254,7 +253,7 @@ with pos_tabs[0]:
                     all_mats_needed = {}
                     
                     # 🔥【死鎖修復點一】：先在完全不打開 UPDATE 交易的狀態下，把所需的 BOM 資料全部 SELECT 出來
-                    conn_read = sqlite3.connect('inventory.db', timeout=20.0)
+                    conn_read = get_db_conn()
                     for cart_item in st.session_state.pos_shopping_cart:
                         d_id = cart_item['prod_id']
                         d_qty = cart_item['qty']
@@ -267,7 +266,7 @@ with pos_tabs[0]:
                     conn_read.close()
                     
                     # 準備進入獨佔修改階段
-                    conn = sqlite3.connect('inventory.db', timeout=20.0)
+                    conn = get_db_conn()
                     cursor = conn.cursor()
                     
                     insufficient_flag = False
@@ -387,7 +386,7 @@ with pos_tabs[1]:
     today_start = datetime.now().strftime("%Y-%m-%d 00:00:00")
     today_end = datetime.now().strftime("%Y-%m-%d 23:59:59")
 
-    conn = sqlite3.connect('inventory.db', timeout=20.0)
+    conn = get_db_conn()
     df_today_orders = pd.read_sql_query('''
         SELECT id, timestamp, user, details FROM history 
         WHERE action IN ('多品項收銀結帳', '更正點餐數量') AND timestamp BETWEEN ? AND ?
@@ -449,7 +448,7 @@ with pos_tabs[1]:
         else:
             raw_dishes = re.findall(r"【(.+?) x (\d+)份】", order_details_text)
             parsed_dishes = []
-            conn_temp = sqlite3.connect('inventory.db', timeout=20.0)
+            conn_temp = get_db_conn()
             cursor_temp = conn_temp.cursor()
             for name, qty in raw_dishes:
                 cursor_temp.execute("SELECT prod_id FROM products WHERE prod_name = ?", (name,))
@@ -470,7 +469,7 @@ with pos_tabs[1]:
         if "整單作廢" in manage_action:
             st.warning("⚠️ **注意：** 將依據當時結帳消耗的原始批次 並完整歸還至庫存中。")
             if st.button("🔥 整單作廢", type="primary", use_container_width=True):
-                conn = sqlite3.connect('inventory.db', timeout=20.0)
+                conn = get_db_conn()
                 cursor = conn.cursor()
                 try:
                     for mat in parsed_mats:
@@ -601,7 +600,7 @@ with pos_tabs[1]:
                 if not has_qty_changed:
                     st.info("數量沒有 any 變動，無需修正。")
                 else:
-                    conn = sqlite3.connect('inventory.db', timeout=20.0)
+                    conn = get_db_conn()
                     cursor = conn.cursor()
                     try:
                         # 先將舊單先前消耗的原物料全部加回 (回滾庫存)
@@ -838,7 +837,7 @@ with pos_tabs[2]:
                     elif not st.session_state.custom_recipe_pool:
                         st.error("❌ 錯誤變更：餐點必須至少包含一項原物料配方")
                     else:
-                        conn = sqlite3.connect('inventory.db', timeout=20.0)
+                        conn = get_db_conn()
                         cursor = conn.cursor()
                         cursor.execute("SELECT prod_id FROM products WHERE prod_name = ? AND status = 1", (pos_custom_name,))
                         if cursor.fetchone():
@@ -968,7 +967,7 @@ with pos_tabs[2]:
                     elif (pot_large_servings > 0 and pot_large_price <= 0) or (pot_small_servings > 0 and pot_small_price <= 0):
                         st.error("❌ 錯誤：只要有分配碗數，對應的販售價格必須大於 0！")
                     else:
-                        conn = sqlite3.connect('inventory.db', timeout=20.0)
+                        conn = get_db_conn()
                         cursor = conn.cursor()
                         
                         if pot_large_servings > 0:
@@ -1034,7 +1033,7 @@ with pos_tabs[2]:
             old_price = int(float(matched_dish['price']))
             
             if 'editing_recipe_dish_id' not in st.session_state or st.session_state.editing_recipe_dish_id != td_id:
-                conn = sqlite3.connect('inventory.db', timeout=20.0)
+                conn = get_db_conn()
                 db_recipe = pd.read_sql_query('''
                     SELECT p.prod_name as 食材名稱, b.child_id as 食材編號, b.qty_needed as 單位用量, p.use_unit as 單位
                     FROM bom b JOIN products p ON b.child_id = p.prod_id WHERE b.parent_id = ?
@@ -1129,7 +1128,7 @@ with pos_tabs[2]:
                         r_cost = float(matched_raw.iloc[0]['cost']) if not matched_raw.empty else 0.0
                         updated_dish_base_cost += item['單位用量'] * r_cost
                         
-                    conn = sqlite3.connect('inventory.db', timeout=20.0)
+                    conn = get_db_conn()
                     cursor = conn.cursor()
                     cursor.execute("UPDATE products SET price = ?, cost = ? WHERE prod_id = ?", (float(new_dish_price), updated_dish_base_cost, td_id))
                     cursor.execute("DELETE FROM bom WHERE parent_id = ?", (td_id,))
@@ -1153,7 +1152,7 @@ with pos_tabs[2]:
 # ==========================================
 with pos_tabs[3]:
     st.markdown("##### ❌ 菜單餐點下架控制面板")
-    conn = sqlite3.connect('inventory.db', timeout=20.0)
+    conn = get_db_conn()
     all_dishes_raw = pd.read_sql_query("SELECT prod_id, prod_name, price, status FROM products WHERE prod_id LIKE 'P%'", conn)
     conn.close()
     
@@ -1175,7 +1174,7 @@ with pos_tabs[3]:
                 matched_del_dish = matched_del_dish_rows.iloc[0]
                 if matched_del_dish['status'] == 0:
                     if st.button("🟢 重新上架此餐點"):
-                        conn = sqlite3.connect('inventory.db', timeout=20.0)
+                        conn = get_db_conn()
                         cursor = conn.cursor()
                         cursor.execute("UPDATE products SET status = 1 WHERE prod_id = ?", (del_dish_id,))
                         conn.commit()
@@ -1186,7 +1185,7 @@ with pos_tabs[3]:
                         st.rerun()
                 else:
                     if st.button("🔴 確認將此餐點下架隱藏"):
-                        conn = sqlite3.connect('inventory.db', timeout=20.0)
+                        conn = get_db_conn()
                         cursor = conn.cursor()
                         cursor.execute("UPDATE products SET status = 0 WHERE prod_id = ?", (del_dish_id,))
                         conn.commit()
@@ -1198,7 +1197,7 @@ with pos_tabs[3]:
 
     st.markdown("---")
     st.markdown("##### ❌ 食材與用品庫存品項下架面板")
-    conn = sqlite3.connect('inventory.db', timeout=20.0)
+    conn = get_db_conn()
     all_mats_raw = pd.read_sql_query("SELECT prod_id, prod_name, use_unit, status FROM products WHERE prod_id LIKE 'R%' OR prod_id LIKE 'S%'", conn)
     conn.close()
     
@@ -1220,7 +1219,7 @@ with pos_tabs[3]:
                 matched_del_mat = matched_del_mat_rows.iloc[0]
                 if matched_del_mat['status'] == 0:
                     if st.button("🟢 恢復使用此食材/用品"):
-                        conn = sqlite3.connect('inventory.db', timeout=20.0)
+                        conn = get_db_conn()
                         cursor = conn.cursor()
                         cursor.execute("UPDATE products SET status = 1 WHERE prod_id = ?", (del_mat_id,))
                         conn.commit()
@@ -1231,7 +1230,7 @@ with pos_tabs[3]:
                         st.rerun()
                 else:
                     if st.button("🔴 確認停用並下架此品項"):
-                        conn = sqlite3.connect('inventory.db', timeout=20.0)
+                        conn = get_db_conn()
                         cursor = conn.cursor()
                         cursor.execute("UPDATE products SET status = 0 WHERE prod_id = ?", (del_mat_id,))
                         conn.commit()

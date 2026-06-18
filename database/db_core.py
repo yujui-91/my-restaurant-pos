@@ -1,12 +1,28 @@
 # database/db_core.py
-import sqlite3
 import re
 from datetime import datetime, timedelta
 import streamlit as st
+import libsql_client  # <-- 關鍵修正 1：移除 import libsql，改成正確的 libsql_client
+
+def get_db_conn():
+    """
+    智慧型連線管理：
+    使用 libsql_client 的 create_client_sync 建立同步連線，完美相容舊 sqlite3 語法。
+    """
+    turso_url = st.secrets.get("libsql://restaurant-db-yujui-91.aws-ap-northeast-1.turso.io", None)
+    turso_token = st.secrets.get("eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODE0Mzk4NzksImlkIjoiMDE5ZWM2MTEtZTUwMS03MWM5LTk2MjMtZDgwOGY1YjBlZDJlIiwicmlkIjoiZDlkMjI4MzUtZWE3Ni00MmU4LWI0YTctOGEwMTJmNDNhMDI5In0.ad2R1r4PHmtUTbh6u-06N36nGRn3NibW0sVJ1AWTl3OtTSQpkUpz4V7prbTVnUUT6KfRM3fV-KA1NjGPmnGaDw", None)
+    
+    if turso_url and turso_token:
+        # 雲端連線：必須使用 create_client_sync 取得同步 DBAPI 相容連線
+        return libsql_client.create_client_sync(url=turso_url, auth_token=turso_token)
+    else:
+        # 本地回退：一樣使用同步 client 指向本地檔案網址
+        conn = libsql_client.create_client_sync(url="file:inventory.db")
+        return conn
 
 def init_db():
-    conn = sqlite3.connect('inventory.db', timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL;")
+    # 🔥 關鍵修正 2：將全檔案所有 sqlite3.connect 更換為 get_db_conn()
+    conn = get_db_conn()
     cursor = conn.cursor()
     
     # 1. 商品/物料資料表 (status 欄位：1=啟用, 0=下架/停用)
@@ -111,8 +127,6 @@ def init_db():
                         unit TEXT,
                         deducted_batches_json TEXT)''')
     
-    # ✨ 【已完全移除預設測試資料插入邏輯】 保持初始資料庫完全乾淨
-        
     # 建立與升級優化索引（確保大分類等查詢均走高精準索引）
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_timestamp_action ON history (timestamp, action);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_main_category ON history (main_category, timestamp);")
@@ -148,9 +162,7 @@ def log_history(user, action, details, main_category="", shared_cursor=None):
         )
         return shared_cursor.lastrowid
     else:
-        # 保留原本獨立開連線的邏輯，確保其他頁面在單獨呼叫此函數時依然完全正常
-        conn = sqlite3.connect('inventory.db', timeout=30.0)
-        conn.execute("PRAGMA journal_mode=WAL;")
+        conn = get_db_conn()
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO history (timestamp, user, action, details, main_category) VALUES (?, ?, ?, ?, ?)", 
@@ -188,52 +200,44 @@ def deduct_stock_fifo(prod_id, qty_to_deduct, cursor):
             
     return True, total_deducted_cost, deducted_batches
 
-# ====================================================================
-# ✨ 【自動編號邏輯優化】全面升級為 4 位數格式，空資料庫自動由 0001 起算
-# ====================================================================
 def get_next_raw_id():
-    conn = sqlite3.connect('inventory.db', timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL;")
+    conn = get_db_conn()
     cursor = conn.cursor()
     cursor.execute("SELECT prod_id FROM products WHERE prod_id LIKE 'R%'")
     ids = cursor.fetchall()
     conn.close()
     max_num = max([int(re.findall(r'\d+', pid)[0]) for (pid,) in ids if re.findall(r'\d+', pid)] + [0])
-    return f"R{max_num + 1:04d}"  # 升級為 4 位數，例如: R0001
+    return f"R{max_num + 1:04d}"
 
 def get_next_dish_id():
-    conn = sqlite3.connect('inventory.db', timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL;")
+    conn = get_db_conn()
     cursor = conn.cursor()
     cursor.execute("SELECT prod_id FROM products WHERE prod_id LIKE 'P%'")
     ids = cursor.fetchall()
     conn.close()
     max_num = max([int(re.findall(r'\d+', pid)[0]) for (pid,) in ids if re.findall(r'\d+', pid)] + [0])
-    return f"P{max_num + 1:04d}"  # 升級為 4 位數，例如: P0001
+    return f"P{max_num + 1:04d}"
 
 def get_next_supply_id():
-    conn = sqlite3.connect('inventory.db', timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL;")
+    conn = get_db_conn()
     cursor = conn.cursor()
     cursor.execute("SELECT prod_id FROM products WHERE prod_id LIKE 'S%'")
     ids = cursor.fetchall()
     conn.close()
     max_num = max([int(re.findall(r'\d+', pid)[0]) for (pid,) in ids if re.findall(r'\d+', pid)] + [0])
-    return f"S{max_num + 1:04d}"  # 升級為 4 位數，例如: S0001
+    return f"S{max_num + 1:04d}"
 
 def get_next_bill_id():
-    conn = sqlite3.connect('inventory.db', timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL;")
+    conn = get_db_conn()
     cursor = conn.cursor()
     cursor.execute("SELECT prod_id FROM products WHERE prod_id LIKE 'C%'")
     ids = cursor.fetchall()
     conn.close()
     max_num = max([int(re.findall(r'\d+', pid)[0]) for (pid,) in ids if re.findall(r'\d+', pid)] + [0])
-    return f"C{max_num + 1:04d}"  # 升級為 4 位數，例如: C0001
+    return f"C{max_num + 1:04d}"
 
 def update_purchase_batch(batch_id, prod_id, new_original_qty, new_cost, p_unit, u_unit, c_factor, s_stock, v_name, v_phone, exp_str):
-    conn = sqlite3.connect('inventory.db', timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL;")
+    conn = get_db_conn()
     cursor = conn.cursor()
     
     cursor.execute("SELECT qty, original_qty FROM stock_batches WHERE batch_id = ?", (batch_id,))
@@ -266,8 +270,7 @@ def update_purchase_batch(batch_id, prod_id, new_original_qty, new_cost, p_unit,
     conn.close()
 
 def update_dish_and_bom(dish_id, new_price, recipe_list):
-    conn = sqlite3.connect('inventory.db', timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL;")
+    conn = get_db_conn()
     cursor = conn.cursor()
     cursor.execute("UPDATE products SET price = ? WHERE prod_id = ?", (new_price, dish_id))
     cursor.execute("DELETE FROM bom WHERE parent_id = ?", (dish_id,))

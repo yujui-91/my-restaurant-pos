@@ -1,9 +1,8 @@
 # app.py
 import streamlit as st
 import pandas as pd
-import sqlite3
 from database.db_core import init_db, trigger_toast, show_pending_toast, log_history
-
+from database.db_core import get_db_conn
 st.set_page_config(layout="wide")
 
 # # def check_password():
@@ -87,8 +86,8 @@ st.session_state.current_user = st.sidebar.text_input("操作人員", value=st.s
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ 快速微調安全庫存線")
 
-conn = sqlite3.connect('inventory.db')
-all_items_for_safety = pd.read_sql_query("SELECT prod_id, prod_name, safety_stock, use_unit FROM products WHERE (prod_id LIKE 'R%' OR prod_id LIKE 'S%') AND price >= 0", conn)
+conn = get_db_conn()
+all_items_for_safety = pd.read_sql_query("SELECT * FROM products WHERE status = 1 AND (prod_id LIKE 'R%' OR prod_id LIKE 'S%')", conn)
 conn.close()
 
 if not all_items_for_safety.empty:
@@ -105,7 +104,7 @@ if not all_items_for_safety.empty:
     )
     
     if st.sidebar.button("💾 儲存新安全線設定"):
-        conn = sqlite3.connect('inventory.db')
+        conn = get_db_conn()
         cursor = conn.cursor()
         cursor.execute("UPDATE products SET safety_stock = ? WHERE prod_id = ?", (new_safety_value, target_safety_id))
         conn.commit()
@@ -122,7 +121,7 @@ if not all_items_for_safety.empty:
         trigger_toast(f"已將 【{matched_safety_row['prod_name']}】 的安全線更新為 {new_safety_value}", icon="⚙️")
         st.rerun()
 
-conn = sqlite3.connect('inventory.db')
+conn = get_db_conn()
 df_alert_check = pd.read_sql_query('''
     SELECT p.prod_name, 
            COALESCE((SELECT SUM(s.qty) FROM stock_batches s WHERE s.prod_id = p.prod_id AND s.qty > 0), 0) as total_qty, 
@@ -147,7 +146,7 @@ use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=Fal
 
 stock_filter = st.selectbox("🔍 篩選庫存類別", ["顯示全部明細", "僅看食材 (R)", "僅看用品 (S)"], key="home_stock_filter")
 
-conn = sqlite3.connect('inventory.db')
+conn = get_db_conn()
 
 if stock_filter == "僅看食材 (R)":
     query_condition = "WHERE p.prod_id LIKE 'R%'"
@@ -268,10 +267,10 @@ if not df_merged_stock.empty:
         
         target_prod_id = selected_stock_item.split(" - ")[0]
         
-        conn = sqlite3.connect('inventory.db')
+        conn = get_db_conn()
         df_batch_details = pd.read_sql_query('''
             SELECT s.batch_id as 批次編號, 
-                   s.inbound_date as 進貨日期, 
+                   s.inbound_date as進貨日期, 
                    s.qty as 剩餘庫存量, 
                    (s.qty * s.cost) as 當次進貨總金額,
                    s.expiry_date as 有效期限, 
@@ -309,7 +308,7 @@ if not df_merged_stock.empty:
         else:
             st.info("該品項目前無有效批次庫存。")
             
-    conn = sqlite3.connect('inventory.db')
+    conn = get_db_conn()
     df_unique_disabled_items = pd.read_sql_query('''
         SELECT DISTINCT p.prod_id, p.prod_name
         FROM products p
@@ -327,7 +326,7 @@ if not df_merged_stock.empty:
         selected_disabled_item_str = st.selectbox("🔍 1. 選取欲清理的下架商品/食材：", disabled_item_options, key="clean_disabled_item_box")
         target_disabled_prod_id = selected_disabled_item_str.split(" - ")[0]
         
-        conn = sqlite3.connect('inventory.db')
+        conn = get_db_conn()
         df_disabled_batches = pd.read_sql_query('''
             SELECT s.batch_id, s.qty, s.original_qty, p.use_unit, s.inbound_date, s.expiry_date
             FROM stock_batches s 
@@ -350,7 +349,7 @@ if not df_merged_stock.empty:
             item_name = selected_disabled_item_str.split(" - ")[1]
             
             if st.button("❌ 確認將此下架批次數量歸零（移出明細）", type="primary", key="clean_disabled_submit_btn"):
-                conn = sqlite3.connect('inventory.db')
+                conn = get_db_conn()
                 cursor = conn.cursor()
                 new_orig_qty = max(0.0, float(matched_del_row['original_qty']) - float(matched_del_row['qty']))
                 cursor.execute("UPDATE stock_batches SET qty = 0, original_qty = ? WHERE batch_id = ?", (new_orig_qty, target_batch_id))
