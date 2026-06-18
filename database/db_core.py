@@ -3,22 +3,29 @@ import re
 from datetime import datetime, timedelta
 import streamlit as st
 import libsql_client  # <-- 關鍵修正 1：移除 import libsql，改成正確的 libsql_client
+import sqlite3
+import os
 
 def get_db_conn():
     """
-    智慧型連線管理：
-    使用 libsql_client 的 create_client_sync 建立同步連線，完美相容舊 sqlite3 語法。
+    動態獲取資料庫連線：
+    優先檢查 Streamlit Secrets 是否有 Turso 設定，若有則連線上資料庫；
+    若無（例如在本機開發且沒設定秘密鍵），則連線到本地的 inventory.db。
     """
-    turso_url = st.secrets.get("libsql://restaurant-db-yujui-91.aws-ap-northeast-1.turso.io", None)
-    turso_token = st.secrets.get("eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODE0Mzk4NzksImlkIjoiMDE5ZWM2MTEtZTUwMS03MWM5LTk2MjMtZDgwOGY1YjBlZDJlIiwicmlkIjoiZDlkMjI4MzUtZWE3Ni00MmU4LWI0YTctOGEwMTJmNDNhMDI5In0.ad2R1r4PHmtUTbh6u-06N36nGRn3NibW0sVJ1AWTl3OtTSQpkUpz4V7prbTVnUUT6KfRM3fV-KA1NjGPmnGaDw", None)
-    
-    if turso_url and turso_token:
-        # 雲端連線：必須使用 create_client_sync 取得同步 DBAPI 相容連線
-        return libsql_client.create_client_sync(url=turso_url, auth_token=turso_token)
+    # 檢查是否設定了 Turso 的 Secrets
+    if "TURSO_DATABASE_URL" in st.secrets and "TURSO_AUTH_TOKEN" in st.secrets:
+        # 使用 Turso (libsql_client) 連線
+        url = st.secrets["TURSO_DATABASE_URL"]
+        token = st.secrets["TURSO_AUTH_TOKEN"]
+        
+        # 🔥 修正：使用 libsql_client 的 connect 介面，它與 sqlite3 語法完全相容
+        return libsql_client.connect(url, auth_token=token)
     else:
-        # 本地回退：一樣使用同步 client 指向本地檔案網址
-        conn = libsql_client.create_client_sync(url="file:inventory.db")
-        return conn
+        # 降級使用本地資料庫
+        db_path = os.path.join(os.path.dirname(__file__), "..", "inventory.db")
+        if os.path.exists(db_path):
+            return sqlite3.connect(db_path)
+        return sqlite3.connect("inventory.db")
 
 def init_db():
     # 🔥 關鍵修正 2：將全檔案所有 sqlite3.connect 更換為 get_db_conn()
