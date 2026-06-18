@@ -62,12 +62,13 @@ df_current_void_logs = pd.read_sql_query('''
       AND timestamp BETWEEN ? AND ?
 ''', conn, params=(start_str, end_str))
 
-# 【核心修改處】將 '多品項收銀結帳-已微調更正' 納入撈取範圍，確保跨日更正時歷史資料能被正確比對與排除
+# 【核心修改處】解除 SQL 上的時間限制！
+# 因為「今天」建立的更正單，其 timestamp 是今天，如果不把時間限制拿掉，查「昨天」時這筆新單根本撈不出來。
+# 這裡將時間過濾完全交給下方的 Python 歸帳邏輯處理，確保跨日更正 100% 能夠對上。
 df_history_sales = pd.read_sql_query('''
     SELECT id, action, details, timestamp FROM history 
     WHERE action IN ('多品項收銀結帳', '更正點餐數量', '多品項收銀結帳-已微調更正')
-      AND timestamp BETWEEN ? AND ?
-''', conn, params=(start_str, end_str))
+''', conn)
 
 df_expenses_raw = pd.read_sql_query('''
     SELECT action, details, timestamp FROM history 
@@ -84,9 +85,9 @@ total_stock_loss = 0.0
 dish_sales = {}
 material_usage = {}
 
-# --- 處理正向銷售營收（不再剔除已被作廢的單號，保持歷史完整性） ---
+# --- 處理正向銷售營收（修正跨日微調 Bug 版） ---
 for _, row in df_history_sales.iterrows():
-    # 核心邏輯：如果該單已被微調更正，在拉長區間同時包含新舊單時，直接跳過舊單不計，以新單（更正點餐數量）為準
+    # 1. 舊單（已被更正的原始單）一律跳過，避免與新更正單重複計算
     if row['action'] == '多品項收銀結帳-已微調更正':
         continue
         
@@ -97,9 +98,16 @@ for _, row in df_history_sales.iterrows():
             json_part = txt.split("||STRUCT_DATA||")[1]
             payload = json.loads(json_part)
             
-            if "orig_timestamp" in payload and not (start_str <= payload["orig_timestamp"] <= end_str):
-                continue
+            # 【核心歸帳邏輯】：決定這筆紀錄該歸屬在什麼時候？
+            # 如果是更正單，它內含 "orig_timestamp"（原始交易時間），財報就以原始時間為準！
+            # 如果是一般結帳單，則直接使用它本身的 timestamp。
+            record_target_time = payload.get("orig_timestamp", row['timestamp'])
+            
+            # 檢查這個「歸屬時間」是否在當前使用者篩選的財報區間內
+            if not (start_str <= record_target_time <= end_str):
+                continue  # 如果這筆訂單的原始交易時間不在查詢範圍內，直接跳過
                 
+            # 通過時間檢查，將金額與數量計入當期財報
             total_revenue += float(payload.get("total_revenue", 0.0))
             total_food_cost += float(payload.get("total_cost", 0.0))
             
@@ -117,6 +125,10 @@ for _, row in df_history_sales.iterrows():
             continue
         except:
             pass
+
+    # 向下相容：傳統正則表達式解析（若無 orig_timestamp 則以本身 timestamp 為歸帳基準）
+    if not (start_str <= row['timestamp'] <= end_str):
+        continue
 
     revenue_match = re.search(r"總金額 \$(\d+\.?\d*)", txt)
     if revenue_match:
@@ -140,28 +152,24 @@ for _, row in df_history_sales.iterrows():
                 m_qty = float(match.group(3))
                 material_usage[m_name] = material_usage.get(m_name, 0.0) + m_qty
 
-# --- 【修改點 2】處理當期作廢扣減（在作廢當天扣減營收、成本與銷量） ---
+# --- 處理當期作廢扣減（在作廢當天扣減營收、成本與銷量） ---
 for _, row in df_current_void_logs.iterrows():
     txt = row['details']
     
-    # 優先嘗試解析 STRUCT_DATA
     if "||STRUCT_DATA||" in txt:
         try:
             json_part = txt.split("||STRUCT_DATA||")[1]
             payload = json.loads(json_part)
             
-            # 從當期營收與成本中「扣除」作廢金額
             total_revenue -= float(payload.get("total_revenue", 0.0))
             total_food_cost -= float(payload.get("total_cost", 0.0))
             
-            # 扣減餐點銷量排行
             for d in payload.get("dishes", []):
                 d_name = d.get("prod_name")
                 d_qty = float(d.get("qty", 0.0))
                 if d_name:
                     dish_sales[d_name] = dish_sales.get(d_name, 0.0) - d_qty
                     
-            # 扣減食材消耗量（因為作廢代表沒賣出，如果是退回庫存，則當期消耗量需扣回）
             for m in payload.get("materials", []):
                 m_name = m.get("mat_name")
                 m_qty = float(m.get("qty", 0.0))
@@ -171,7 +179,6 @@ for _, row in df_current_void_logs.iterrows():
         except:
             pass
 
-    # 向下相容：正則表達式解析舊款作廢格式
     revenue_match = re.search(r"總金額 \$(\d+\.?\d*)", txt)
     if revenue_match:
         total_revenue -= float(revenue_match.group(1))
@@ -312,7 +319,7 @@ st.divider()
 # ==========================================
 st.markdown("### 💧 固定資產與水電營運費用 (C%) 明細追蹤")
 if not c_expense_records:
-    st.info(f"💡 當前涵蓋月份 ({', '.join(covered_target_months)}) 內無任何固定資產 or 水電費用帳單歸帳。")
+    st.info(f"💡 當前涵蓋月份 ({', '.join(covered_target_months)}) 內無 any 固定資產 or 水電費用帳單歸帳。")
 else:
     df_c_view = pd.DataFrame(c_expense_records)
     st.dataframe(
