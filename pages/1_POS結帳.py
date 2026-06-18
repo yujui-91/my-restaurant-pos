@@ -258,7 +258,7 @@ with pos_tabs[0]:
                                     "deducted_batches": batch_list
                                 })
                                 
-                            # 1. 寫入傳統歷史日誌
+                            # 1. 準備寫入傳統歷史日誌
                             now_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             details_log = f"合併前台收銀：出餐明細 {confirm_msg}，總金額 ${total_bill_amount}，精準食材成本 ${actual_total_cost:.2f}。 消耗食材: " + ", ".join(log_mats_summary)
                             
@@ -270,10 +270,10 @@ with pos_tabs[0]:
                             }
                             final_log_entry = details_log + " ||STRUCT_DATA||" + json.dumps(structured_payload, ensure_ascii=False)
                             
-                            # 調用歷史儲存並取得自增 history_id
-                            hist_id = log_history(current_user, "多品項收銀結帳", final_log_entry)
+                            # 🔥 【修復點】：傳入 shared_cursor=cursor，在同一個連線下寫入歷史紀錄，防範死鎖
+                            hist_id = log_history(current_user, "多品項收銀結帳", final_log_entry, shared_cursor=cursor)
                             
-                            # 2. 🔥 同步寫入新版結構化關聯銷售明細表（解決多年數據卡頓的核心防線）
+                            # 2. 同步寫入新版結構化關聯銷售明細表
                             cursor.execute('''INSERT INTO orders (timestamp, user, total_revenue, total_cost, status, history_id)
                                               VALUES (?, ?, ?, ?, 1, ?)''', 
                                            (now_time_str, current_user, float(total_bill_amount), float(actual_total_cost), hist_id))
@@ -598,10 +598,10 @@ with pos_tabs[1]:
                             }
                             updated_full_log = details_text_part + " ||STRUCT_DATA||" + json.dumps(new_payload_struct, ensure_ascii=False)
                             
-                            # 獨立寫入新動作審計軌跡並拿取新 ID
-                            new_hist_id = log_history(current_user, "更正點餐數量", updated_full_log)
+                            # 🔥 【核心修復點】：傳入 shared_cursor=cursor，在同一個連線通道內完成歷史寫入，拒絕死鎖！
+                            new_hist_id = log_history(current_user, "更正點餐數量", updated_full_log, shared_cursor=cursor)
                             
-                            # 🔥 同步在新版訂單結構中，為這次更正獨立建立一張新訂單單據 (status=1 正常參與財報計算)
+                            # 同步在新版訂單結構中，為這次更正獨立建立一張新訂單單據 (status=1 正常參與財報計算)
                             cursor.execute('''INSERT INTO orders (timestamp, user, total_revenue, total_cost, status, history_id)
                                               VALUES (?, ?, ?, ?, 1, ?)''', 
                                            (orig_order_timestamp, current_user, float(new_total_bill), float(final_new_cost), new_hist_id))

@@ -71,21 +71,25 @@ if not df_products_in_stock.empty:
             """)
             
             with st.form("precise_audit_form"):
-                # 🎯 移除 min_value 限制，不再讓 Streamlit 自動把負數偷偷轉化成 0.0
-                actual_qty = st.number_input(
+                # 🎯 移除 min_value 限制，並加上明確且唯一的 key="audit_qty_input" 以綁定會話狀態
+                st.number_input(
                     f"填寫該批次現場數量 ({unit_label})", 
                     value=theoretical_qty, 
-                    step=1.0
+                    step=1.0,
+                    key="audit_qty_input"
                 )
                 
                 submit_audit = st.form_submit_button("💾 更新此批次庫存")
                 
                 if submit_audit:
+                    # 🛑 核心優化：改為讀取 st.session_state 確保同步獲取最新實盤輸入值
+                    actual_qty_val = st.session_state.audit_qty_input
+                    
                     # 🛑 核心防呆：現場實盤數量絕不可能低於 0，若小於 0 則立刻拋錯阻斷
-                    if actual_qty < 0:
-                        st.error(f"❌ 錯誤：現場【實盤總數量】絕對不能小於 0！您目前的輸入數值為 {actual_qty}")
+                    if actual_qty_val < 0:
+                        st.error(f"❌ 錯誤：現場【實盤總數量】絕對不能小於 0！您目前的輸入數值為 {actual_qty_val}")
                     else:
-                        diff_qty = actual_qty - theoretical_qty
+                        diff_qty = actual_qty_val - theoretical_qty
                         
                         if diff_qty > 0:
                             audit_status = f"盤盈 (該批次多了 {abs(diff_qty):,.2f} {unit_label})"
@@ -100,14 +104,14 @@ if not df_products_in_stock.empty:
                             UPDATE stock_batches 
                             SET qty = ? 
                             WHERE batch_id = ?
-                        ''', (actual_qty, target_batch_id))
+                        ''', (actual_qty_val, target_batch_id))
                         
                         conn.commit()
                         conn.close()
                         
                         log_details = (
                             f"盤點核實覆蓋。品項：【{item_name}({target_prod_id})】的[批次 {target_batch_id}]。習得歷史進貨日: {orig_inbound}，原登記供應商: {orig_vendor if orig_vendor else '無'}。"
-                            f"該批次系統理論數: {theoretical_qty:,.2f} {unit_label} -> 現場實盤數: {actual_qty:,.2f} {unit_label}。盤點結果：{audit_status}，持續繼承單價基準: ${current_base_cost:.4f}/{unit_label}。"
+                            f"該批次系統理論數: {theoretical_qty:,.2f} {unit_label} -> 現場實盤數: {actual_qty_val:,.2f} {unit_label}。盤點結果：{audit_status}，持續繼承單價基準: ${current_base_cost:.4f}/{unit_label}。"
                         )
                         log_history(current_user, f"存貨盤點-{item_name}", log_details)
                         

@@ -67,8 +67,9 @@ if not df_unique_items.empty:
             
             with st.form("inventory_adjustment_form"):
                 adj_type = st.radio("動作選擇", ["過期損耗/報廢 (扣減庫存)", "手動補正(增加庫存)"], horizontal=True)
-                # 🎯 依據您的要求，此處移除 min_value 限制，允許輸入負數
-                adj_qty = st.number_input(f"請輸入異動變更的數量 ({unit_label})  ", value=1.0, step=1.0)
+                
+                # 🎯 加上明確且唯一的 key="adjust_qty_input" 以綁定會話狀態
+                st.number_input(f"請輸入異動變更的數量 ({unit_label})  ", value=1.0, step=1.0, key="adjust_qty_input")
                 
                 st.markdown("###### 📅 請指定此筆損耗歸屬之完整年份與月份（確保跨年財報精確）：")
                 col_adj_y, col_adj_m = st.columns(2)
@@ -85,11 +86,14 @@ if not df_unique_items.empty:
                 submit_adj = st.form_submit_button("🔧 確認執行庫存異動")
                 
                 if submit_adj:
+                    # 🛑 核心優化：改為讀取 st.session_state 確保同步獲取最新輸入值
+                    adj_qty_val = st.session_state.adjust_qty_input
+                    
                     # 🛑 核心防呆：只要輸入小於或等於 0 的數字，立刻拋出錯誤並全面阻斷後續流程
-                    if adj_qty <= 0:
-                        st.error(f"❌ 錯誤：異動變更的數量必須大於 0！您目前的輸入數值為 {adj_qty}")
+                    if adj_qty_val <= 0:
+                        st.error(f"❌ 錯誤：異動變更的數量必須大於 0！您目前的輸入數值為 {adj_qty_val}")
                     else:
-                        final_qty_change = -adj_qty if "扣減" in adj_type or "報廢" in adj_type else adj_qty
+                        final_qty_change = -adj_qty_val if "扣減" in adj_type or "報廢" in adj_type else adj_qty_val
                         new_total_qty = current_qty + final_qty_change
                         
                         if new_total_qty < 0:

@@ -166,10 +166,9 @@ def init_db():
     conn.commit()
     conn.close()
 
-def log_history(user, action, details, main_category=""):
-    conn = sqlite3.connect('inventory.db', timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL;")
-    cursor = conn.cursor()
+# database/db_core.py 中的 log_history 函數修正
+
+def log_history(user, action, details, main_category="", shared_cursor=None):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     # 智慧型自動大方向類別歸納（防呆防漏傳補位機制）
@@ -184,15 +183,27 @@ def log_history(user, action, details, main_category=""):
             main_category = "💰 帳單費用登記"
         elif action.startswith("手動調整庫存-") or action.startswith("存貨盤點-") or action.startswith("庫存微調"):
             main_category = "📋 庫存微調/報廢/盤點"
-            
-    cursor.execute(
-        "INSERT INTO history (timestamp, user, action, details, main_category) VALUES (?, ?, ?, ?, ?)", 
-        (now, user, action, details, main_category)
-    )
-    last_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    return last_id
+
+    # 🔥 核心修正：如果主程式有傳入現成的 cursor，直接使用它寫入，不要重複開連線造成死鎖
+    if shared_cursor is not None:
+        shared_cursor.execute(
+            "INSERT INTO history (timestamp, user, action, details, main_category) VALUES (?, ?, ?, ?, ?)", 
+            (now, user, action, details, main_category)
+        )
+        return shared_cursor.lastrowid
+    else:
+        # 保留原本獨立開連線的邏輯，確保其他頁面在單獨呼叫此函數時依然完全正常
+        conn = sqlite3.connect('inventory.db', timeout=30.0)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO history (timestamp, user, action, details, main_category) VALUES (?, ?, ?, ?, ?)", 
+            (now, user, action, details, main_category)
+        )
+        last_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return last_id
 
 def deduct_stock_fifo(prod_id, qty_to_deduct, cursor):
     cursor.execute("SELECT batch_id, qty, cost FROM stock_batches WHERE prod_id = ? AND qty > 0 ORDER BY expiry_date ASC, inbound_date ASC", (prod_id,))
