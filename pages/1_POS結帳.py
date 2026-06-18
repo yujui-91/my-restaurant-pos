@@ -497,18 +497,7 @@ with pos_tabs[1]:
                             cursor.close()
                             conn.close()
                         else:
-                            details_text_part = f"數量更正紀錄（對應原單號 {target_hist_id}）：出餐明細 {new_confirm_msg}，新總金額 ${new_total_bill:.0f}，更正後精準食材成本 ${final_new_cost:.2f}。 消耗食材: " + ", ".join(log_mats_summary)
-                            new_payload_struct = {
-                                "dishes": new_cart_payload, 
-                                "materials": new_mats_payload, 
-                                "total_revenue": new_total_bill, 
-                                "total_cost": final_new_cost,
-                                "orig_timestamp": orig_order_timestamp,
-                                "is_correction": True,
-                                "referenced_id": target_hist_id
-                            }
-                            updated_full_log = details_text_part + " ||STRUCT_DATA||" + json.dumps(new_payload_struct, ensure_ascii=False)
-                            
+                            # 功能改善 1 修正：扣除新用量（上面已執行 deduct_stock_fifo）後，才計算移動平均成本，確保取得最終正確庫存狀態下的成本！
                             for m_id in total_mats_needed_new.keys():
                                 matched_hist_mat = next((m for m in parsed_mats if m["mat_id"] == m_id), None)
                                 hist_cost_fallback = 0.0
@@ -526,6 +515,18 @@ with pos_tabs[1]:
                                 ''', (hist_cost_fallback, m_id))
                                 calculated_avg_cost = cursor.fetchone()[0] or 0.0
                                 cursor.execute("UPDATE products SET cost = ? WHERE prod_id = ?", (float(calculated_avg_cost), m_id))
+
+                            details_text_part = f"數量更正紀錄（對應原單號 {target_hist_id}）：出餐明細 {new_confirm_msg}，新總金額 ${new_total_bill:.0f}，更正後精準食材成本 ${final_new_cost:.2f}。 消耗食材: " + ", ".join(log_mats_summary)
+                            new_payload_struct = {
+                                "dishes": new_cart_payload, 
+                                "materials": new_mats_payload, 
+                                "total_revenue": new_total_bill, 
+                                "total_cost": final_new_cost,
+                                "orig_timestamp": orig_order_timestamp,
+                                "is_correction": True,
+                                "referenced_id": target_hist_id
+                            }
+                            updated_full_log = details_text_part + " ||STRUCT_DATA||" + json.dumps(new_payload_struct, ensure_ascii=False)
                             
                             # ----------------- 【在此處插入修改指令】 -----------------
                             # 將原本舊的那筆錯誤歷史紀錄 action 改掉，防止財務報告重複計算
@@ -756,10 +757,11 @@ with pos_tabs[2]:
 
                 total_shares = (pot_large_servings * 1.5) + (pot_small_servings * 1.0)
                 
+                # 功能改善 2 修正：極致防呆，若某種碗數設定為 0，其分配成本直接歸零！
                 if total_shares > 0:
                     cost_per_share = total_pot_cost / total_shares
-                    single_large_cost = cost_per_share * 1.5
-                    single_small_cost = cost_per_share * 1.0
+                    single_large_cost = cost_per_share * 1.5 if pot_large_servings > 0 else 0.0
+                    single_small_cost = cost_per_share * 1.0 if pot_small_servings > 0 else 0.0
                 else:
                     single_large_cost, single_small_cost = 0.0, 0.0
 
