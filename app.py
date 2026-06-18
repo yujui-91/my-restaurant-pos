@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 import pandas as pd
 from database.db_core import init_db, trigger_toast, show_pending_toast, log_history
@@ -86,14 +85,132 @@ st.session_state.current_user = st.sidebar.text_input("操作人員", value=st.s
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ 快速微調安全庫存線")
 
-# 🔥 關鍵相容修正 1：替換原 pd.read_sql_query
-conn = get_db_conn()
-cursor = conn.cursor()
-cursor.execute("SELECT * FROM products WHERE status = 1 AND (prod_id LIKE 'R%' OR prod_id LIKE 'S%')")
-rows_safety = cursor.fetchall()
-cols_safety = [desc[0] for desc in cursor.description]
-all_items_for_safety = pd.DataFrame(rows_safety, columns=cols_safety)
-conn.close()
+# ==================== 【Streamlit 快取唯讀查詢函數封裝】 ====================
+@st.cache_data(ttl=60)
+def cached_fetch_safety_items():
+    """快取獲取供安全庫存設定的品項列表 (R和S)"""
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM products WHERE status = 1 AND (prod_id LIKE 'R%' OR prod_id LIKE 'S%')")
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(rows, columns=cols)
+
+@st.cache_data(ttl=60)
+def cached_fetch_low_stock_alerts():
+    """快取檢測低庫存補貨預警"""
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT p.prod_name, 
+               COALESCE((SELECT SUM(s.qty) FROM stock_batches s WHERE s.prod_id = p.prod_id AND s.qty > 0), 0) as total_qty, 
+               p.safety_stock, p.use_unit
+        FROM products p 
+        WHERE p.status = 1 AND (p.prod_id LIKE 'R%' OR p.prod_id LIKE 'S%')
+        GROUP BY p.prod_id 
+        HAVING total_qty < p.safety_stock
+    ''')
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(rows, columns=cols)
+
+@st.cache_data(ttl=60)
+def cached_fetch_merged_stock(stock_filter):
+    """快取獲取目前庫存明細 (依據篩選條件動態變更快取鍵值)"""
+    if stock_filter == "僅看食材 (R)":
+        query_condition = "WHERE p.prod_id LIKE 'R%'"
+    elif stock_filter == "僅看用品 (S)":
+        query_condition = "WHERE p.prod_id LIKE 'S%'"
+    else:
+        query_condition = "WHERE (p.prod_id LIKE 'R%' OR p.prod_id LIKE 'S%')"
+
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute(f'''
+        SELECT p.prod_id as 編號, 
+               p.prod_name as 商品名稱, 
+               COALESCE(SUM(CASE WHEN s.qty > 0 THEN s.qty ELSE 0 END), 0) as 總庫存量, 
+               p.use_unit as 單位, 
+               CASE 
+                 WHEN COALESCE(SUM(CASE WHEN s.qty > 0 THEN s.qty ELSE 0 END), 0) > 0 
+                 THEN (SUM(CASE WHEN s.qty > 0 THEN s.qty * s.cost ELSE 0 END) / SUM(CASE WHEN s.qty > 0 THEN s.qty ELSE 0 END))
+                 ELSE p.cost 
+               END as 移動平均單位成本, 
+               COALESCE(SUM(CASE WHEN s.qty > 0 THEN s.qty * s.cost ELSE 0 END), 0) as 庫存總價值,
+               p.safety_stock as 安全庫存, 
+               p.status as 狀態碼
+        FROM products p 
+        LEFT JOIN stock_batches s ON p.prod_id = s.prod_id
+        {query_condition}
+        GROUP BY p.prod_id, p.prod_name, p.use_unit, p.safety_stock, p.status
+        ORDER BY p.status DESC, p.prod_id
+    ''')
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(rows, columns=cols)
+
+@st.cache_data(ttl=60)
+def cached_fetch_batch_details(target_prod_id):
+    """快取獲取指定品項的有效進貨批次明細"""
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT s.batch_id as 批次編號, 
+               s.inbound_date as 進貨日期, 
+               s.qty as 剩餘庫存量, 
+               (s.qty * s.cost) as 當次進貨總金額,
+               s.expiry_date as 有效期限, 
+               s.vendor_name as 原始供應商,
+               s.vendor_phone as 供應商電話
+        FROM stock_batches s
+        WHERE s.prod_id = ? AND s.qty > 0
+        ORDER BY s.inbound_date ASC, s.batch_id ASC
+    ''', (target_prod_id,))
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(rows, columns=cols)
+
+@st.cache_data(ttl=60)
+def cached_fetch_disabled_items_with_stock():
+    """快取獲取包含殘留庫存的已下架商品清單"""
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT DISTINCT p.prod_id, p.prod_name
+        FROM products p
+        JOIN stock_batches s ON p.prod_id = s.prod_id
+        WHERE p.status = 0 AND s.qty > 0
+        ORDER BY p.prod_id
+    ''')
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(rows, columns=cols)
+
+@st.cache_data(ttl=60)
+def cached_fetch_disabled_batches(target_disabled_prod_id):
+    """快取獲取特定下架品項的殘留批次明細"""
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT s.batch_id, s.qty, s.original_qty, p.use_unit, s.inbound_date, s.expiry_date
+        FROM stock_batches s 
+        JOIN products p ON s.prod_id = p.prod_id 
+        WHERE s.prod_id = ? AND s.qty > 0
+        ORDER BY s.inbound_date ASC, s.batch_id ASC
+    ''', (target_disabled_prod_id,))
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(rows, columns=cols)
+# ============================================================================
+
+# 呼叫快取安全庫存清單
+all_items_for_safety = cached_fetch_safety_items()
 
 if not all_items_for_safety.empty:
     selected_safety_item = st.sidebar.selectbox("選擇調整品項", all_items_for_safety['prod_id'] + " - " + all_items_for_safety['prod_name'], key="sb_safety_item_box")
@@ -115,6 +232,9 @@ if not all_items_for_safety.empty:
         conn.commit()
         conn.close()
         
+        # 🟢 精準清理快取，使安全庫存數據即時翻新
+        st.cache_data.clear()
+        
         # 🔥 【歷史紀錄埋點優化】改為指定大分類為：⚙️ 餐點參數修正
         log_history(
             st.session_state.current_user, 
@@ -126,22 +246,8 @@ if not all_items_for_safety.empty:
         trigger_toast(f"已將 【{matched_safety_row['prod_name']}】 的安全線更新為 {new_safety_value}", icon="⚙️")
         st.rerun()
 
-# 🔥 關鍵相容修正 2：替換原 pd.read_sql_query
-conn = get_db_conn()
-cursor = conn.cursor()
-cursor.execute('''
-    SELECT p.prod_name, 
-           COALESCE((SELECT SUM(s.qty) FROM stock_batches s WHERE s.prod_id = p.prod_id AND s.qty > 0), 0) as total_qty, 
-           p.safety_stock, p.use_unit
-    FROM products p 
-    WHERE p.status = 1 AND (p.prod_id LIKE 'R%' OR p.prod_id LIKE 'S%')
-    GROUP BY p.prod_id 
-    HAVING total_qty < p.safety_stock
-''')
-rows_alert = cursor.fetchall()
-cols_alert = [desc[0] for desc in cursor.description]
-df_alert_check = pd.DataFrame(rows_alert, columns=cols_alert)
-conn.close()
+# 呼叫快取低庫存警告檢查
+df_alert_check = cached_fetch_low_stock_alerts()
 
 if not df_alert_check.empty:
     alert_messages = []
@@ -156,59 +262,8 @@ use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=Fal
 
 stock_filter = st.selectbox("🔍 篩選庫存類別", ["顯示全部明細", "僅看食材 (R)", "僅看用品 (S)"], key="home_stock_filter")
 
-conn = get_db_conn()
-
-if stock_filter == "僅看食材 (R)":
-    query_condition = "WHERE p.prod_id LIKE 'R%'"
-elif stock_filter == "僅看用品 (S)":
-    query_condition = "WHERE p.prod_id LIKE 'S%'"
-else:
-    query_condition = "WHERE (p.prod_id LIKE 'R%' OR p.prod_id LIKE 'S%')"
-
-# 🔥 關鍵相容修正 3：替換原 pd.read_sql_query
-cursor = conn.cursor()
-cursor.execute(f'''
-    SELECT p.prod_id as 編號, 
-           p.prod_name as 商品名稱, 
-           COALESCE(SUM(CASE WHEN s.qty > 0 THEN s.qty ELSE 0 END), 0) as 總庫存量, 
-           p.use_unit as 單位, 
-           CASE 
-             WHEN COALESCE(SUM(CASE WHEN s.qty > 0 THEN s.qty ELSE 0 END), 0) > 0 
-             THEN (SUM(CASE WHEN s.qty > 0 THEN s.qty * s.cost ELSE 0 END) / SUM(CASE WHEN s.qty > 0 THEN s.qty ELSE 0 END))
-             ELSE p.cost 
-           END as 移動平均單位成本, 
-           COALESCE(SUM(CASE WHEN s.qty > 0 THEN s.qty * s.cost ELSE 0 END), 0) as 庫存總價值,
-           p.safety_stock as 安全庫存, 
-           p.status as 狀態碼
-    FROM products p 
-    LEFT JOIN stock_batches s ON p.prod_id = s.prod_id
-    {query_condition}
-    GROUP BY p.prod_id, p.prod_name, p.use_unit, p.safety_stock, p.status
-    ORDER BY p.status DESC, p.prod_id
-''')
-rows_stock = cursor.fetchall()
-cols_stock = [desc[0] for desc in cursor.description]
-df_merged_stock = pd.DataFrame(rows_stock, columns=cols_stock)
-
-# 核心同步更新：將資料庫 products 中的移動平均單位成本與即時加權算出來的數字進行健康同步
-for _, row in df_merged_stock.iterrows():
-    cursor.execute("UPDATE products SET cost = ? WHERE prod_id = ?", (float(row['移動平均單位成本']), row['編號']))
-
-# ==================== 【成品餐點 P 類 BOM 成本自動即時重算更新邏輯】 ====================
-cursor.execute('''
-    UPDATE products
-    SET cost = COALESCE((
-        SELECT SUM(b.qty_needed * child.cost)
-        FROM bom b
-        JOIN products child ON b.child_id = child.prod_id
-        WHERE b.parent_id = products.prod_id
-    ), 0.0)
-    WHERE products.prod_id LIKE 'P%'
-''')
-# ====================================================================================
-
-conn.commit()
-conn.close()
+# 🟢 改由快取讀取庫存資訊，且原先嚴重的 for 迴圈 UPDATE 與 BOM 重算已在此被徹底移除！
+df_merged_stock = cached_fetch_merged_stock(stock_filter)
 
 if not df_merged_stock.empty:
     # 根據開關狀態切換排版
@@ -228,7 +283,7 @@ if not df_merged_stock.empty:
                 # 第一列重要數據
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.metric(label="目庫存", value=f"{row['總庫存量']:,.1f} {row['單位']}")
+                    st.metric(label="目前庫存", value=f"{row['總庫存量']:,.1f} {row['單位']}")
                 with col2:
                     st.metric(label="安全線", value=f"{row['安全庫存']:,.1f} {row['單位']}")
                 
@@ -280,29 +335,12 @@ if not df_merged_stock.empty:
         
         target_prod_id = selected_stock_item.split(" - ")[0]
         
-        # 🔥 關鍵相容修正 4：替換原 pd.read_sql_query
-        conn = get_db_conn()
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT s.batch_id as 批次編號, 
-                   s.inbound_date as 進貨日期, 
-                   s.qty as 剩餘庫存量, 
-                   (s.qty * s.cost) as 當次進貨總金額,
-                   s.expiry_date as 有效期限, 
-                   s.vendor_name as 原始供應商,
-                   s.vendor_phone as 供應商電話
-            FROM stock_batches s
-            WHERE s.prod_id = ? AND s.qty > 0
-            ORDER BY s.inbound_date ASC, s.batch_id ASC
-        ''', (target_prod_id,))
-        rows_batch = cursor.fetchall()
-        cols_batch = [desc[0] for desc in cursor.description]
-        df_batch_details = pd.DataFrame(rows_batch, columns=cols_batch)
+        # 🟢 呼叫快取取得進貨批次明細
+        df_batch_details = cached_fetch_batch_details(target_prod_id)
         
         matched_item_row = df_merged_stock[df_merged_stock['編號'] == target_prod_id].iloc[0]
         base_cost = matched_item_row['移動平均單位成本']
         unit_str = matched_item_row['單位']
-        conn.close()
         
         if not df_batch_details.empty:
             st.caption(f"💡 目前 【{selected_stock_item}】 共由以下 {len(df_batch_details)} 個有效進貨批次組成")
@@ -326,20 +364,8 @@ if not df_merged_stock.empty:
         else:
             st.info("該品項目前無有效批次庫存。")
             
-    # 🔥 關鍵相容修正 5：替換原 pd.read_sql_query
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT DISTINCT p.prod_id, p.prod_name
-        FROM products p
-        JOIN stock_batches s ON p.prod_id = s.prod_id
-        WHERE p.status = 0 AND s.qty > 0
-        ORDER BY p.prod_id
-    ''')
-    rows_disabled = cursor.fetchall()
-    cols_disabled = [desc[0] for desc in cursor.description]
-    df_unique_disabled_items = pd.DataFrame(rows_disabled, columns=cols_disabled)
-    conn.close()
+    # 🟢 呼叫快取取得已下架含有庫存的商品
+    df_unique_disabled_items = cached_fetch_disabled_items_with_stock()
     
     if not df_unique_disabled_items.empty:
         st.markdown("---")
@@ -349,20 +375,8 @@ if not df_merged_stock.empty:
         selected_disabled_item_str = st.selectbox("🔍 1. 選取欲清理的下架商品/食材：", disabled_item_options, key="clean_disabled_item_box")
         target_disabled_prod_id = selected_disabled_item_str.split(" - ")[0]
         
-        # 🔥 關鍵相容修正 6：替換原 pd.read_sql_query
-        conn = get_db_conn()
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT s.batch_id, s.qty, s.original_qty, p.use_unit, s.inbound_date, s.expiry_date
-            FROM stock_batches s 
-            JOIN products p ON s.prod_id = p.prod_id 
-            WHERE s.prod_id = ? AND s.qty > 0
-            ORDER BY s.inbound_date ASC, s.batch_id ASC
-        ''', (target_disabled_prod_id,))
-        rows_dis_batch = cursor.fetchall()
-        cols_dis_batch = [desc[0] for desc in cursor.description]
-        df_disabled_batches = pd.DataFrame(rows_dis_batch, columns=cols_dis_batch)
-        conn.close()
+        # 🟢 呼叫快取取得下架批次詳情
+        df_disabled_batches = cached_fetch_disabled_batches(target_disabled_prod_id)
         
         if not df_disabled_batches.empty:
             def format_batch_label(r):
@@ -383,6 +397,9 @@ if not df_merged_stock.empty:
                 cursor.execute("UPDATE stock_batches SET qty = 0, original_qty = ? WHERE batch_id = ?", (new_orig_qty, target_batch_id))
                 conn.commit()
                 conn.close()
+                
+                # 🟢 關鍵：清庫存變更完畢後立即清除快取，重新抓取
+                st.cache_data.clear()
                 
                 # 🔥 【優化動作與指定大類】完美落入 📋 庫存微調/報廢/盤點 分類中
                 log_history(

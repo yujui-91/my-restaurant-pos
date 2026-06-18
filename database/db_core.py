@@ -5,6 +5,7 @@ import streamlit as st
 import libsql  
 import sqlite3
 import os
+import pandas as pd
 
 def get_db_conn():
     """
@@ -268,3 +269,17 @@ def show_pending_toast():
         q = st.session_state.toast_queue
         st.toast(q["text"], icon=q["icon"])
         st.session_state.toast_queue = None
+
+@st.cache_data(ttl=60) # 設定 TTL 為 60 秒，60秒內的操作完全不消耗遠端資料庫流量
+def fetch_active_products(prefix='P%'):
+    """快取獲取啟用的商品/餐點列表"""
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT prod_id, prod_name, price, cost, use_unit, safety_stock FROM products WHERE status = 1 AND prod_id LIKE ?", 
+        (prefix,)
+    )
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(rows, columns=cols)
