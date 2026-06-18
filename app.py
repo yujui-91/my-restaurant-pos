@@ -86,8 +86,13 @@ st.session_state.current_user = st.sidebar.text_input("操作人員", value=st.s
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ 快速微調安全庫存線")
 
+# 🔥 關鍵相容修正 1：替換原 pd.read_sql_query
 conn = get_db_conn()
-all_items_for_safety = pd.read_sql_query("SELECT * FROM products WHERE status = 1 AND (prod_id LIKE 'R%' OR prod_id LIKE 'S%')", conn)
+cursor = conn.cursor()
+cursor.execute("SELECT * FROM products WHERE status = 1 AND (prod_id LIKE 'R%' OR prod_id LIKE 'S%')")
+rows_safety = cursor.fetchall()
+cols_safety = [desc[0] for desc in cursor.description]
+all_items_for_safety = pd.DataFrame(rows_safety, columns=cols_safety)
 conn.close()
 
 if not all_items_for_safety.empty:
@@ -121,8 +126,10 @@ if not all_items_for_safety.empty:
         trigger_toast(f"已將 【{matched_safety_row['prod_name']}】 的安全線更新為 {new_safety_value}", icon="⚙️")
         st.rerun()
 
+# 🔥 關鍵相容修正 2：替換原 pd.read_sql_query
 conn = get_db_conn()
-df_alert_check = pd.read_sql_query('''
+cursor = conn.cursor()
+cursor.execute('''
     SELECT p.prod_name, 
            COALESCE((SELECT SUM(s.qty) FROM stock_batches s WHERE s.prod_id = p.prod_id AND s.qty > 0), 0) as total_qty, 
            p.safety_stock, p.use_unit
@@ -130,7 +137,10 @@ df_alert_check = pd.read_sql_query('''
     WHERE p.status = 1 AND (p.prod_id LIKE 'R%' OR p.prod_id LIKE 'S%')
     GROUP BY p.prod_id 
     HAVING total_qty < p.safety_stock
-''', conn)
+''')
+rows_alert = cursor.fetchall()
+cols_alert = [desc[0] for desc in cursor.description]
+df_alert_check = pd.DataFrame(rows_alert, columns=cols_alert)
 conn.close()
 
 if not df_alert_check.empty:
@@ -155,8 +165,9 @@ elif stock_filter == "僅看用品 (S)":
 else:
     query_condition = "WHERE (p.prod_id LIKE 'R%' OR p.prod_id LIKE 'S%')"
 
-# 核心優化：計算各批次 (剩餘量 * 該批單價) 加總，回推真正無誤的浮動移動平均單位成本
-df_merged_stock = pd.read_sql_query(f'''
+# 🔥 關鍵相容修正 3：替換原 pd.read_sql_query
+cursor = conn.cursor()
+cursor.execute(f'''
     SELECT p.prod_id as 編號, 
            p.prod_name as 商品名稱, 
            COALESCE(SUM(CASE WHEN s.qty > 0 THEN s.qty ELSE 0 END), 0) as 總庫存量, 
@@ -174,10 +185,12 @@ df_merged_stock = pd.read_sql_query(f'''
     {query_condition}
     GROUP BY p.prod_id, p.prod_name, p.use_unit, p.safety_stock, p.status
     ORDER BY p.status DESC, p.prod_id
-''', conn)
+''')
+rows_stock = cursor.fetchall()
+cols_stock = [desc[0] for desc in cursor.description]
+df_merged_stock = pd.DataFrame(rows_stock, columns=cols_stock)
 
 # 核心同步更新：將資料庫 products 中的移動平均單位成本與即時加權算出來的數字進行健康同步
-cursor = conn.cursor()
 for _, row in df_merged_stock.iterrows():
     cursor.execute("UPDATE products SET cost = ? WHERE prod_id = ?", (float(row['移動平均單位成本']), row['編號']))
 
@@ -215,7 +228,7 @@ if not df_merged_stock.empty:
                 # 第一列重要數據
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.metric(label="目前庫存", value=f"{row['總庫存量']:,.1f} {row['單位']}")
+                    st.metric(label="目庫存", value=f"{row['總庫存量']:,.1f} {row['單位']}")
                 with col2:
                     st.metric(label="安全線", value=f"{row['安全庫存']:,.1f} {row['單位']}")
                 
@@ -267,10 +280,12 @@ if not df_merged_stock.empty:
         
         target_prod_id = selected_stock_item.split(" - ")[0]
         
+        # 🔥 關鍵相容修正 4：替換原 pd.read_sql_query
         conn = get_db_conn()
-        df_batch_details = pd.read_sql_query('''
+        cursor = conn.cursor()
+        cursor.execute('''
             SELECT s.batch_id as 批次編號, 
-                   s.inbound_date as進貨日期, 
+                   s.inbound_date as 進貨日期, 
                    s.qty as 剩餘庫存量, 
                    (s.qty * s.cost) as 當次進貨總金額,
                    s.expiry_date as 有效期限, 
@@ -279,7 +294,10 @@ if not df_merged_stock.empty:
             FROM stock_batches s
             WHERE s.prod_id = ? AND s.qty > 0
             ORDER BY s.inbound_date ASC, s.batch_id ASC
-        ''', conn, params=(target_prod_id,))
+        ''', (target_prod_id,))
+        rows_batch = cursor.fetchall()
+        cols_batch = [desc[0] for desc in cursor.description]
+        df_batch_details = pd.DataFrame(rows_batch, columns=cols_batch)
         
         matched_item_row = df_merged_stock[df_merged_stock['編號'] == target_prod_id].iloc[0]
         base_cost = matched_item_row['移動平均單位成本']
@@ -308,14 +326,19 @@ if not df_merged_stock.empty:
         else:
             st.info("該品項目前無有效批次庫存。")
             
+    # 🔥 關鍵相容修正 5：替換原 pd.read_sql_query
     conn = get_db_conn()
-    df_unique_disabled_items = pd.read_sql_query('''
+    cursor = conn.cursor()
+    cursor.execute('''
         SELECT DISTINCT p.prod_id, p.prod_name
         FROM products p
         JOIN stock_batches s ON p.prod_id = s.prod_id
         WHERE p.status = 0 AND s.qty > 0
         ORDER BY p.prod_id
-    ''', conn)
+    ''')
+    rows_disabled = cursor.fetchall()
+    cols_disabled = [desc[0] for desc in cursor.description]
+    df_unique_disabled_items = pd.DataFrame(rows_disabled, columns=cols_disabled)
     conn.close()
     
     if not df_unique_disabled_items.empty:
@@ -326,14 +349,19 @@ if not df_merged_stock.empty:
         selected_disabled_item_str = st.selectbox("🔍 1. 選取欲清理的下架商品/食材：", disabled_item_options, key="clean_disabled_item_box")
         target_disabled_prod_id = selected_disabled_item_str.split(" - ")[0]
         
+        # 🔥 關鍵相容修正 6：替換原 pd.read_sql_query
         conn = get_db_conn()
-        df_disabled_batches = pd.read_sql_query('''
+        cursor = conn.cursor()
+        cursor.execute('''
             SELECT s.batch_id, s.qty, s.original_qty, p.use_unit, s.inbound_date, s.expiry_date
             FROM stock_batches s 
             JOIN products p ON s.prod_id = p.prod_id 
             WHERE s.prod_id = ? AND s.qty > 0
             ORDER BY s.inbound_date ASC, s.batch_id ASC
-        ''', conn, params=(target_disabled_prod_id,))
+        ''', (target_disabled_prod_id,))
+        rows_dis_batch = cursor.fetchall()
+        cols_dis_batch = [desc[0] for desc in cursor.description]
+        df_disabled_batches = pd.DataFrame(rows_dis_batch, columns=cols_dis_batch)
         conn.close()
         
         if not df_disabled_batches.empty:

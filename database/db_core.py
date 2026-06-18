@@ -14,8 +14,6 @@ def get_db_conn():
     """
     # 檢查是否設定了 Turso 的 Secrets
     if "TURSO_DATABASE_URL" in st.secrets and "TURSO_AUTH_TOKEN" in st.secrets:
-        # 🔥 修正：不要用 libsql_client，改用標準同步的 libsql 套件
-        # 這樣回傳的連線物件跟 sqlite3 完全一模一樣，後面的 cursor.execute 才能正常跑
         import libsql
         
         url = st.secrets["TURSO_DATABASE_URL"]
@@ -31,7 +29,6 @@ def get_db_conn():
         return sqlite3.connect("inventory.db")
 
 def init_db():
-    # 🔥 關鍵修正 2：將全檔案所有 sqlite3.connect 更換為 get_db_conn()
     conn = get_db_conn()
     cursor = conn.cursor()
     
@@ -47,14 +44,6 @@ def init_db():
                         conversion_factor REAL DEFAULT 1.0,
                         status INTEGER DEFAULT 1)''')
     
-    # 檢查是否需要升級舊資料庫（補上 status 欄位）
-    cursor.execute("PRAGMA table_info(products)")
-    columns = [info[1] for info in cursor.fetchall()]
-    if 'status' not in columns:
-        cursor.execute("ALTER TABLE products ADD COLUMN status INTEGER DEFAULT 1")
-        cursor.execute("UPDATE products SET status = 0, price = 100.0 WHERE price = -1.0")
-        cursor.execute("UPDATE products SET status = 0, price = 0.0 WHERE price = -2.0")
-    
     # 2. 庫存批次明細表 (引進 original_qty 欄位防止庫存憑空復活)
     cursor.execute('''CREATE TABLE IF NOT EXISTS stock_batches (
                         batch_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,16 +55,6 @@ def init_db():
                         vendor_phone TEXT DEFAULT '',
                         cost REAL DEFAULT 0.0,
                         original_qty REAL DEFAULT 0.0)''')
-    
-    # 檢查是否需要升級舊資料庫（補上 stock_batches 的 cost 與 original_qty 欄位）
-    cursor.execute("PRAGMA table_info(stock_batches)")
-    sb_columns = [info[1] for info in cursor.fetchall()]
-    if 'cost' not in sb_columns:
-        cursor.execute("ALTER TABLE stock_batches ADD COLUMN cost REAL DEFAULT 0.0")
-        cursor.execute("UPDATE stock_batches SET cost = COALESCE((SELECT cost FROM products WHERE products.prod_id = stock_batches.prod_id), 0.0)")
-    if 'original_qty' not in sb_columns:
-        cursor.execute("ALTER TABLE stock_batches ADD COLUMN original_qty REAL DEFAULT 0.0")
-        cursor.execute("UPDATE stock_batches SET original_qty = qty")
     
     # 3. BOM 組裝配方表
     cursor.execute('''CREATE TABLE IF NOT EXISTS bom (
@@ -92,18 +71,6 @@ def init_db():
                         action TEXT, 
                         details TEXT,
                         main_category TEXT DEFAULT '')''')
-    
-    # 升級檢查：舊歷史紀錄表可能沒有 main_category 欄位
-    cursor.execute("PRAGMA table_info(history)")
-    hist_columns = [info[1] for info in cursor.fetchall()]
-    if 'main_category' not in hist_columns:
-        cursor.execute("ALTER TABLE history ADD COLUMN main_category TEXT DEFAULT ''")
-        # 同步刷舊資料的大方向分類（確保升級舊資料後老報表不失效）
-        cursor.execute("UPDATE history SET main_category = '🛒 餐點收銀結帳' WHERE action IN ('多品項收銀結帳', '多品項收銀結帳-已微調更正', '訂單作廢成功', '更正點餐數量')")
-        cursor.execute("UPDATE history SET main_category = '⚙️ 餐點參數修正' WHERE action LIKE '修正餐點參數-%'")
-        cursor.execute("UPDATE history SET main_category = '📥 採購進貨登記' WHERE action IN ('採購進貨', '採購單更正')")
-        cursor.execute("UPDATE history SET main_category = '💰 帳單費用登記' WHERE action = '帳單支出登記'")
-        cursor.execute("UPDATE history SET main_category = '📋 庫存微調/報廢/盤點' WHERE action LIKE '庫存微調-%' OR action LIKE '存貨盤點-%' OR action LIKE '手動調整庫存-%'")
 
     # ==========================================
     # 🔥 核心優化：建立獨立結構化銷售表（應對多年大數據防卡死）
@@ -164,24 +131,28 @@ def log_history(user, action, details, main_category="", shared_cursor=None):
         elif action.startswith("手動調整庫存-") or action.startswith("存貨盤點-") or action.startswith("庫存微調"):
             main_category = "📋 庫存微調/報廢/盤點"
 
-    # 🔥 核心修正：如果主程式有傳入現成的 cursor，直接使用它寫入，不要重複開連線造成死鎖
-    if shared_cursor is not None:
-        shared_cursor.execute(
-            "INSERT INTO history (timestamp, user, action, details, main_category) VALUES (?, ?, ?, ?, ?)", 
-            (now, user, action, details, main_category)
-        )
-        return shared_cursor.lastrowid
-    else:
-        conn = get_db_conn()
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO history (timestamp, user, action, details, main_category) VALUES (?, ?, ?, ?, ?)", 
-            (now, user, action, details, main_category)
-        )
-        last_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        return last_id
+    # 🔥 關鍵防呆修正：加上 try...except，防止在資料表初始化完成前寫入造成 App 死鎖
+    try:
+        if shared_cursor is not None:
+            shared_cursor.execute(
+                "INSERT INTO history (timestamp, user, action, details, main_category) VALUES (?, ?, ?, ?, ?)", 
+                (now, user, action, details, main_category)
+            )
+            return shared_cursor.lastrowid
+        else:
+            conn = get_db_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO history (timestamp, user, action, details, main_category) VALUES (?, ?, ?, ?, ?)", 
+                (now, user, action, details, main_category)
+            )
+            last_id = cursor.lastrowid
+            conn.commit()
+            conn.close()
+            return last_id
+    except Exception as e:
+        print(f"⚠️ log_history 寫入暫時失敗: {e}")
+        return None
 
 def deduct_stock_fifo(prod_id, qty_to_deduct, cursor):
     cursor.execute("SELECT batch_id, qty, cost FROM stock_batches WHERE prod_id = ? AND qty > 0 ORDER BY expiry_date ASC, inbound_date ASC", (prod_id,))
