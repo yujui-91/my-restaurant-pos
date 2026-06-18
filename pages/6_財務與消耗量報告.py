@@ -89,20 +89,34 @@ df_mat_rank_raw = pd.read_sql_query('''
 
 material_usage = dict(zip(df_mat_rank_raw['食材物料'], df_mat_rank_raw['消耗總數量']))
 
-# 4. 處理庫存微調所產生的報廢損耗 (保持時間區間篩選)
+# 4. 處理庫存微調所產生的報廢損耗 (修正：改按「目標歸帳月份」篩選，排除操作時間限制以支援跨月補登)
 df_expenses_raw = pd.read_sql_query('''
     SELECT action, details, timestamp FROM history 
-    WHERE action LIKE '手動調整庫存-%' AND timestamp BETWEEN ? AND ?
-''', conn, params=(start_str, end_str))
+    WHERE action LIKE '手動調整庫存-%'
+''', conn)
 
 total_stock_loss = 0.0
 for _, row in df_expenses_raw.iterrows():
     if "品項:C" not in row['action']:
         details = row['details']
-        amt_match = re.search(r"總值變動:?\s*\$?(-?[\d\.]+)", details)
-        if amt_match:
-            change_amt = float(amt_match.group(1))
-            total_stock_loss += abs(change_amt) if change_amt < 0 else 0.0
+        
+        # 優先從 details 裡抓取目標歸帳月份
+        target_month_match = re.search(r"目標歸帳月份:\s*(\d{4}-\d{2})", details)
+        if target_month_match:
+            assigned_month = target_month_match.group(1)
+        else:
+            # 若無目標歸帳月份標籤，則保留原邏輯退回使用操作時間的月份
+            try:
+                assigned_month = datetime.strptime(row['timestamp'], "%Y-%m-%d %H:%M:%S").strftime("%Y-%m")
+            except:
+                assigned_month = ""
+        
+        # 判定該筆報廢的歸帳月份是否在當前財報涵蓋的目標月份內
+        if assigned_month in covered_target_months:
+            amt_match = re.search(r"總值變動:?\s*\$?(-?[\d\.]+)", details)
+            if amt_match:
+                change_amt = float(amt_match.group(1))
+                total_stock_loss += abs(change_amt) if change_amt < 0 else 0.0
 
 # 5. 撈取當前選擇時間區間內的精準實際進貨歷史明細（支援 R、S、C 所有大類）
 df_actual_purchase_details = pd.read_sql_query('''

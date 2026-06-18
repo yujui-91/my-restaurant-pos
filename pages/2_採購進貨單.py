@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
+import re
 from datetime import datetime, timedelta
 from database.db_core import log_history, get_next_raw_id, get_next_supply_id, get_next_bill_id, update_purchase_batch, trigger_toast, show_pending_toast
 
@@ -309,7 +310,6 @@ with po_tabs[1]:
             # 建立預設回退的 Date 物件
             default_edit_date = datetime.now().date()
             if hist_row:
-                import re
                 target_month_match = re.search(r"目標歸帳月份:\s*(\d{4})-(\d{2})", hist_row[0])
                 if target_month_match:
                     old_assigned_month_str = target_month_match.group(1) + "-" + target_month_match.group(2)
