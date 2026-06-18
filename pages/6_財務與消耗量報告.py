@@ -62,10 +62,10 @@ df_current_void_logs = pd.read_sql_query('''
       AND timestamp BETWEEN ? AND ?
 ''', conn, params=(start_str, end_str))
 
-# 【核心修改處】修改 WHERE 條件，將 '更正點餐數量' 與原先的 '多品項收銀結帳' 一併納入計算
+# 【核心修改處】將 '多品項收銀結帳-已微調更正' 納入撈取範圍，確保跨日更正時歷史資料能被正確比對與排除
 df_history_sales = pd.read_sql_query('''
     SELECT id, action, details, timestamp FROM history 
-    WHERE action IN ('多品項收銀結帳', '更正點餐數量')
+    WHERE action IN ('多品項收銀結帳', '更正點餐數量', '多品項收銀結帳-已微調更正')
       AND timestamp BETWEEN ? AND ?
 ''', conn, params=(start_str, end_str))
 
@@ -86,6 +86,10 @@ material_usage = {}
 
 # --- 處理正向銷售營收（不再剔除已被作廢的單號，保持歷史完整性） ---
 for _, row in df_history_sales.iterrows():
+    # 核心邏輯：如果該單已被微調更正，在拉長區間同時包含新舊單時，直接跳過舊單不計，以新單（更正點餐數量）為準
+    if row['action'] == '多品項收銀結帳-已微調更正':
+        continue
+        
     txt = row['details']
     
     if "||STRUCT_DATA||" in txt:
