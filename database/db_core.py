@@ -2,7 +2,7 @@
 import re
 from datetime import datetime, timedelta
 import streamlit as st
-import libsql_client  # <-- 關鍵修正 1：移除 import libsql，改成正確的 libsql_client
+import libsql  
 import sqlite3
 import os
 
