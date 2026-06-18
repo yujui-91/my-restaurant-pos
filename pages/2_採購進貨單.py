@@ -5,7 +5,6 @@ import sqlite3
 import re
 from datetime import datetime, timedelta
 from database.db_core import log_history, get_next_raw_id, get_next_supply_id, get_next_bill_id, update_purchase_batch, trigger_toast, show_pending_toast
-import streamlit as st
 
 # 檢查 session_state 中的登入狀態，若未登入則阻斷畫面並提示
 # if not st.session_state.get("password_correct", False):
@@ -29,11 +28,17 @@ with po_tabs[0]:
     elif "用品" in item_type: prefix = 'S'
     else: prefix = 'C'
 
+    # 安全替換：讀取既有項目清單
     conn = sqlite3.connect('inventory.db')
-    existing_items_df = pd.read_sql_query(
+    cursor = conn.cursor()
+    cursor.execute(
         "SELECT prod_id, prod_name, purchase_unit, use_unit, conversion_factor, safety_stock, status FROM products WHERE prod_id LIKE ?", 
-        conn, params=(f"{prefix}%",)
+        (f"{prefix}%",)
     )
+    rows_items = cursor.fetchall()
+    cols_items = [desc[0] for desc in cursor.description]
+    existing_items_df = pd.DataFrame(rows_items, columns=cols_items)
+    cursor.close()
     conn.close()
 
     st.markdown("##### 🔍 1. 品項選取：")
@@ -49,7 +54,7 @@ with po_tabs[0]:
             if row['status'] == 0:
                 options_display.append(f"{row['prod_name']} (🔴 已下架，採購將自動啟用)")
             else:
-                options_display.append(row['status'] == 0 and f"{row['prod_name']} (🔴 已下架，採購將自動啟用)" or row['prod_name'])
+                options_display.append(row['prod_name'])
                 
         chosen_select_display = st.selectbox("下拉搜尋現有品項", options_display, index=0)
         
@@ -91,7 +96,6 @@ with po_tabs[0]:
             with col_bill1:
                 total_invoice_amount = st.number_input("本次帳單【繳費總金額】($)", min_value=0.0, value=0.0, step=10.0)
             with col_bill2:
-                # 內建年月智慧選取，未來不需人工改扣碼
                 bill_date_input = st.date_input("請選取費用歸帳月份", value=datetime.now().date(), key="new_bill_date_picker")
                 selected_year = bill_date_input.year
                 selected_month_str = f"{bill_date_input.month}月"
@@ -250,8 +254,10 @@ with po_tabs[1]:
         
     where_clause = " WHERE " + " AND ".join(query_conditions) if query_conditions else ""
 
+    # 安全替換：讀取歷史採購單
     conn = sqlite3.connect('inventory.db')
-    df_all_batches = pd.read_sql_query(f'''
+    cursor = conn.cursor()
+    cursor.execute(f'''
         SELECT s.batch_id as 批次編號, s.prod_id as 商品編號, p.prod_name as 商品名稱, 
                s.qty as 當前小單位庫存, s.original_qty as 原始小單位庫存, p.purchase_unit as 進貨單位, p.use_unit as 使用單位,
                p.conversion_factor as 轉換率, (s.original_qty / p.conversion_factor) as 進貨大包裝數,
@@ -261,7 +267,11 @@ with po_tabs[1]:
         FROM stock_batches s JOIN products p ON s.prod_id = p.prod_id 
         {where_clause}
         ORDER BY s.batch_id DESC
-    ''', conn, params=query_params)
+    ''', query_params)
+    rows_batches = cursor.fetchall()
+    cols_batches = [desc[0] for desc in cursor.description]
+    df_all_batches = pd.DataFrame(rows_batches, columns=cols_batches)
+    cursor.close()
     conn.close()
     
     st.divider()
@@ -301,7 +311,6 @@ with po_tabs[1]:
                     key="edit_bill_amount_input"
                 )
             
-            # 從歷史稽核日誌反查先前設定的年份與月份作為預設回退依據
             old_assigned_month_str = ""
             conn = sqlite3.connect('inventory.db')
             cursor = conn.cursor()
@@ -312,7 +321,6 @@ with po_tabs[1]:
                 hist_row = cursor.fetchone()
             conn.close()
             
-            # 建立預設回退的 Date 物件
             default_edit_date = datetime.now().date()
             if hist_row:
                 target_month_match = re.search(r"目標歸帳月份:\s*(\d{4})-(\d{2})", hist_row[0])
@@ -334,7 +342,6 @@ with po_tabs[1]:
                             pass
             
             with col_bill_e2:
-                # 智慧選取年月組件
                 edit_bill_date_input = st.date_input("請選取費用【所屬年月】", value=default_edit_date, key="edit_bill_date_picker")
                 selected_year = edit_bill_date_input.year
                 selected_month_str = f"{edit_bill_date_input.month}月"
@@ -387,7 +394,6 @@ with po_tabs[1]:
                     
                     audit_trail = f"歷史帳單修正【{matched_batch_row['商品名稱']}】 (賬單批次: {target_batch_id}):\n"
                     
-                    # 歷史月份修正前後對比
                     if old_assigned_month_str and old_assigned_month_str != formatted_edit_month:
                         audit_trail += f" * 費用月份：從原本 {old_assigned_month_str} 改成 {formatted_edit_month}\n"
                     else:
@@ -403,7 +409,6 @@ with po_tabs[1]:
                     if float(matched_batch_row['推估總金額']) != new_total_amount:
                         audit_trail += f" * 採購總額：自 ${matched_batch_row['推估總金額']:.0f} 修改為 ${new_total_amount:.0f}\n"
                     
-                    # 全面捕捉原物料規格變更軌跡
                     if str(matched_batch_row['進貨單位']) != new_p_unit:
                         audit_trail += f" * 大包裝進貨單位：自【{matched_batch_row['進貨單位']}】變更為【{new_p_unit}】\n"
                     if str(matched_batch_row['使用單位']) != new_u_unit:

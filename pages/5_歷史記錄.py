@@ -3,7 +3,6 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 from datetime import datetime, timedelta
-import streamlit as st
 
 # 檢查 session_state 中的登入狀態，若未登入則阻斷畫面並提示
 # if not st.session_state.get("password_correct", False):
@@ -19,14 +18,12 @@ current_user = st.session_state.get('current_user', '老 闆')
 col_f1, col_f2 = st.columns(2)
 
 with col_f1:
-    # 篩選器 1：時間區間篩選
     history_time_option = st.selectbox(
         "📅 選擇查看時間區間",
         ["今天", "過去 7 天", "過去 30 天", "自訂區間 (自選起訖日期)"],
-        index=1,  # 修正防呆
+        index=1,
         key="history_filter"
     )
-    # 若不小心選到錯字，自動導回
     if history_time_option == "今天":
         pass
     elif history_time_option in ["過去 7 天"]:
@@ -54,7 +51,6 @@ start_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
 end_str = end_dt.strftime("%Y-%m-%d %H:%M:%S")
 
 with col_f2:
-    # 💡 篩選器 2：高度歸納的「大方向動作」選單
     selected_main_action = st.selectbox(
         "⚡ 篩選大方向動作類別",
         [
@@ -71,21 +67,26 @@ with col_f2:
 st.caption(f"目前查看審計區間：{start_dt.strftime('%Y-%m-%d %H:%M:%S')} ～ {end_dt.strftime('%Y-%m-%d %H:%M:%S')}")
 
 # ==========================================
-# 📊 依據「大方向」條件組合 SQL 撈出最終歷史紀錄（🔥 改為精準索引查詢）
+# 📊 依據「大方向」條件組合 SQL 撈出最終歷史紀錄
 # ==========================================
 conn = sqlite3.connect("inventory.db")
+cursor = conn.cursor()
 
 sql_query = "SELECT timestamp AS 時間, user AS 操作人, action AS 動作, details AS 詳細說明 FROM history WHERE timestamp BETWEEN ? AND ?"
 sql_params = [start_str, end_str]
 
-# 核心優化：不再使用 LIKE 進行字串模糊匹配，改用全表主索引 main_category 進行等值精準查詢
 if selected_main_action != "--- 全部動作項目 ---":
     sql_query += " AND main_category = ?"
     sql_params.append(selected_main_action)
 
 sql_query += " ORDER BY id DESC"
 
-df_hist = pd.read_sql_query(sql_query, conn, params=sql_params)
+# 安全替換：手動讀取歷史軌跡
+cursor.execute(sql_query, sql_params)
+rows_hist = cursor.fetchall()
+cols_hist = [desc[0] for desc in cursor.description]
+df_hist = pd.DataFrame(rows_hist, columns=cols_hist)
+cursor.close()
 conn.close()
 
 # ==========================================
@@ -103,7 +104,6 @@ if not df_hist.empty:
     use_mobile_view = st.toggle("📱 切換為手機/平板專用排版（防止長文字被遮擋）", value=False)
     
     if not use_mobile_view:
-        # 電腦版檢視：大表格 (此時「詳細說明」欄位已無 JSON 干擾，非常乾淨整潔)
         st.data_editor(
             df_hist,
             column_config={
@@ -118,7 +118,6 @@ if not df_hist.empty:
             key="history_view_table"
         )
     else:
-        # 手機/平板版檢視：直式卡片清單
         st.markdown("---")
         for idx, row in df_hist.iterrows():
             with st.expander(f"⏰ {row['時間']} | {row['動作']} ({row['操作人']})"):

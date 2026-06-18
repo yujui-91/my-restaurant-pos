@@ -23,9 +23,20 @@ current_user = st.session_state.get('current_user', '老 闆')
 if 'pos_shopping_cart' not in st.session_state:
     st.session_state.pos_shopping_cart = []
 
+# 安全替換：讀取既有餐點
 conn = get_db_conn()
-existing_dishes = pd.read_sql_query("SELECT prod_id, prod_name, price FROM products WHERE status = 1 AND prod_id LIKE 'P%'", conn)
-all_raw_df = pd.read_sql_query("SELECT prod_id, prod_name, use_unit, cost FROM products WHERE status = 1 AND (prod_id LIKE 'R%' OR prod_id LIKE 'S%')", conn)
+cursor = conn.cursor()
+cursor.execute("SELECT prod_id, prod_name, price FROM products WHERE status = 1 AND prod_id LIKE 'P%'")
+rows_dishes = cursor.fetchall()
+cols_dishes = [desc[0] for desc in cursor.description]
+existing_dishes = pd.DataFrame(rows_dishes, columns=cols_dishes)
+
+# 安全替換：讀取原物料
+cursor.execute("SELECT prod_id, prod_name, use_unit, cost FROM products WHERE status = 1 AND (prod_id LIKE 'R%' OR prod_id LIKE 'S%')")
+rows_raw = cursor.fetchall()
+cols_raw = [desc[0] for desc in cursor.description]
+all_raw_df = pd.DataFrame(rows_raw, columns=cols_raw)
+cursor.close()
 conn.close()
 
 def calculate_cart_estimated_cost(cart_items):
@@ -254,15 +265,22 @@ with pos_tabs[0]:
                     
                     # 🔥【死鎖修復點一】：先在完全不打開 UPDATE 交易的狀態下，把所需的 BOM 資料全部 SELECT 出來
                     conn_read = get_db_conn()
+                    cursor_read = conn_read.cursor()
                     for cart_item in st.session_state.pos_shopping_cart:
                         d_id = cart_item['prod_id']
                         d_qty = cart_item['qty']
                         
-                        db_bom = pd.read_sql_query("SELECT child_id, qty_needed FROM bom WHERE parent_id = ?", conn_read, params=(d_id,))
+                        # 安全替換：手動 execute + fetchall 封裝
+                        cursor_read.execute("SELECT child_id, qty_needed FROM bom WHERE parent_id = ?", (d_id,))
+                        rows_bom = cursor_read.fetchall()
+                        cols_bom = [desc[0] for desc in cursor_read.description]
+                        db_bom = pd.DataFrame(rows_bom, columns=cols_bom)
+                        
                         for _, bom_row in db_bom.iterrows():
                             c_id = bom_row['child_id']
                             needed_units = float(bom_row['qty_needed']) * d_qty
                             all_mats_needed[c_id] = all_mats_needed.get(c_id, 0.0) + needed_units
+                    cursor_read.close()
                     conn_read.close()
                     
                     # 準備進入獨佔修改階段
@@ -386,12 +404,18 @@ with pos_tabs[1]:
     today_start = datetime.now().strftime("%Y-%m-%d 00:00:00")
     today_end = datetime.now().strftime("%Y-%m-%d 23:59:59")
 
+    # 安全替換：讀取當日出餐紀錄
     conn = get_db_conn()
-    df_today_orders = pd.read_sql_query('''
+    cursor = conn.cursor()
+    cursor.execute('''
         SELECT id, timestamp, user, details FROM history 
         WHERE action IN ('多品項收銀結帳', '更正點餐數量') AND timestamp BETWEEN ? AND ?
         ORDER BY id DESC
-    ''', conn, params=(today_start, today_end))
+    ''', (today_start, today_end))
+    rows_today_orders = cursor.fetchall()
+    cols_today_orders = [desc[0] for desc in cursor.description]
+    df_today_orders = pd.DataFrame(rows_today_orders, columns=cols_today_orders)
+    cursor.close()
     conn.close()
 
     if df_today_orders.empty:
@@ -463,7 +487,6 @@ with pos_tabs[1]:
             raw_mats = re.findall(r"([^\s_,\(]+)_([RS]\d+)\(([\d\.]+)([^\)]+)\)", order_details_text)
             parsed_mats = [{"mat_name": m[0], "mat_id": m[1], "qty": float(m[2]), "unit": m[3], "deducted_batches": []} for m in raw_mats]
 
-        
         manage_action = st.radio("選擇類型：", ["❌ 整單作廢（全數退款並回補庫存）", "✏️ 更正點餐數量"], horizontal=True)
 
         if "整單作廢" in manage_action:
@@ -494,7 +517,7 @@ with pos_tabs[1]:
                                 p_cost = cursor.fetchone()[0] or 0.0
                                 cursor.execute("INSERT INTO stock_batches (prod_id, qty, original_qty, expiry_date, inbound_date, vendor_name, cost) VALUES (?, ?, ?, '', ?, '前台作廢退回', ?)", (mat_id, refund_qty, refund_qty, today_str, p_cost))
                     
-                    # 🔥 同步更新新版訂單結構狀態 (0=已作廢)
+                    # 🔥 同步更新新版訂單結構状態 (0=已作廢)
                     cursor.execute("UPDATE orders SET status = 0 WHERE history_id = ?", (target_hist_id,))
                     
                     conn.commit()
@@ -1033,12 +1056,19 @@ with pos_tabs[2]:
             old_price = int(float(matched_dish['price']))
             
             if 'editing_recipe_dish_id' not in st.session_state or st.session_state.editing_recipe_dish_id != td_id:
+                # 安全替換：讀取餐點配方
                 conn = get_db_conn()
-                db_recipe = pd.read_sql_query('''
+                cursor = conn.cursor()
+                cursor.execute('''
                     SELECT p.prod_name as 食材名稱, b.child_id as 食材編號, b.qty_needed as 單位用量, p.use_unit as 單位
                     FROM bom b JOIN products p ON b.child_id = p.prod_id WHERE b.parent_id = ?
-                ''', conn, params=(td_id,))
+                ''', (td_id,))
+                rows_recipe = cursor.fetchall()
+                cols_recipe = [desc[0] for desc in cursor.description]
+                db_recipe = pd.DataFrame(rows_recipe, columns=cols_recipe)
+                cursor.close()
                 conn.close()
+                
                 st.session_state.editing_recipe_list = db_recipe.to_dict(orient='records')
                 st.session_state.editing_recipe_dish_id = td_id
 
@@ -1152,8 +1182,14 @@ with pos_tabs[2]:
 # ==========================================
 with pos_tabs[3]:
     st.markdown("##### ❌ 菜單餐點下架控制面板")
+    # 安全替換：讀取正式菜單
     conn = get_db_conn()
-    all_dishes_raw = pd.read_sql_query("SELECT prod_id, prod_name, price, status FROM products WHERE prod_id LIKE 'P%'", conn)
+    cursor = conn.cursor()
+    cursor.execute("SELECT prod_id, prod_name, price, status FROM products WHERE prod_id LIKE 'P%'")
+    rows_dishes_all = cursor.fetchall()
+    cols_dishes_all = [desc[0] for desc in cursor.description]
+    all_dishes_raw = pd.DataFrame(rows_dishes_all, columns=cols_dishes_all)
+    cursor.close()
     conn.close()
     
     if all_dishes_raw.empty:
@@ -1197,8 +1233,14 @@ with pos_tabs[3]:
 
     st.markdown("---")
     st.markdown("##### ❌ 食材與用品庫存品項下架面板")
+    # 安全替換：讀取庫存物料
     conn = get_db_conn()
-    all_mats_raw = pd.read_sql_query("SELECT prod_id, prod_name, use_unit, status FROM products WHERE prod_id LIKE 'R%' OR prod_id LIKE 'S%'", conn)
+    cursor = conn.cursor()
+    cursor.execute("SELECT prod_id, prod_name, use_unit, status FROM products WHERE prod_id LIKE 'R%' OR prod_id LIKE 'S%'")
+    rows_mats_all = cursor.fetchall()
+    cols_mats_all = [desc[0] for desc in cursor.description]
+    all_mats_raw = pd.DataFrame(rows_mats_all, columns=cols_mats_all)
+    cursor.close()
     conn.close()
     
     if all_mats_raw.empty:

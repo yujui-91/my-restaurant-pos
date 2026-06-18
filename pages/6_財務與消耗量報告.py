@@ -7,7 +7,6 @@ import json
 import plotly.express as px
 from datetime import datetime, timedelta
 from database.db_core import show_pending_toast
-import streamlit as st
 
 # 檢查 session_state 中的登入狀態，若未登入則阻斷畫面並提示
 # if not st.session_state.get("password_correct", False):
@@ -25,7 +24,7 @@ use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=Fal
 # ==========================================
 report_option = st.selectbox(
     "📅 請選擇財務統計區間：", 
-    ["今天", "過去 7 天", "過去 30 天", "自訂區間 (自選起訖日期)"], 
+    ["今天", "過去 7 天", "過去 30 定", "自訂區間 (自選起訖日期)"], 
     key="finance_time_filter"
 )
 
@@ -62,81 +61,91 @@ while current_ptr <= end_date:
 # 📊 資料庫核心撈取與高速 SQL 底層聚合（徹底抗卡頓）
 # ==========================================
 conn = sqlite3.connect('inventory.db')
+cursor = conn.cursor()
 
-# 1. 直接由 SQL SUM 聚合出營收與精準食材成本 (status = 1 正常計入財報的單據)
-df_sales_summary = pd.read_sql_query('''
+# 1. 營收總計安全替換
+cursor.execute('''
     SELECT COALESCE(SUM(total_revenue), 0.0) AS rev, COALESCE(SUM(total_cost), 0.0) AS cst
     FROM orders 
     WHERE status = 1 AND timestamp BETWEEN ? AND ?
-''', conn, params=(start_str, end_str))
+''', (start_str, end_str))
+rows_sales = cursor.fetchall()
+cols_sales = [desc[0] for desc in cursor.description]
+df_sales_summary = pd.DataFrame(rows_sales, columns=cols_sales)
 
 total_revenue = float(df_sales_summary.iloc[0]['rev'])
 total_food_cost = float(df_sales_summary.iloc[0]['cst'])
 
-# 2. 直接由 SQL GROUP BY 聚合出餐點排行
-df_dish_rank_raw = pd.read_sql_query('''
+# 2. 餐點排行安全替換
+cursor.execute('''
     SELECT oi.prod_name AS 餐點名稱, SUM(oi.qty) AS 銷售份數
     FROM order_items oi
     JOIN orders o ON oi.order_id = o.order_id
     WHERE o.status = 1 AND o.timestamp BETWEEN ? AND ?
     GROUP BY oi.prod_name
     ORDER BY 銷售份數 DESC
-''', conn, params=(start_str, end_str))
+''', (start_str, end_str))
+rows_dish_rank = cursor.fetchall()
+cols_dish_rank = [desc[0] for desc in cursor.description]
+df_dish_rank_raw = pd.DataFrame(rows_dish_rank, columns=cols_dish_rank)
 
 dish_sales = dict(zip(df_dish_rank_raw['餐點名稱'], df_dish_rank_raw['銷售份數']))
 
-# 3. 直接由 SQL GROUP BY 聚合出原物料消耗排行
-df_mat_rank_raw = pd.read_sql_query('''
+# 3. 原物料排行安全替換
+cursor.execute('''
     SELECT om.mat_name AS 食材物料, SUM(om.qty) AS 消耗總數量
     FROM order_materials om
     JOIN orders o ON om.order_id = o.order_id
     WHERE o.status = 1 AND o.timestamp BETWEEN ? AND ?
     GROUP BY om.mat_name
     ORDER BY 消耗總數量 DESC
-''', conn, params=(start_str, end_str))
+''', (start_str, end_str))
+rows_mat_rank = cursor.fetchall()
+cols_mat_rank = [desc[0] for desc in cursor.description]
+df_mat_rank_raw = pd.DataFrame(rows_mat_rank, columns=cols_mat_rank)
 
 material_usage = dict(zip(df_mat_rank_raw['食材物料'], df_mat_rank_raw['消耗總數量']))
 
-# 4. 處理庫存微調所產生的報廢損耗 (修正：改按「目標歸帳月份」篩選，排除操作時間限制以支援跨月補登)
-df_expenses_raw = pd.read_sql_query('''
+# 4. 損耗費用安全替換
+cursor.execute('''
     SELECT action, details, timestamp FROM history 
     WHERE action LIKE '手動調整庫存-%'
-''', conn)
+''')
+rows_expenses = cursor.fetchall()
+cols_expenses = [desc[0] for desc in cursor.description]
+df_expenses_raw = pd.DataFrame(rows_expenses, columns=cols_expenses)
 
 total_stock_loss = 0.0
 for _, row in df_expenses_raw.iterrows():
     if "品項:C" not in row['action']:
         details = row['details']
         
-        # 優先從 details 裡抓取目標歸帳月份
         target_month_match = re.search(r"目標歸帳月份:\s*(\d{4}-\d{2})", details)
         if target_month_match:
             assigned_month = target_month_match.group(1)
         else:
-            # 若無目標歸帳月份標籤，則保留原邏輯退回使用操作時間的月份
-            try:
-                assigned_month = datetime.strptime(row['timestamp'], "%Y-%m-%d %H:%M:%S").strftime("%Y-%m")
-            except:
-                assigned_month = ""
+            try: assigned_month = datetime.strptime(row['timestamp'], "%Y-%m-%d %H:%M:%S").strftime("%Y-%m")
+            except: assigned_month = ""
         
-        # 判定該筆報廢的歸帳月份是否在當前財報涵蓋的目標月份內
         if assigned_month in covered_target_months:
             amt_match = re.search(r"總值變動:?\s*\$?(-?[\d\.]+)", details)
             if amt_match:
                 change_amt = float(amt_match.group(1))
                 total_stock_loss += abs(change_amt) if change_amt < 0 else 0.0
 
-# 5. 撈取當前選擇時間區間內的精準實際進貨歷史明細（支援 R、S、C 所有大類）
-df_actual_purchase_details = pd.read_sql_query('''
+# 5. 進貨明細安全替換
+cursor.execute('''
     SELECT s.batch_id, s.prod_id, p.prod_name, s.original_qty, s.cost, s.inbound_date, p.purchase_unit
     FROM stock_batches s
     JOIN products p ON s.prod_id = p.prod_id
     WHERE (s.prod_id LIKE 'R%' OR s.prod_id LIKE 'S%' OR s.prod_id LIKE 'C%')
       AND s.inbound_date BETWEEN ? AND ?
     ORDER BY s.inbound_date DESC, s.batch_id DESC
-''', conn, params=(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")))
+''', (start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")))
+rows_purchase = cursor.fetchall()
+cols_purchase = [desc[0] for desc in cursor.description]
+df_actual_purchase_details = pd.DataFrame(rows_purchase, columns=cols_purchase)
 
-# 計算進貨總金額與明細建立
 total_purchase_cost = 0.0
 purchase_records = []
 for _, row in df_actual_purchase_details.iterrows():
@@ -144,14 +153,10 @@ for _, row in df_actual_purchase_details.iterrows():
     total_purchase_cost += this_purchase_amt
     
     p_id = row['prod_id']
-    if p_id.startswith('R'):
-        cate_label = "食材 (R)"
-    elif p_id.startswith('C'):
-        cate_label = "營運帳單 (C)"
-    elif p_id.startswith('S'):
-        cate_label = "用品 (S)"
-    else:
-        cate_label = "其他"
+    if p_id.startswith('R'): cate_label = "食材 (R)"
+    elif p_id.startswith('C'): cate_label = "營運帳單 (C)"
+    elif p_id.startswith('S'): cate_label = "用品 (S)"
+    else: cate_label = "其他"
 
     purchase_records.append({
         "進貨日期": row['inbound_date'],
@@ -161,19 +166,27 @@ for _, row in df_actual_purchase_details.iterrows():
         "進貨總額": this_purchase_amt
     })
 
-# 6. 保留並優化原有：固定資產費用與營運帳單（C類物料）的特殊跨月會計歸帳邏輯
-df_c_batches = pd.read_sql_query('''
+# 6. C類特殊月度歸帳安全替換
+cursor.execute('''
     SELECT s.batch_id, s.prod_id, p.prod_name, s.qty, s.cost, s.inbound_date
     FROM stock_batches s
     JOIN products p ON s.prod_id = p.prod_id
     WHERE s.prod_id LIKE 'C%'
-''', conn)
+''')
+rows_c_batches = cursor.fetchall()
+cols_c_batches = [desc[0] for desc in cursor.description]
+df_c_batches = pd.DataFrame(rows_c_batches, columns=cols_c_batches)
 
-df_c_history = pd.read_sql_query('''
+cursor.execute('''
     SELECT id, action, details, timestamp FROM history
     WHERE details LIKE '%目標歸帳月份:%'
     ORDER BY id ASC
-''', conn)
+''')
+rows_c_hist = cursor.fetchall()
+cols_c_hist = [desc[0] for desc in cursor.description]
+df_c_history = pd.DataFrame(rows_c_hist, columns=cols_c_hist)
+
+cursor.close()
 conn.close()
 
 batch_target_months = {}
@@ -192,13 +205,10 @@ total_op_expense = 0.0
 c_expense_records = []
 for _, row in df_c_batches.iterrows():
     b_id = int(row['batch_id'])
-    if b_id in batch_target_months:
-        assigned_month = batch_target_months[b_id]
+    if b_id in batch_target_months: assigned_month = batch_target_months[b_id]
     else:
-        try:
-            assigned_month = datetime.strptime(row['inbound_date'], "%Y-%m-%d").strftime("%Y-%m")
-        except:
-            assigned_month = ""
+        try: assigned_month = datetime.strptime(row['inbound_date'], "%Y-%m-%d").strftime("%Y-%m")
+        except: assigned_month = ""
             
     if assigned_month in covered_target_months:
         expense_val = float(row['qty'] * row['cost'])
@@ -221,26 +231,17 @@ gross_margin = (gross_profit / total_revenue * 100) if total_revenue > 0 else 0.
 st.markdown("### 🧾 門市動態損益")
 st.info(f"💡 **會計帳生效中：** 目前選擇的區間涵蓋了 {', '.join(covered_target_months)} 的帳單 顯示當前固定資產與費用。")
 
-# 根據是否啟用手機檢視切換指標排版
 if use_mobile_view:
-    # 📱 手機模式：拆成兩列（3欄 × 2列）的矩陣，給千分位與字串留足空間
     row1_c1, row1_c2, row1_c3 = st.columns(3)
-    with row1_c1:
-        st.metric("🏪 營業總收入", f"${total_revenue:,.0f}")
-    with row1_c2:
-        st.metric("🥩 食材消耗成本", f"${total_food_cost:,.0f}")
-    with row1_c3:
-        st.metric("⚡ 帳單費用", f"${total_op_expense:,.1f}")
+    with row1_c1: st.metric("🏪 營業總收入", f"${total_revenue:,.0f}")
+    with row1_c2: st.metric("🥩 食材消耗成本", f"${total_food_cost:,.0f}")
+    with row1_c3: st.metric("⚡ 帳單費用", f"${total_op_expense:,.1f}")
         
     row2_c1, row2_c2, row2_c3 = st.columns(3)
-    with row2_c1:
-        st.metric("📥 期間進貨總額", f"${total_purchase_cost:,.0f}")
-    with row2_c2:
-        st.metric("🔥 最終真實淨利", f"${net_profit:,.1f}")
-    with row2_c3:
-        st.metric("📈 門市淨利率", f"{margin:.1f}%")
+    with row2_c1: st.metric("📥 期間進貨總額", f"${total_purchase_cost:,.0f}")
+    with row2_c2: st.metric("🔥 最終真實淨利", f"${net_profit:,.1f}")
+    with row2_c3: st.metric("📈 門市淨利率", f"{margin:.1f}%")
 else:
-    # 💻 桌機模式：保持原本的一直排 6 欄排版
     a, b, c, po_box, d, e = st.columns(6)
     a.metric("🏪 營業總收入", f"${total_revenue:,.0f}")
     b.metric("🥩 食材消耗成本", f"${total_food_cost:,.0f}")
@@ -254,15 +255,12 @@ st.divider()
 # ==========================================
 # 🏆 面板呈現區 2：餐點排行與原物料消耗
 # ==========================================
-# 根據是否為手機檢視，切換橫向並排或直式依序排版
 if use_mobile_view:
-    # 📱 手機模式：移除 st.columns(2)，改為直式上下依序呈現
     st.markdown("### 餐點銷售排行")
     if dish_sales:
         rank_df = pd.DataFrame(list(dish_sales.items()), columns=["餐點名稱", "銷售份數"]).sort_values(by="銷售份數", ascending=False)
         st.dataframe(rank_df, hide_index=True, use_container_width=True)
-    else:
-        st.info("💡 當前選定期間內尚無餐點銷售紀錄。")
+    else: st.info("💡 當前選定期間內尚無餐點銷售紀錄。")
         
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -270,27 +268,22 @@ if use_mobile_view:
     if material_usage:
         mat_df = pd.DataFrame(list(material_usage.items()), columns=["食材物料", "消耗總數量"]).sort_values(by="消耗總數量", ascending=False)
         st.dataframe(mat_df, hide_index=True, use_container_width=True)
-    else:
-        st.info("💡 當前選定期間內尚無食材消耗數據。")
+    else: st.info("💡 當前選定期間內尚無食材消耗數據。")
 else:
-    # 💻 桌機模式：維持左右並排的 st.columns(2)
     left_col, right_col = st.columns(2)
-
     with left_col:
         st.markdown("### 餐點銷售排行")
         if dish_sales:
             rank_df = pd.DataFrame(list(dish_sales.items()), columns=["餐點名稱", "銷售份數"]).sort_values(by="銷售份數", ascending=False)
             st.dataframe(rank_df, hide_index=True, use_container_width=True)
-        else:
-            st.info("💡 當前選定期間內尚無餐點銷售紀錄。")
+        else: st.info("💡 當前選定期間內尚無餐點銷售紀錄。")
 
     with right_col:
         st.markdown("### 原物料消耗排行")  
         if material_usage:
             mat_df = pd.DataFrame(list(material_usage.items()), columns=["食材物料", "消耗總數量"]).sort_values(by="消耗總數量", ascending=False)
             st.dataframe(mat_df, hide_index=True, use_container_width=True)
-        else:
-            st.info("💡 當前選定期間內尚無食材消耗數據。")
+        else: st.info("💡 當前選定期間內尚無食材消耗數據。")
 
 st.divider()
 
@@ -302,7 +295,6 @@ st.markdown("### 📥 採購進貨明細追蹤")
 if not purchase_records:
     st.info(f"💡 當前選定日期區間（{start_date} ～ {end_date}）內沒有任何物料採購進貨紀錄。")
 else:
-    # 【新增分類篩選組件】
     filter_cate = st.radio(
         "📂 依分類篩選進貨明細：",
         ["顯示全部", "食材 (R)", "用品 (S)" ,"營運帳單 (C)"],
@@ -311,8 +303,6 @@ else:
     )
     
     df_purchase_view = pd.DataFrame(purchase_records)
-    
-    # 進行前端 DataFrame 的過濾處理
     if filter_cate != "顯示全部":
         df_purchase_view = df_purchase_view[df_purchase_view["分類"] == filter_cate]
         
