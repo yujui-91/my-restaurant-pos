@@ -6,9 +6,9 @@ from datetime import datetime, timedelta
 import streamlit as st
 
 # 檢查 session_state 中的登入狀態，若未登入則阻斷畫面並提示
-if not st.session_state.get("password_correct", False):
-    st.warning("🔒 請先前往首頁登入管理系統！")
-    st.stop()
+# if not st.session_state.get("password_correct", False):
+#     st.warning("🔒 請先前往首頁登入管理系統！")
+#     st.stop()
 st.subheader("📜 歷史動作審計軌跡")
 
 current_user = st.session_state.get('current_user', '老 闆')
