@@ -14,12 +14,15 @@ def get_db_conn():
     """
     # 檢查是否設定了 Turso 的 Secrets
     if "TURSO_DATABASE_URL" in st.secrets and "TURSO_AUTH_TOKEN" in st.secrets:
-        # 使用 Turso (libsql_client) 連線
+        # 🔥 修正：不要用 libsql_client，改用標準同步的 libsql 套件
+        # 這樣回傳的連線物件跟 sqlite3 完全一模一樣，後面的 cursor.execute 才能正常跑
+        import libsql
+        
         url = st.secrets["TURSO_DATABASE_URL"]
         token = st.secrets["TURSO_AUTH_TOKEN"]
         
-        # 🔥 修正：使用 libsql_client 的 connect 介面，它與 sqlite3 語法完全相容
-        return libsql_client.connect(url, auth_token=token)
+        # 建立 Turso 的標準同步連線
+        return libsql.connect(url, auth_token=token)
     else:
         # 降級使用本地資料庫
         db_path = os.path.join(os.path.dirname(__file__), "..", "inventory.db")
