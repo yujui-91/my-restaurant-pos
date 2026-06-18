@@ -52,6 +52,23 @@ st.markdown("""
             font-size: 15px !important;
             font-weight: 500;
         }
+        /* 手機卡片專用樣式 */
+        .mobile-card {
+            border: 1px solid #e6e6e6;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+            background-color: #ffffff;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .mobile-card-disabled {
+            border: 1px solid #ffcccc;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+            background-color: #fff2f2;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
     </style>
 """, unsafe_allow_html=True)
 
@@ -121,9 +138,12 @@ if not df_alert_check.empty:
     alert_messages = []
     for _, row in df_alert_check.iterrows():
         alert_messages.append(f"【{row['prod_name']}】僅剩 {row['total_qty']:.1f}{row['use_unit']} (安全線: {row['safety_stock']:.1f})")
-    st.warning("⚠️ **【低庫存補貨預警跑馬燈】** 🚨 " + " ｜ " + " ｜ ".join(alert_messages))
+    st.warning("⚠️ **【低庫存補貨預警跑慢燈】** 🚨 " + " ｜ " + " ｜ ".join(alert_messages))
 
 st.subheader("📊 目前庫存明細")
+
+# 加入手機模式切換開關
+use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=False, key="home_mobile_toggle")
 
 stock_filter = st.selectbox("🔍 篩選庫存類別", ["顯示全部明細", "僅看食材 (R)", "僅看用品 (S)"], key="home_stock_filter")
 
@@ -179,30 +199,61 @@ conn.commit()
 conn.close()
 
 if not df_merged_stock.empty:
-    def highlight_disabled(row):
-        styles = [''] * len(row)
-        name_idx = row.index.get_loc('商品名稱')
-        status_idx = row.index.get_loc('狀態碼')
-        if row.iloc[status_idx] == 0:
-            styles[name_idx] = 'background-color: #ffcccc; color: #cc0000; font-weight: bold;'
-        return styles
+    # 根據開關狀態切換排版
+    if use_mobile_view:
+        # 手機卡片式排版
+        for _, row in df_merged_stock.iterrows():
+            card_class = "mobile-card" if row['狀態碼'] == 1 else "mobile-card-disabled"
+            disabled_text = " (已下架)" if row['狀態碼'] == 0 else ""
+            
+            with st.container():
+                st.markdown(f"""
+                <div class="{card_class}">
+                    <strong style='font-size:16px;'>【{row['編號']}】 {row['商品名稱']}{disabled_text}</strong>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # 第一列重要數據
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric(label="目前庫存", value=f"{row['總庫存量']:,.1f} {row['單位']}")
+                with col2:
+                    st.metric(label="安全線", value=f"{row['安全庫存']:,.1f} {row['單位']}")
+                
+                # 第二列財務數據
+                col3, col4 = st.columns(2)
+                with col3:
+                    st.caption(f"單位成本: **${row['移動平均單位成本']:,.4f}**")
+                with col4:
+                    st.caption(f"庫存總價值: **${row['庫存總價值']:,.1f}**")
+                    
+                st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
+    else:
+        # 桌機表格排版
+        def highlight_disabled(row):
+            styles = [''] * len(row)
+            name_idx = row.index.get_loc('商品名稱')
+            status_idx = row.index.get_loc('狀態碼')
+            if row.iloc[status_idx] == 0:
+                styles[name_idx] = 'background-color: #ffcccc; color: #cc0000; font-weight: bold;'
+            return styles
 
-    st.dataframe(
-        df_merged_stock.style.apply(highlight_disabled, axis=1)
-                     .format({"總庫存量": "{:,.1f}", "移動平均單位成本": "${:,.4f}", "庫存總價值": "${:,.1f}", "安全庫存": "{:,.1f}"}), 
-        use_container_width=True, 
-        column_config={
-            "狀態碼": None,
-            "編號": st.column_config.TextColumn("編號", width="small"),
-            "商品名稱": st.column_config.TextColumn("商品名稱", width="medium"),
-            "總庫存量": st.column_config.NumberColumn("總庫存量", width="small"),
-            "單位": st.column_config.TextColumn("單位", width="small"),
-            "移動平均單位成本": st.column_config.NumberColumn("單位成本", width="small"),
-            "庫存總價值": st.column_config.NumberColumn("總價值", width="small"),
-            "安全庫存": st.column_config.NumberColumn("安全線", width="small"),
-        },
-        hide_index=True
-    )
+        st.dataframe(
+            df_merged_stock.style.apply(highlight_disabled, axis=1)
+                         .format({"總庫存量": "{:,.1f}", "移動平均單位成本": "${:,.4f}", "庫存總價值": "${:,.1f}", "安全庫存": "{:,.1f}"}), 
+            use_container_width=True, 
+            column_config={
+                "狀態碼": None,
+                "編號": st.column_config.TextColumn("編號", width="small"),
+                "商品名稱": st.column_config.TextColumn("商品名稱", width="medium"),
+                "總庫存量": st.column_config.NumberColumn("總庫存量", width="small"),
+                "單位": st.column_config.TextColumn("單位", width="small"),
+                "移動平均單位成本": st.column_config.NumberColumn("單位成本", width="small"),
+                "庫存總價值": st.column_config.NumberColumn("總價值", width="small"),
+                "安全庫存": st.column_config.NumberColumn("安全線", width="small"),
+            },
+            hide_index=True
+        )
     
     st.markdown("---")
     st.markdown("### 🔍 歷史進貨面板")

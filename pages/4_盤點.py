@@ -14,6 +14,9 @@ show_pending_toast()
 
 st.subheader("📋 存貨盤點核實")
 
+# 加入手機模式切換開關
+use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=False, key="audit_mobile_toggle")
+
 current_user = st.session_state.get('current_user', '老 闆')
 
 audit_cate_filter = st.radio("🗂️ 請選擇盤點項目類別：", ["食材 (R)", "用品 (S)"], horizontal=True)
@@ -46,14 +49,39 @@ if not df_products_in_stock.empty:
     conn.close()
     
     if not df_batches.empty:
-        batch_options = df_batches.apply(
-            lambda r: f"【批次 {int(r['batch_id'])}】進貨日: {r['inbound_date']} | 現存: {r['qty']}{r['use_unit']} | 效期: {r['expiry_date'] if r['expiry_date'] else '無'} | 供應商: {r['vendor_name'] if r['vendor_name'] else '未填'}", 
-            axis=1
-        ).tolist()
         
-        selected_batch_str = st.selectbox("🎯 2. 請選擇欲核實數量的特定批次編號：", batch_options)
-        
-        target_batch_id = int(selected_batch_str.split("【批次 ")[1].split("】")[0])
+        # 根據是否啟用手機模式，決定第二步「選擇批次」的渲染外觀
+        if use_mobile_view:
+            # 📱 手機模式排版：將字串優化換行，並改用直式單選鈕鋪開，方便大拇指直接點擊
+            st.markdown("🎯 **2. 請點擊欲核實數量的特定進貨批次：**")
+            
+            # 建立易讀的對照字典，將簡化且換行的直式格式作為 radio 的標籤顯示
+            mobile_options_map = {}
+            for _, r in df_batches.iterrows():
+                label = (
+                    f"📦 【批次 {int(r['batch_id'])}】\n"
+                    f"  🗓️ 進貨: {r['inbound_date']} | ⏳ 效期: {r['expiry_date'] if r['expiry_date'] else '無'}\n"
+                    f"  🚨 現存量: {r['qty']} {r['use_unit']}"
+                )
+                mobile_options_map[label] = int(r['batch_id'])
+            
+            selected_mobile_label = st.radio(
+                "批次清單", 
+                options=list(mobile_options_map.keys()), 
+                label_visibility="collapsed", 
+                key="audit_batch_radio"
+            )
+            target_batch_id = mobile_options_map[selected_mobile_label]
+            
+        else:
+            # 💻 桌機傳統模式排版：保留傳統一長條下拉選單
+            batch_options = df_batches.apply(
+                lambda r: f"【批次 {int(r['batch_id'])}】進貨日: {r['inbound_date']} | 現存: {r['qty']}{r['use_unit']} | 效期: {r['expiry_date'] if r['expiry_date'] else '無'} | 供應商: {r['vendor_name'] if r['vendor_name'] else '未填'}", 
+                axis=1
+            ).tolist()
+            
+            selected_batch_str = st.selectbox("🎯 2. 請選擇欲核實數量的特定批次編號：", batch_options)
+            target_batch_id = int(selected_batch_str.split("【批次 ")[1].split("】")[0])
         
         # 🛠️ 核心優化：使用安全判斷式，防止 iloc[0] 瞬間找不到資料造成頁面底部紅色錯誤閃爍
         matched_rows = df_batches[df_batches['batch_id'] == target_batch_id]

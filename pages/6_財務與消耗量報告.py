@@ -17,6 +17,9 @@ show_pending_toast()
 
 st.subheader("📊 門市營收、成本與損益分析報告")
 
+# 加入手機模式切換開關
+use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=False, key="finance_mobile_toggle")
+
 # ==========================================
 # 🔍 頂部複合時間篩選面板
 # ==========================================
@@ -218,36 +221,76 @@ gross_margin = (gross_profit / total_revenue * 100) if total_revenue > 0 else 0.
 st.markdown("### 🧾 門市動態損益")
 st.info(f"💡 **會計帳生效中：** 目前選擇的區間涵蓋了 {', '.join(covered_target_months)} 的帳單 顯示當前固定資產與費用。")
 
-a, b, c, po_box, d, e = st.columns(6)
-a.metric("🏪 營業總收入", f"${total_revenue:,.0f}")
-b.metric("🥩 食材消耗成本", f"${total_food_cost:,.0f}")
-c.metric("⚡ 帳單費用", f"${total_op_expense:,.1f}")
-po_box.metric("📥 期間進貨總額", f"${total_purchase_cost:,.0f}")  
-d.metric("🔥 最終真實淨利", f"${net_profit:,.1f}")
-e.metric("📈 門市淨利率", f"{margin:.1f}%")
+# 根據是否啟用手機檢視切換指標排版
+if use_mobile_view:
+    # 📱 手機模式：拆成兩列（3欄 × 2列）的矩陣，給千分位與字串留足空間
+    row1_c1, row1_c2, row1_c3 = st.columns(3)
+    with row1_c1:
+        st.metric("🏪 營業總收入", f"${total_revenue:,.0f}")
+    with row1_c2:
+        st.metric("🥩 食材消耗成本", f"${total_food_cost:,.0f}")
+    with row1_c3:
+        st.metric("⚡ 帳單費用", f"${total_op_expense:,.1f}")
+        
+    row2_c1, row2_c2, row2_c3 = st.columns(3)
+    with row2_c1:
+        st.metric("📥 期間進貨總額", f"${total_purchase_cost:,.0f}")
+    with row2_c2:
+        st.metric("🔥 最終真實淨利", f"${net_profit:,.1f}")
+    with row2_c3:
+        st.metric("📈 門市淨利率", f"{margin:.1f}%")
+else:
+    # 💻 桌機模式：保持原本的一直排 6 欄排版
+    a, b, c, po_box, d, e = st.columns(6)
+    a.metric("🏪 營業總收入", f"${total_revenue:,.0f}")
+    b.metric("🥩 食材消耗成本", f"${total_food_cost:,.0f}")
+    c.metric("⚡ 帳單費用", f"${total_op_expense:,.1f}")
+    po_box.metric("📥 期間進貨總額", f"${total_purchase_cost:,.0f}")  
+    d.metric("🔥 最終真實淨利", f"${net_profit:,.1f}")
+    e.metric("📈 門市淨利率", f"{margin:.1f}%")
 
 st.divider()
 
 # ==========================================
 # 🏆 面板呈現區 2：餐點排行與原物料消耗
 # ==========================================
-left_col, right_col = st.columns(2)
-
-with left_col:
+# 根據是否為手機檢視，切換橫向並排或直式依序排版
+if use_mobile_view:
+    # 📱 手機模式：移除 st.columns(2)，改為直式上下依序呈現
     st.markdown("### 餐點銷售排行")
     if dish_sales:
         rank_df = pd.DataFrame(list(dish_sales.items()), columns=["餐點名稱", "銷售份數"]).sort_values(by="銷售份數", ascending=False)
         st.dataframe(rank_df, hide_index=True, use_container_width=True)
     else:
         st.info("💡 當前選定期間內尚無餐點銷售紀錄。")
+        
+    st.markdown("<br>", unsafe_allow_html=True)
 
-with right_col:
     st.markdown("### 原物料消耗排行")  
     if material_usage:
         mat_df = pd.DataFrame(list(material_usage.items()), columns=["食材物料", "消耗總數量"]).sort_values(by="消耗總數量", ascending=False)
         st.dataframe(mat_df, hide_index=True, use_container_width=True)
     else:
         st.info("💡 當前選定期間內尚無食材消耗數據。")
+else:
+    # 💻 桌機模式：維持左右並排的 st.columns(2)
+    left_col, right_col = st.columns(2)
+
+    with left_col:
+        st.markdown("### 餐點銷售排行")
+        if dish_sales:
+            rank_df = pd.DataFrame(list(dish_sales.items()), columns=["餐點名稱", "銷售份數"]).sort_values(by="銷售份數", ascending=False)
+            st.dataframe(rank_df, hide_index=True, use_container_width=True)
+        else:
+            st.info("💡 當前選定期間內尚無餐點銷售紀錄。")
+
+    with right_col:
+        st.markdown("### 原物料消耗排行")  
+        if material_usage:
+            mat_df = pd.DataFrame(list(material_usage.items()), columns=["食材物料", "消耗總數量"]).sort_values(by="消耗總數量", ascending=False)
+            st.dataframe(mat_df, hide_index=True, use_container_width=True)
+        else:
+            st.info("💡 當前選定期間內尚無食材消耗數據。")
 
 st.divider()
 

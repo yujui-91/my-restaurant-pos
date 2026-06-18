@@ -10,11 +10,14 @@ import streamlit as st
 
 # 檢查 session_state 中的登入狀態，若未登入則阻斷畫面並提示
 # if not st.session_state.get("password_correct", False):
-#     st.warning("🔒 請先前往首頁登入管理系統！")
-#     st.stop()
+#      st.warning("🔒 請先前往首頁登入管理系統！")
+#      st.stop()
 show_pending_toast()
 
 st.subheader("🛒 收銀結帳與出餐管理系統")
+
+# 全域加入手機模式切換，控制本頁面所有分頁的排版
+use_mobile_view = st.toggle("📱 切換為手機/平板大按鈕專用排版", value=False, key="pos_mobile_toggle")
 
 current_user = st.session_state.get('current_user', '老 闆')
 
@@ -115,49 +118,104 @@ with pos_tabs[0]:
     st.markdown("##### 📋 當前點餐單明細：")
     
     if st.session_state.pos_shopping_cart:
-        df_cart = pd.DataFrame(st.session_state.pos_shopping_cart)
-        df_cart['小計'] = df_cart['price'] * df_cart['qty']
-        df_cart['刪除'] = False
-        
-        edited_cart_df = st.data_editor(
-            df_cart,
-            column_config={
-                "prod_id": st.column_config.TextColumn("餐點編號", disabled=True),
-                "prod_name": st.column_config.TextColumn("餐點名稱", disabled=True),
-                "price": st.column_config.NumberColumn("單價", disabled=True),
-                "qty": st.column_config.NumberColumn("數量", min_value=1, step=1),
-                "小計": st.column_config.NumberColumn("金額", disabled=True),
-                "刪除": st.column_config.CheckboxColumn("勾選刪除", default=False)
-            },
-            use_container_width=True,
-            hide_index=True,
-            key="cart_data_editor"
-        )
-        
-        cart_changed = False
-        updated_cart = []
         total_bill_amount = 0
         
-        for idx, row in edited_cart_df.iterrows():
-            if row['刪除']:
-                cart_changed = True
-                continue
-            if row['qty'] != st.session_state.pos_shopping_cart[idx]['qty']:
-                cart_changed = True
+        # 根據是否啟用手機檢視切換不同介面
+        if use_mobile_view:
+            # 📱 手機大按鈕卡片排版模式
+            cart_changed = False
+            action_type = None
+            target_idx = None
             
-            updated_cart.append({
-                "prod_id": row['prod_id'],
-                "prod_name": row['prod_name'],
-                "price": int(row['price']),
-                "qty": int(row['qty'])
-            })
-            total_bill_amount += int(row['price']) * int(row['qty'])
+            for idx, item in enumerate(st.session_state.pos_shopping_cart):
+                item_subtotal = item['price'] * item['qty']
+                total_bill_amount += item_subtotal
+                
+                with st.container():
+                    st.markdown(f"""
+                    <div style="border: 1px solid #ddd; border-radius: 8px; padding: 10px; margin-bottom: 8px; background-color: #f9f9f9;">
+                        <strong>【{item['prod_id']}】{item['prod_name']}</strong><br>
+                        <span style="color:#666; font-size:14px;">單價: ${item['price']} | 小計: <strong style="color:#d9534f;">${item_subtotal}</strong></span>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # ➕ ➖ 🗑️ 點擊按鈕列
+                    btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 1.2])
+                    with btn_col1:
+                        if st.button("➖ 減少", key=f"cart_minus_{idx}", use_container_width=True):
+                            action_type = "minus"
+                            target_idx = idx
+                    with btn_col2:
+                        if st.button("➕ 增加", key=f"cart_plus_{idx}", use_container_width=True):
+                            action_type = "plus"
+                            target_idx = idx
+                    with btn_col3:
+                        if st.button("🗑️ 刪除品項", key=f"cart_del_{idx}", type="secondary", use_container_width=True):
+                            action_type = "delete"
+                            target_idx = idx
+                    st.markdown("<div style='margin-bottom:15px;'></div>", unsafe_allow_html=True)
             
-        if cart_changed:
-            st.session_state.pos_shopping_cart = updated_cart
-            trigger_toast("點餐單數量已保留更新！", icon="📝")
-            st.rerun()
+            # 執行按鈕點擊後的數據變更邏輯
+            if action_type is not None:
+                if action_type == "plus":
+                    st.session_state.pos_shopping_cart[target_idx]['qty'] += 1
+                    trigger_toast("已增加數量 1 份！", icon="📝")
+                elif action_type == "minus":
+                    if st.session_state.pos_shopping_cart[target_idx]['qty'] > 1:
+                        st.session_state.pos_shopping_cart[target_idx]['qty'] -= 1
+                        trigger_toast("已減少數量 1 份！", icon="📝")
+                    else:
+                        st.session_state.pos_shopping_cart.pop(target_idx)
+                        trigger_toast("已將商品移出點餐單！", icon="🗑️")
+                elif action_type == "delete":
+                    st.session_state.pos_shopping_cart.pop(target_idx)
+                    trigger_toast("已將商品移出點餐單！", icon="🗑️")
+                st.rerun()
+                
+        else:
+            # 💻 桌機傳統表格編輯模式
+            df_cart = pd.DataFrame(st.session_state.pos_shopping_cart)
+            df_cart['小計'] = df_cart['price'] * df_cart['qty']
+            df_cart['刪除'] = False
             
+            edited_cart_df = st.data_editor(
+                df_cart,
+                column_config={
+                    "prod_id": st.column_config.TextColumn("餐點編號", disabled=True),
+                    "prod_name": st.column_config.TextColumn("餐點名稱", disabled=True),
+                    "price": st.column_config.NumberColumn("單價", disabled=True),
+                    "qty": st.column_config.NumberColumn("數量", min_value=1, step=1),
+                    "小計": st.column_config.NumberColumn("金額", disabled=True),
+                    "刪除": st.column_config.CheckboxColumn("勾選刪除", default=False)
+                },
+                use_container_width=True,
+                hide_index=True,
+                key="cart_data_editor"
+            )
+            
+            cart_changed = False
+            updated_cart = []
+            
+            for idx, row in edited_cart_df.iterrows():
+                if row['刪除']:
+                    cart_changed = True
+                    continue
+                if row['qty'] != st.session_state.pos_shopping_cart[idx]['qty']:
+                    cart_changed = True
+                
+                updated_cart.append({
+                    "prod_id": row['prod_id'],
+                    "prod_name": row['prod_name'],
+                    "price": int(row['price']),
+                    "qty": int(row['qty'])
+                })
+                total_bill_amount += int(row['price']) * int(row['qty'])
+                
+            if cart_changed:
+                st.session_state.pos_shopping_cart = updated_cart
+                trigger_toast("點餐單數量已保留更新！", icon="📝")
+                st.rerun()
+                
         estimated_cart_cost, mats_check_dict = calculate_cart_estimated_cost(st.session_state.pos_shopping_cart)
         estimated_profit = float(total_bill_amount) - estimated_cart_cost
         estimated_margin = (estimated_profit / total_bill_amount * 100) if total_bill_amount > 0 else 0.0
@@ -193,24 +251,29 @@ with pos_tabs[0]:
             col_conf1, col_conf2 = st.columns(2)
             with col_conf1:
                 if st.button("✅ 出餐", type="primary", use_container_width=True):
-                    conn = sqlite3.connect('inventory.db', timeout=20.0)
-                    cursor = conn.cursor()
-                    
                     all_mats_needed = {}
-                    insufficient_flag = False
-                    insufficient_msg = ""
-                    disabled_item_detected = False
-                    disabled_msg = ""
                     
+                    # 🔥【死鎖修復點一】：先在完全不打開 UPDATE 交易的狀態下，把所需的 BOM 資料全部 SELECT 出來
+                    conn_read = sqlite3.connect('inventory.db', timeout=20.0)
                     for cart_item in st.session_state.pos_shopping_cart:
                         d_id = cart_item['prod_id']
                         d_qty = cart_item['qty']
                         
-                        db_bom = pd.read_sql_query("SELECT child_id, qty_needed FROM bom WHERE parent_id = ?", conn, params=(d_id,))
+                        db_bom = pd.read_sql_query("SELECT child_id, qty_needed FROM bom WHERE parent_id = ?", conn_read, params=(d_id,))
                         for _, bom_row in db_bom.iterrows():
                             c_id = bom_row['child_id']
                             needed_units = float(bom_row['qty_needed']) * d_qty
                             all_mats_needed[c_id] = all_mats_needed.get(c_id, 0.0) + needed_units
+                    conn_read.close()
+                    
+                    # 準備進入獨佔修改階段
+                    conn = sqlite3.connect('inventory.db', timeout=20.0)
+                    cursor = conn.cursor()
+                    
+                    insufficient_flag = False
+                    insufficient_msg = ""
+                    disabled_item_detected = False
+                    disabled_msg = ""
                             
                     for c_id, total_need in all_mats_needed.items():
                         cursor.execute("SELECT status, prod_name FROM products WHERE prod_id = ?", (c_id,))
@@ -490,19 +553,53 @@ with pos_tabs[1]:
             new_dish_qtys = {}
             has_qty_changed = False
             
+            # 用於手機模式大按鈕狀態更新
+            qty_btn_triggered = False
+            qty_btn_target_name = None
+            qty_btn_target_val = None
+
             for d_name, d_qty, d_id in parsed_dishes:
-                # 如果是剛剛新補加進來的餐點，原數量提示顯示為 0 份
                 is_new_appended = any(x[0] == d_name for x in st.session_state.get(add_pool_key, []))
                 label_txt = f"【{d_name}】之正確出餐份數 (原單無此餐點)" if is_new_appended else f"【{d_name}】之正確出餐份數 (原為 {d_qty} 份)"
                 
-                new_q = st.number_input(label_txt, min_value=0, value=int(d_qty), step=1, key=f"edit_qty_{d_name}_{target_hist_id}")
+                # 判斷是否使用手機大按鈕排版
+                if use_mobile_view:
+                    st.markdown(f"**{label_txt}**")
+                    col_q1, col_q2, col_q3 = st.columns([2, 1, 1])
+                    
+                    # 取得目前表單控制元件的值（若 session_state 有紀錄則沿用）
+                    session_qty_key = f"edit_qty_{d_name}_{target_hist_id}"
+                    current_form_val = st.session_state.get(session_qty_key, int(d_qty))
+                    
+                    with col_q1:
+                        new_q = st.number_input(label_txt, min_value=0, value=current_form_val, step=1, key=session_qty_key, label_visibility="collapsed")
+                    with col_q2:
+                        if st.button("➖ 1", key=f"btn_minus1_{d_name}", use_container_width=True):
+                            qty_btn_triggered = True
+                            qty_btn_target_name = d_name
+                            qty_btn_target_val = max(0, new_q - 1)
+                    with col_q3:
+                        if st.button("➕ 1", key=f"btn_plus1_{d_name}", use_container_width=True):
+                            qty_btn_triggered = True
+                            qty_btn_target_name = d_name
+                            qty_btn_target_val = new_q + 1
+                    st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
+                else:
+                    # 💻 桌機版一長條輸入框排版
+                    new_q = st.number_input(label_txt, min_value=0, value=int(d_qty), step=1, key=f"edit_qty_{d_name}_{target_hist_id}")
+                
                 new_dish_qtys[d_name] = new_q
                 if new_q != int(d_qty):
                     has_qty_changed = True
 
+            # 處理手機模式下點擊快調加減按鈕的更新
+            if qty_btn_triggered:
+                st.session_state[f"edit_qty_{qty_btn_target_name}_{target_hist_id}"] = qty_btn_target_val
+                st.rerun()
+
             if st.button("💾 儲存出餐數量變更", type="primary", use_container_width=True, key=f"save_qty_edit_btn_{target_hist_id}"):
                 if not has_qty_changed:
-                    st.info("數量沒有任何變動，無需修正。")
+                    st.info("數量沒有 any 變動，無需修正。")
                 else:
                     conn = sqlite3.connect('inventory.db', timeout=20.0)
                     cursor = conn.cursor()
@@ -575,6 +672,7 @@ with pos_tabs[1]:
                                 if matched_hist_mat and "deducted_batches" in matched_hist_mat and matched_hist_mat["deducted_batches"]:
                                     hist_cost_fallback = float(matched_hist_mat["deducted_batches"][0].get("cost", 0.0))
 
+                                # 🔥【死鎖修復點二】：改用當前現有的同一個 cursor 通道，禁止建立新連線去 SELECT
                                 cursor.execute('''
                                     SELECT 
                                       CASE 
@@ -898,7 +996,7 @@ with pos_tabs[2]:
                                 
                             if pot_large_servings > 0:
                                 current_num = int(re.findall(r'\d+', l_id)[0])
-                                s_id = f"P{current_num + 1:03d}"
+                                s_id = f"P{current_num + 1:04d}"
                             else:
                                 s_id = get_next_dish_id()
                                 
@@ -1098,7 +1196,7 @@ with pos_tabs[3]:
                         trigger_toast(f"餐點【{matched_del_dish['prod_name']}】已成功下架！", icon="🗑️")
                         st.rerun()
 
-    st.divider()
+    st.markdown("---")
     st.markdown("##### ❌ 食材與用品庫存品項下架面板")
     conn = sqlite3.connect('inventory.db', timeout=20.0)
     all_mats_raw = pd.read_sql_query("SELECT prod_id, prod_name, use_unit, status FROM products WHERE prod_id LIKE 'R%' OR prod_id LIKE 'S%'", conn)
