@@ -581,7 +581,8 @@ with pos_tabs[2]:
                 st.markdown(f"**使用單位：** `{db_unit_a if db_unit_a else '未選擇'}`")
                 
             with col_cus_mat3:
-                cus_mat_qty = st.number_input("單份餐點用量", min_value=0.0, value=0.0, step=1.0, key="cus_qty_selector")
+                custom_max_val = 100000.0  # 提供一個合理的上限，避免 Streamlit 報錯
+                cus_mat_qty = st.number_input("單份餐點用量", min_value=0.0, max_value=custom_max_val, value=0.0, step=1.0, key="cus_qty_selector")
                 
             if 'custom_recipe_pool' not in st.session_state:
                 st.session_state.custom_recipe_pool = []
@@ -765,11 +766,12 @@ with pos_tabs[2]:
                 else:
                     single_large_cost, single_small_cost = 0.0, 0.0
 
+                # 💡 Bug 修正 1：極致安全判定，防止 pot_large_price 或 pot_small_price 為 0 時造成的 ZeroDivisionError
                 st.markdown(f"""
                 > 📊 **🥣 整鍋成本拆分攤算即時面板：**
                 > * 投入這整鍋的【**原物料總成本**】： **${total_pot_cost:,.2f} 元**
-                > * 拆分估算：**【單碗大碗成本】**： **${single_large_cost:,.2f} 元** (售價:${pot_large_price}，預估毛利率:{(pot_large_price-single_large_cost)/pot_large_price*100 if pot_large_price>0 else 0:.1f}%)
-                > * 拆分估算：**【單碗小碗成本】**： **${single_small_cost:,.2f} 元** (售價:${pot_small_price}，預估毛利率:{(pot_small_price-single_small_cost)/pot_small_price*100 if pot_small_price>0 else 0:.1f}%)
+                > * 拆分估算：**【單碗大碗成本】**： **${single_large_cost:,.2f} 元** (售價:${pot_large_price}，預估毛利率:{((pot_large_price - single_large_cost) / pot_large_price * 100) if pot_large_price > 0 else 0.0:.1f}%)
+                > * 拆分估算：**【單碗小碗成本】**： **${single_small_cost:,.2f} 元** (售價:${pot_small_price}，預估毛利率:{((pot_small_price - single_small_cost) / pot_small_price * 100) if pot_small_price > 0 else 0.0:.1f}%)
                 """)
 
                 if st.button("💾 打包打包大/小碗餐點同時寫入菜單", type="primary", key="save_pot_dishes_btn"):
@@ -823,8 +825,8 @@ with pos_tabs[2]:
                         
                         log_history(
                             current_user, 
-                            f"修正餐點參數-整鍋拆分配方-{pot_base_name}", 
-                            f"透過 B模式 創立整鍋基底餐點：{pot_base_name}。整鍋物料總成本 ${total_pot_cost:.2f}。成功產出大碗成本 ${single_large_cost:.2f}/小碗成本 ${single_small_cost:.2f}。"
+                             f"修正餐點參數-整鍋拆分配方-{pot_base_name}", 
+                             f"透過 B模式 創立整鍋基底餐點：{pot_base_name}。整鍋物料總成本 ${total_pot_cost:.2f}。成功產出大碗成本 ${single_large_cost:.2f}/小碗成本 ${single_small_cost:.2f}。"
                         )
                         trigger_toast(f"🎉 成功批次打包建立 【{pot_base_name}】 大/小碗成品餐點並加入菜單！", icon="🥣")
                         st.session_state.pot_recipe_pool = []
@@ -888,7 +890,7 @@ with pos_tabs[2]:
                     column_config={
                         "食材編號": st.column_config.TextColumn("物料編號", disabled=True),
                         "食材名稱": st.column_config.TextColumn("物料名稱", disabled=True),
-                        "單位用量": st.column_config.NumberColumn("單份標準用量", format="%.4f", min_value=0.0001),
+                        "單位用量": st.column_config.NumberColumn("單份標準用量", format="%.4f", min_value=0.0), # 允許使用者在此輸入 0 以配合刪除或歸零意圖
                         "單位": st.column_config.TextColumn("單位", disabled=True),
                         "移除": st.column_config.CheckboxColumn("勾選移除", default=False)
                     },
@@ -916,13 +918,16 @@ with pos_tabs[2]:
                 st.info("此餐點目前沒有任何配方物料，請利用上方追加。")
 
             new_dish_price = st.number_input("💵 調整此餐點最終門市售價 (必須為大於 0 的整數)", step=1, key="edit_price_input", value=max(old_price, 1))
+            
+            # 💡 Bug 修正 2：極致防呆優化。我們應該只檢查「確定要保留，且沒有被勾選移除」的物料。如果店家將用量改為 0 或者是勾選移除，就不應該阻斷存檔。
+            # 由於在上面經由 data_editor 觸發 rerun 時已過濾掉勾選移除的項目，此處直接判斷當前清單中是否有真正小於等於 0 且需要留著的品項。
             recipe_has_negative = any(float(item["單位用量"]) <= 0 for item in st.session_state.editing_recipe_list)
             
             if st.button("💾 確認儲存餐點售價與完整配方變更", type="primary", use_container_width=True):
                 if new_dish_price <= 0:
                     st.error("❌ 錯誤變更：販售價格必須為大於 0 的整數！儲存失敗。")
                 elif recipe_has_negative:
-                    st.error("❌ 錯誤變更：配方用量必須大於 0！儲存失敗。")
+                    st.error("❌ 錯誤變更：保留的配方用量必須大於 0！(若要刪除物料請勾選後方的「移除」並重試)。儲存失敗。")
                 elif not st.session_state.editing_recipe_list:
                     st.error("❌ 錯誤變更：修改後的配方清單不能為空！儲存失敗。")
                 else:
