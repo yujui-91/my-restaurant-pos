@@ -5,15 +5,6 @@ from database.db_core import init_db, trigger_toast, show_pending_toast, log_his
 from database.db_core import get_db_conn
 st.set_page_config(layout="wide")
 
-import requests
-
-# 放在 app.py 的某個空白處測試
-try:
-    response = requests.get("https://ipapi.co/json/").json()
-    st.sidebar.write(f"🌐 伺服器 IP: {response.get('ip')}")
-    st.sidebar.write(f"📍 伺服器位置: {response.get('country_name')} - {response.get('region')}")
-except Exception as e:
-    st.sidebar.write("無法取得伺服器位置")
 # # def check_password():
 # #     """如果密碼正確則返回 True，否則顯示登入畫面並返回 False。"""
     
