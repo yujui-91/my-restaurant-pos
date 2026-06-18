@@ -85,7 +85,7 @@ if not df_alert_check.empty:
         alert_messages.append(f"【{row['prod_name']}】僅剩 {row['total_qty']:.1f}{row['use_unit']} (安全線: {row['safety_stock']:.1f})")
     st.warning("⚠️ **【低庫存補貨預警跑馬燈】** 🚨 " + " ｜ " + " ｜ ".join(alert_messages))
 
-st.subheader("📊 目前庫存彙總明細")
+st.subheader("📊 目前庫存明細")
 
 stock_filter = st.selectbox("🔍 篩選庫存類別", ["顯示全部明細", "僅看食材 (R)", "僅看用品 (S)"], key="home_stock_filter")
 
@@ -169,13 +169,13 @@ if not df_merged_stock.empty:
     )
     
     st.markdown("---")
-    st.markdown("### 🔍 歷史進貨批次與獨立供應商抽查面板")
+    st.markdown("### 🔍 歷史進貨面板")
     
     valid_detail_items = df_merged_stock[df_merged_stock['總庫存量'] > 0]
     
     if not valid_detail_items.empty:
         selected_stock_item = st.selectbox(
-            "🎯 請選取下方品項，系統將即時分解列出每一筆進貨批次的【原始供應商】與進貨明細：",
+            "🎯 請選取下方品項，系統將列出每一筆進貨批次明細：",
             valid_detail_items['編號'] + " - " + valid_detail_items['商品名稱']
         )
         
@@ -201,7 +201,7 @@ if not df_merged_stock.empty:
         conn.close()
         
         if not df_batch_details.empty:
-            st.caption(f"💡 目前 【{selected_stock_item}】 共由以下 {len(df_batch_details)} 個有效進貨批次組成，各自保留著原始供應商管道與獨立單價：")
+            st.caption(f"💡 目前 【{selected_stock_item}】 共由以下 {len(df_batch_details)} 個有效進貨批次組成")
             
             st.dataframe(
                 df_batch_details.style.format({"剩餘庫存量": f"{{:,.1f}} {unit_str}", "當次進貨總金額": "${:,.1f}"}),
@@ -218,7 +218,7 @@ if not df_merged_stock.empty:
                 hide_index=True
             )
             
-            st.info(f"💡 財務小提示：此品項目前整體的「加權移動平均單位成本」為 **${base_cost:,.4f}** / {unit_str}。")
+            st.info(f"此品項目前的「加權移動平均單位成本」為 **${base_cost:,.4f}** / {unit_str}。")
         else:
             st.info("該品項目前無有效批次庫存。")
             
@@ -234,11 +234,10 @@ if not df_merged_stock.empty:
     
     if not df_unique_disabled_items.empty:
         st.markdown("---")
-        st.markdown("##### 🗑️ 清理已下架品項的殘留庫存紀錄")
-        st.caption("如果您不想在上方看到 these 紅色高亮的下架品項，可以在下方依序選擇品項與特定批次，將其數量歸零：")
+        st.markdown("##### 🗑️ 清理已下架品項的殘留庫存")
         
         disabled_item_options = df_unique_disabled_items.apply(lambda r: f"{r['prod_id']} - {r['prod_name']}", axis=1).tolist()
-        selected_disabled_item_str = st.selectbox("🔍 1. 請選取欲清理的下架商品/食材：", disabled_item_options, key="clean_disabled_item_box")
+        selected_disabled_item_str = st.selectbox("🔍 1. 選取欲清理的下架商品/食材：", disabled_item_options, key="clean_disabled_item_box")
         target_disabled_prod_id = selected_disabled_item_str.split(" - ")[0]
         
         conn = sqlite3.connect('inventory.db')
@@ -257,7 +256,7 @@ if not df_merged_stock.empty:
                 return f"【批次 {int(r['batch_id'])}】進貨日: {r['inbound_date']} | 有效日期: {exp_label} | 殘留數量: {r['qty']}{r['use_unit']}"
             
             batch_options = df_disabled_batches.apply(format_batch_label, axis=1).tolist()
-            selected_batch_str = st.selectbox("🎯 2. 請選擇欲清空歸零的特定殘留批次：", batch_options, key="clean_disabled_batch_box")
+            selected_batch_str = st.selectbox("🎯 2. 選擇欲清空歸零的特定殘留批次：", batch_options, key="clean_disabled_batch_box")
             
             target_batch_id = int(selected_batch_str.split("【批次 ")[1].split("】")[0])
             matched_del_row = df_disabled_batches[df_disabled_batches['batch_id'] == target_batch_id].iloc[0]

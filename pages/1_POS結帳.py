@@ -83,12 +83,12 @@ with pos_tabs[0]:
     col_cart1, col_cart2, col_cart3 = st.columns([2, 1, 1])
     with col_cart1:
         dish_select_options = ["--- 請選擇餐點 ---"] + existing_dishes['prod_name'].tolist()
-        selected_cart_dish = st.selectbox("請選取欲加入點餐單的品項", dish_select_options, key="cart_dish_selector")
+        selected_cart_dish = st.selectbox("請選取欲加入餐點的品項", dish_select_options, key="cart_dish_selector")
     with col_cart2:
         cart_dish_qty = st.number_input("點購數量 (份)", min_value=1, value=1, step=1, key="cart_qty_input")
     with col_cart3:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("➕ 加入點餐單", use_container_width=True):
+        if st.button("➕ 加入", use_container_width=True):
             if selected_cart_dish == "--- 請選擇餐點 ---":
                 st.error("請先選擇有效餐點品項！")
             else:
@@ -103,7 +103,7 @@ with pos_tabs[0]:
                         "price": int(matched_dish['price']),
                         "qty": cart_dish_qty
                     })
-                trigger_toast(f"已將 {matched_dish['prod_name']} x {cart_dish_qty} 份加入點餐單！", icon="🛒")
+                trigger_toast(f"已將 {matched_dish['prod_name']} x {cart_dish_qty} 份加入餐點！", icon="🛒")
                 st.rerun()
 
     st.markdown("---")
@@ -119,9 +119,9 @@ with pos_tabs[0]:
             column_config={
                 "prod_id": st.column_config.TextColumn("餐點編號", disabled=True),
                 "prod_name": st.column_config.TextColumn("餐點名稱", disabled=True),
-                "price": st.column_config.NumberColumn("單價 ($)", disabled=True),
+                "price": st.column_config.NumberColumn("單價", disabled=True),
                 "qty": st.column_config.NumberColumn("數量", min_value=1, step=1),
-                "小計": st.column_config.NumberColumn("金額小計 ($)", disabled=True),
+                "小計": st.column_config.NumberColumn("金額", disabled=True),
                 "刪除": st.column_config.CheckboxColumn("勾選刪除", default=False)
             },
             use_container_width=True,
@@ -158,13 +158,13 @@ with pos_tabs[0]:
         estimated_margin = (estimated_profit / total_bill_amount * 100) if total_bill_amount > 0 else 0.0
         
         st.markdown(f"""
-        > 💰 **本單商業智能即時核算面板：**
+        > 💰 **本單即時面板：**
         > * 本單【**總銷售金額**】： **${total_bill_amount:,.0f} 元**
-        > * 本單【**預估即時原物料成本**】： **${estimated_cart_cost:,.2f} 元** *(已模擬 FIFO 精確批次成本)*
+        > * 本單【**預估即時原物料成本**】： **${estimated_cart_cost:,.2f} 元**
         > * 本單【**預估純利潤**】： **${estimated_profit:,.2f} 元** ｜ 毛利率: **{estimated_margin:.1f}%**
         """)
         
-        if st.button("🗑️ 清空整單重新點餐"):
+        if st.button("🗑️ 重新點餐"):
             st.session_state.pos_shopping_cart = []
             if 'show_checkout_confirm' in st.session_state:
                 st.session_state.show_checkout_confirm = False
@@ -172,22 +172,22 @@ with pos_tabs[0]:
             st.rerun()
             
         st.markdown("---")
-        if st.button("🔥 確定點驗完畢，執行出餐結帳", type="primary", use_container_width=True):
+        if st.button("🔥 確定完畢，出餐結帳", type="primary", use_container_width=True):
             st.session_state.show_checkout_confirm = True
 
         if 'show_checkout_confirm' in st.session_state and st.session_state.show_checkout_confirm:
-            st.warning("🔔 **【出餐前點單明細覆核通知】** 請再次核對下方餐點：")
+            st.warning("🔔 **【出餐前通知】** 請再次核對下方餐點：")
             
             confirm_msg = ""
             for item in st.session_state.pos_shopping_cart:
                 st.write(f"🔹 品項： **{item['prod_name']}** ｜ 數量： **{item['qty']} 份** ｜ 單價： ${item['price']} ｜ 小計： ${item['price']*item['qty']}")
                 confirm_msg += f"【{item['prod_name']} x {item['qty']}份】"
             
-            st.info(f"📊 **財務發貨預告：** 此次出餐預計消耗全店物料資產淨值 **${estimated_cart_cost:,.2f} 元**。")
+            st.info(f"📊  此次出餐預計物料成本 **${estimated_cart_cost:,.2f} 元**。")
                 
             col_conf1, col_conf2 = st.columns(2)
             with col_conf1:
-                if st.button("✅ 核准出餐（執行批量庫存扣料）", type="primary", use_container_width=True):
+                if st.button("✅ 出餐", type="primary", use_container_width=True):
                     conn = sqlite3.connect('inventory.db', timeout=20.0)
                     cursor = conn.cursor()
                     
@@ -284,7 +284,7 @@ with pos_tabs[0]:
                             conn.close()
                             st.error(f"🚨 會計核心異常：交易已安全回滾。原因：{e}")
             with col_conf2:
-                if st.button("❌ 返回點餐單微調", use_container_width=True):
+                if st.button("❌ 修改餐點", use_container_width=True):
                     st.session_state.show_checkout_confirm = False
                     st.rerun()
     else:
@@ -295,7 +295,7 @@ with pos_tabs[0]:
 # 分頁 2：修改當日出餐數量與作廢（新增：支援補加漏點餐點）
 # ==========================================
 with pos_tabs[1]:
-    st.markdown("##### 📝 當日成功核准出餐紀錄管理面版")
+    st.markdown("##### 📝 當日出餐紀錄面版")
     
     today_start = datetime.now().strftime("%Y-%m-%d 00:00:00")
     today_end = datetime.now().strftime("%Y-%m-%d 23:59:59")
@@ -343,12 +343,12 @@ with pos_tabs[1]:
             order_options.append(f"單號 {hist_id} | 時間: {row['timestamp'].split(' ')[1]} | 明細: {brief}")
 
         # 使用更明確的 key 防止跨分頁狀態干擾
-        selected_order_str = st.selectbox("🎯 請選擇欲更正或作廢的當日出餐紀錄：", order_options, key="void_order_select_box")
+        selected_order_str = st.selectbox("🎯 請選擇出單紀錄：", order_options, key="void_order_select_box")
         target_hist_id = int(selected_order_str.split("單號 ")[1].split(" |")[0])
         matched_order_row = df_today_orders[df_today_orders['id'] == target_hist_id].iloc[0]
         order_details_text = matched_order_row['details']
 
-        st.info(f"📋 **選定訂單完整原始日誌：**\n{order_details_text.split('||STRUCT_DATA||')[0]}")
+        st.info(f"📋 **訂單完整資訊：**\n{order_details_text.split('||STRUCT_DATA||')[0]}")
 
         order_data = parsed_orders_cache[target_hist_id]
         orig_order_timestamp = order_data["orig_timestamp"] 
@@ -377,12 +377,12 @@ with pos_tabs[1]:
             raw_mats = re.findall(r"([^\s_,\(]+)_([RS]\d+)\(([\d\.]+)([^\)]+)\)", order_details_text)
             parsed_mats = [{"mat_name": m[0], "mat_id": m[1], "qty": float(m[2]), "unit": m[3], "deducted_batches": []} for m in raw_mats]
 
-        st.markdown("##### ⚙️ 選擇維護動作")
-        manage_action = st.radio("請選擇維護類型：", ["❌ 整單作廢（全數退款並回補庫存）", "✏️ 數量微調（更正點餐數量）"], horizontal=True)
+        
+        manage_action = st.radio("選擇類型：", ["❌ 整單作廢（全數退款並回補庫存）", "✏️ 更正點餐數量"], horizontal=True)
 
         if "整單作廢" in manage_action:
-            st.warning("⚠️ **注意：** 作廢將依據當時結帳發貨時的「精確原始批次」完整歸還至庫存中。")
-            if st.button("🔥 確定執行整單作廢", type="primary", use_container_width=True):
+            st.warning("⚠️ **注意：** 將依據當時結帳消耗的原始批次 並完整歸還至庫存中。")
+            if st.button("🔥 整單作廢", type="primary", use_container_width=True):
                 conn = sqlite3.connect('inventory.db', timeout=20.0)
                 cursor = conn.cursor()
                 try:
@@ -423,12 +423,9 @@ with pos_tabs[1]:
                     conn.close()
                     st.error(f"執行作廢失敗：{e}")
 
-        elif "數量微調" in manage_action:
-            # ==========================================
-            # ✨ 【關鍵新增功能】：現場補加當初漏點的餐點區
-            # ==========================================
+        elif "更正點餐數量" in manage_action:
             st.markdown("----")
-            st.markdown("##### ➕ 補加當初漏點的餐點品項：")
+            st.markdown("##### ➕ 餐點品項：")
             
             # 使用 Session State 初始化這筆單據獨立的「額外加點暫存池」
             add_pool_key = f"order_add_pool_{target_hist_id}"
@@ -445,7 +442,7 @@ with pos_tabs[1]:
                 selected_append_dish = st.selectbox("選取菜單上要補加的品項", dish_append_options, key=f"append_dish_select_{target_hist_id}")
             with col_add_order2:
                 st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("➕ 補加進清單", use_container_width=True, key=f"append_dish_btn_{target_hist_id}"):
+                if st.button("➕ 加進清單", use_container_width=True, key=f"append_dish_btn_{target_hist_id}"):
                     if selected_append_dish == "--- 請選取欲補加的餐點 ---":
                         st.error("請先選擇要補加的餐點品項！")
                     else:
@@ -602,19 +599,19 @@ with pos_tabs[1]:
 # 分頁 3：餐點配方微調與臨時餐點創立 
 # ==========================================
 with pos_tabs[2]:
-    st.markdown("##### 🆕 1. 現場食材加料 / 臨時自訂新餐點創立區")
+    st.markdown("##### 🆕 1. 新餐點創立區")
     
-    creation_mode = st.radio("🛠️ 請選擇餐點建立模式：", ["A模式：單份獨立餐點建立（原有功能）", "B模式：整鍋物料拆分建立（大/小碗成本攤算）"], horizontal=True)
+    creation_mode = st.radio("🛠️ 請選擇餐點建立模式：", ["A模式：單份餐點", "B模式：整鍋"], horizontal=True)
 
-    if creation_mode == "A模式：單份獨立餐點建立（原有功能）":
-        with st.expander("🛠️ 展開自訂臨時餐點與即時配方調配面板 (A模式)", expanded=True):
+    if creation_mode == "A模式：單份餐點":
+        with st.expander("🛠️ 展開配方調配面板", expanded=True):
             col_new_dish1, col_new_dish2 = st.columns(2)
             with col_new_dish1:
-                pos_custom_name = st.text_input("手動輸入臨時/新創餐點名稱", value="", key="custom_dish_name_input").strip()
+                pos_custom_name = st.text_input("輸入餐點名稱", value="", key="custom_dish_name_input").strip()
             with col_new_dish2:
-                pos_custom_price = st.number_input("設定販售價格 (必須大於 0 的整數)", min_value=0, value=0, step=1, key="custom_dish_price_input")
+                pos_custom_price = st.number_input("設定販售價格", min_value=0, value=0, step=1, key="custom_dish_price_input")
                 
-            st.markdown("###### ➕ 請調配此項客製餐點的專屬物料與用量：")
+            st.markdown("###### ➕ 食材用量：")
             col_cus_mat1, col_cus_mat2, col_cus_mat3 = st.columns([2, 1, 1])
             with col_cus_mat1:
                 dish_select_list = ["--- 請選擇食材 ---"] + all_raw_df['prod_name'].tolist()
@@ -636,7 +633,7 @@ with pos_tabs[2]:
             if 'custom_recipe_pool' not in st.session_state:
                 st.session_state.custom_recipe_pool = []
                 
-            if st.button("➕ 將此原物料揉入暫存配方", key="add_cus_recipe_btn"):
+            if st.button("➕ 將此食材加入清單", key="add_cus_recipe_btn"):
                 if cus_mat_name == "--- 請選擇食材 ---" or cus_mat_qty <= 0:
                     st.error("請選擇有效原物料並輸入大於 0 的用量！")
                 else:
@@ -685,25 +682,25 @@ with pos_tabs[2]:
                 custom_margin = (custom_profit / pos_custom_price * 100) if pos_custom_price > 0 else 0.0
                 
                 st.markdown(f"""
-                > 💡 **🆕 新創餐點定價與配方成本動態預估試算：**
-                > * 餐點暫定售價： **${pos_custom_price} 元**
+                > 💡 **新餐點售價與配方成本動態預估試算：**
+                > * 餐點售價： **{pos_custom_price} 元**
                 > * 依目前庫存推算【**單份標準原物料成本**】： **${custom_custom_dish_calc_cost:,.2f} 元**
-                > * 預估【**單份毛利**】： **${custom_profit:,.2f} 元** ｜ 預估毛利率: **{custom_margin:.1f}%**
+                > * 預估【**單份毛利**】： **{custom_profit:,.2f} 元** ｜ 預估毛利率: **{custom_margin:.1f}%**
                 """)
                     
-                if st.button("💾 確定打包此新創餐點並寫入正式菜單", type="primary"):
+                if st.button("💾 寫入正式菜單", type="primary"):
                     if not pos_custom_name:
-                        st.error("❌ 錯誤：請輸入臨時/新創餐點名稱！")
+                        st.error("❌ 錯誤：請輸入餐點名稱！")
                     elif pos_custom_price <= 0:
                         st.error("❌ 錯誤：販售價格必須為大於 0 的整數！")
                     elif not st.session_state.custom_recipe_pool:
-                        st.error("❌ 錯誤變更：新創餐點必須至少包含一項原物料配方，不可做「無本生意」！")
+                        st.error("❌ 錯誤變更：餐點必須至少包含一項原物料配方")
                     else:
                         conn = sqlite3.connect('inventory.db', timeout=20.0)
                         cursor = conn.cursor()
                         cursor.execute("SELECT prod_id FROM products WHERE prod_name = ? AND status = 1", (pos_custom_name,))
                         if cursor.fetchone():
-                            st.error(f"❌ 錯誤：【{pos_custom_name}】已存在於正式菜單中，請直接至下方區塊修正參數，切勿重複建立！")
+                            st.error(f"❌ 錯誤：【{pos_custom_name}】已存在於正式菜單中，請直接至下方區塊修正參數")
                             cursor.close()
                             conn.close()
                         else:
@@ -723,28 +720,28 @@ with pos_tabs[2]:
                             st.session_state.custom_recipe_pool = []
                             st.rerun()
 
-    elif creation_mode == "B模式：整鍋物料拆分建立（大/小碗成本攤算）":
-        with st.expander("🛠️ 展開自訂臨時餐點與即時配方調配面板 (B模式)", expanded=True):
+    elif creation_mode == "B模式：整鍋":
+        with st.expander("🛠️ 展開配方調配面板", expanded=True):
             col_b_name, col_b_price1, col_b_price2 = st.columns([2, 1, 1])
             with col_b_name:
-                pot_base_name = st.text_input("輸入此鍋餐點基底名稱 (如: 招牌麻辣火鍋)", value="", key="pot_base_name_input").strip()
+                pot_base_name = st.text_input("輸入餐點名稱", value="", key="pot_base_name_input").strip()
             with col_b_price1:
                 pot_large_price = st.number_input("設定【大碗】販售價格", min_value=0, value=0, step=1, key="pot_large_price_input")
             with col_b_price2:
                 pot_small_price = st.number_input("設定【小碗】販售價格", min_value=0, value=0, step=1, key="pot_small_price_input")
 
-            st.markdown("###### 📊 填寫此整鍋預計可拆分的銷售碗數：")
+            st.markdown("###### 📊 填寫整鍋預計可銷售碗數：")
             col_split1, col_split2 = st.columns(2)
             with col_split1:
                 pot_large_servings = st.number_input("整鍋可做成【大碗】的總碗數", min_value=0.0, value=0.0, step=1.0, key="pot_large_servings")
             with col_split2:
                 pot_small_servings = st.number_input("整鍋可做成【小碗】的總碗數", min_value=0.0, value=0.0, step=1.0, key="pot_small_servings")
 
-            st.markdown("###### ➕ 請添加此「整鍋」投入的所有食材與總用量：")
+            st.markdown("###### ➕ 食材用量：")
             col_b_mat1, col_b_mat2, col_b_mat3 = st.columns([2, 1, 1])
             with col_b_mat1:
                 b_dish_select_list = ["--- 請選擇食材 ---"] + all_raw_df['prod_name'].tolist()
-                b_mat_name = st.selectbox("選擇投入此鍋的食材/用品項目", b_dish_select_list, key="b_mat_selector")
+                b_mat_name = st.selectbox("選擇此餐點的食材項目", b_dish_select_list, key="b_mat_selector")
             
             db_unit_b = ""
             if b_mat_name != "--- 請選擇食材 ---":
@@ -760,7 +757,7 @@ with pos_tabs[2]:
             if 'pot_recipe_pool' not in st.session_state:
                 st.session_state.pot_recipe_pool = []
 
-            if st.button("➕ 將食材計入整鍋總配方中", key="add_pot_recipe_btn"):
+            if st.button("➕ 將此食材加入清單", key="add_pot_recipe_btn"):
                 if b_mat_name == "--- 請選擇食材 ---" or b_mat_qty <= 0:
                     st.error("請選擇有效原物料並輸入大於 0 的投入量！")
                 else:
@@ -821,9 +818,9 @@ with pos_tabs[2]:
                 > * 拆分估算：**【單碗小碗成本】**： **${single_small_cost:,.2f} 元** (售價:${pot_small_price}，預估毛利率:{((pot_small_price - single_small_cost) / pot_small_price * 100) if pot_small_price > 0 else 0.0:.1f}%)
                 """)
 
-                if st.button("💾 打包打包大/小碗餐點同時寫入菜單", type="primary", key="save_pot_dishes_btn"):
+                if st.button("💾 寫入正式菜單", type="primary", key="save_pot_dishes_btn"):
                     if not pot_base_name:
-                        st.error("❌ 錯誤：請輸入餐點基底名稱！")
+                        st.error("❌ 錯誤：請輸入餐點名稱！")
                     elif pot_large_servings <= 0 and pot_small_servings <= 0:
                         st.error("❌ 錯誤：大碗與小碗的預計可做數量不能同時為 0！")
                     elif (pot_large_servings > 0 and pot_large_price <= 0) or (pot_small_servings > 0 and pot_small_price <= 0):
@@ -875,12 +872,12 @@ with pos_tabs[2]:
                              f"修正餐點參數-整鍋拆分配方-{pot_base_name}", 
                              f"透過 B模式 創立整鍋基底餐點：{pot_base_name}。整鍋物料總成本 ${total_pot_cost:.2f}。成功產出大碗成本 ${single_large_cost:.2f}/小碗成本 ${single_small_cost:.2f}。"
                         )
-                        trigger_toast(f"🎉 成功批次打包建立 【{pot_base_name}】 大/小碗成品餐點並加入菜單！", icon="🥣")
+                        trigger_toast(f"🎉 成功建立 【{pot_base_name}】 大/小碗成品餐點並加入菜單！", icon="🥣")
                         st.session_state.pot_recipe_pool = []
                         st.rerun()
 
     st.markdown("---")
-    st.markdown("##### 📋 2. 調整與管理現有餐點配方與售價：")
+    st.markdown("##### 📋 2. 調整現有餐點配方與售價：")
     if existing_dishes.empty:
         st.info("目前尚無既有餐點可供修改。")
     else:
@@ -904,14 +901,14 @@ with pos_tabs[2]:
                 st.session_state.editing_recipe_list = db_recipe.to_dict(orient='records')
                 st.session_state.editing_recipe_dish_id = td_id
 
-            st.markdown("###### ➕ 追加全新原物料至此餐點中：")
+            st.markdown("###### ➕ 追加食材至此餐點中：")
             col_add_e1, col_add_e2 = st.columns([3, 1])
             with col_add_e1:
-                add_edit_mat_name = st.selectbox("選擇要追加的原物料項目", ["--- 請選擇食材/用品 ---"] + all_raw_df['prod_name'].tolist(), key="add_edit_mat_select")
+                add_edit_mat_name = st.selectbox("選擇要追加的食材項目", ["--- 請選擇食材/用品 ---"] + all_raw_df['prod_name'].tolist(), key="add_edit_mat_select")
             with col_add_e2:
                 add_edit_mat_qty = st.number_input("設定單份標準用量", min_value=0.0001, value=1.0, step=1.0, key="add_edit_mat_qty_input")
                 
-            if st.button("➕ 確定將此原物料塞入配方清單", use_container_width=True):
+            if st.button("➕ 確定將此食材加入配方清單", use_container_width=True):
                 if add_edit_mat_name != "--- 請選擇食材/用品 ---" and add_edit_mat_qty > 0:
                     matched_mats = all_raw_df[all_raw_df['prod_name'] == add_edit_mat_name]
                     if not matched_mats.empty:
@@ -964,11 +961,11 @@ with pos_tabs[2]:
             else:
                 st.info("此餐點目前沒有任何配方物料，請利用上方追加。")
 
-            new_dish_price = st.number_input("💵 調整此餐點最終門市售價 (必須為大於 0 的整數)", step=1, key="edit_price_input", value=max(old_price, 1))
+            new_dish_price = st.number_input("💵 調整此餐點售價", step=1, key="edit_price_input", value=max(old_price, 1))
             
             recipe_has_negative = any(float(item["單位用量"]) <= 0 for item in st.session_state.editing_recipe_list)
             
-            if st.button("💾 確認儲存餐點售價與完整配方變更", type="primary", use_container_width=True):
+            if st.button("💾 確認變更", type="primary", use_container_width=True):
                 if new_dish_price <= 0:
                     st.error("❌ 錯誤變更：販售價格必須為大於 0 的整數！儲存失敗。")
                 elif recipe_has_negative:

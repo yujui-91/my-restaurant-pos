@@ -10,7 +10,7 @@ from database.db_core import show_pending_toast
 
 show_pending_toast()
 
-st.subheader("📊 門市商業智能：營收、成本與損益分析報告")
+st.subheader("📊 門市營收、成本與損益分析報告")
 
 # ==========================================
 # 🔍 頂部複合時間篩選面板
@@ -275,13 +275,13 @@ gross_margin = (gross_profit / total_revenue * 100) if total_revenue > 0 else 0.
 # ==========================================
 # 🏪 面板呈現區 1：經營損益平衡總覽
 # ==========================================
-st.markdown("### 🧾 門市動態損益平衡摘要 (P&L)")
-st.info(f"💡 **會計智慧歸帳生效中：** 當前固定資產與水電費已綁定 `target_month` 歸帳。您目前選擇的區間涵蓋了 {', '.join(covered_target_months)} 的帳單。")
+st.markdown("### 🧾 門市動態損益")
+st.info(f"💡 **會計帳生效中：** 目前選擇的區間涵蓋了 {', '.join(covered_target_months)} 的帳單 顯示當前固定資產與費用。")
 
 a, b, c, d, e = st.columns(5)
 a.metric("🏪 營業總收入", f"${total_revenue:,.0f}")
 b.metric("🥩 食材消耗成本", f"${total_food_cost:,.0f}")
-c.metric("⚡ 固定帳單/費用", f"${total_op_expense:,.1f}")
+c.metric("⚡ 帳單費用", f"${total_op_expense:,.1f}")
 d.metric("🔥 最終真實淨利", f"${net_profit:,.1f}")
 e.metric("📈 門市淨利率", f"{margin:.1f}%")
 
@@ -293,22 +293,23 @@ st.divider()
 left_col, right_col = st.columns(2)
 
 with left_col:
-    st.markdown("### 🏆 成品餐點銷售排行 (銷量池)")
+    st.markdown("### 餐點銷售排行")
     if dish_sales:
         rank_df = pd.DataFrame(dish_sales.items(), columns=["餐點名稱", "銷售份數"]).sort_values(by="銷售份數", ascending=False)
         st.dataframe(rank_df, hide_index=True, use_container_width=True)
         
-        fig_dish = px.bar(rank_df, x='餐點名稱', y='銷售份數', text_auto=True, title="🎯 當期餐點熱銷排行榜")
-        st.plotly_chart(fig_dish, use_container_width=True)
+        # fig_dish = px.bar(rank_df, x='餐點名稱', y='銷售份數', text_auto=True, title="🎯 當期餐點熱銷排行榜")
+        # st.plotly_chart(fig_dish, use_container_width=True)
     else:
         st.info("💡 當前選定期間內尚無餐點銷售紀錄。")
 
 with right_col:
-    st.markdown("### 🍩 食材與原物料消耗占比")
+    st.markdown("### 原物料消耗排行")  # 新增了與左邊對稱的標題
     if material_usage:
-        pie_df = pd.DataFrame(material_usage.items(), columns=["食材物料", "消耗總數量"])
-        fig_mat = px.pie(pie_df, values='消耗總數量', names='食材物料', title="🥬 食材原物料消耗比例結構", hole=0.3)
-        st.plotly_chart(fig_mat, use_container_width=True)
+        # 將資料轉換為 DataFrame，並依消耗總數量由大到小排序
+        mat_df = pd.DataFrame(material_usage.items(), columns=["食材物料", "消耗總數量"]).sort_values(by="消耗總數量", ascending=False)
+        # 使用 st.dataframe 呈現表格，隱藏索引並自動適應寬度
+        st.dataframe(mat_df, hide_index=True, use_container_width=True)
     else:
         st.info("💡 當前選定期間內尚無食材消耗數據。")
 
@@ -317,7 +318,7 @@ st.divider()
 # ==========================================
 # 💧 面板呈現區 3：水電固定費用歸帳明細
 # ==========================================
-st.markdown("### 💧 固定資產與水電營運費用 (C%) 明細追蹤")
+st.markdown("### 💧 營運費用明細追蹤")
 if not c_expense_records:
     st.info(f"💡 當前涵蓋月份 ({', '.join(covered_target_months)}) 內無 any 固定資產 or 水電費用帳單歸帳。")
 else:

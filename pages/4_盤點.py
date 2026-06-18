@@ -7,7 +7,7 @@ from database.db_core import log_history, trigger_toast, show_pending_toast
 
 show_pending_toast()
 
-st.subheader("📋 存貨盤點核實（精確批次盤點版）")
+st.subheader("📋 存貨盤點核實")
 
 current_user = st.session_state.get('current_user', '老 闆')
 
@@ -73,12 +73,12 @@ if not df_products_in_stock.empty:
             with st.form("precise_audit_form"):
                 # 🎯 移除 min_value 限制，不再讓 Streamlit 自動把負數偷偷轉化成 0.0
                 actual_qty = st.number_input(
-                    f"填寫該批次現場【實盤總數量】 ({unit_label})", 
+                    f"填寫該批次現場數量 ({unit_label})", 
                     value=theoretical_qty, 
                     step=1.0
                 )
                 
-                submit_audit = st.form_submit_button("💾 確認無誤，覆蓋並更新此批次庫存")
+                submit_audit = st.form_submit_button("💾 更新此批次庫存")
                 
                 if submit_audit:
                     # 🛑 核心防呆：現場實盤數量絕不可能低於 0，若小於 0 則立刻拋錯阻斷

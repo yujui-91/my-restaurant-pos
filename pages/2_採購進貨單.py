@@ -11,13 +11,13 @@ st.subheader("📝 採購進貨與費用登記單")
 
 current_user = st.session_state.get('current_user', '老 闆')
 
-po_tabs = st.tabs(["📥 新進貨單登記", "✏️ 歷史採購單錯誤修正"])
+po_tabs = st.tabs(["📥 新進貨單登記", "✏️ 歷史採購單修正"])
 
 # ==========================================
 # 分頁 1：新進貨單登記 (智慧自動上架與 UI 鎖死優化)
 # ==========================================
 with po_tabs[0]:
-    item_type = st.radio("✨ 請選擇本次登記類別：", ["食材 (R 開頭)", "用品 (S 開頭)", "帳單費用 (C 開頭，如水電瓦斯)"], horizontal=True)
+    item_type = st.radio("✨ 請選擇本次登記類別：", ["食材 (R 開頭)", "用品 (S 開頭)", "帳單費用 (C 開頭)"], horizontal=True)
 
     if "食材" in item_type: prefix = 'R'
     elif "用品" in item_type: prefix = 'S'
@@ -30,17 +30,14 @@ with po_tabs[0]:
     )
     conn.close()
 
-    st.markdown("##### 🔍 1. 品項選取（智慧二選切換）：")
-    if prefix in ['R', 'S']:
-        st.caption("💡 知識庫：不同供應商的同名品項建議分開建立，命名如 `[A廠商] 紙盒` 與 `[B廠商] 紙盒`。")
-
-    reg_mode = st.radio("請選擇登記模式：", ["從既有品項【重複登記】", "填寫新名稱【首次登記】"], horizontal=True)
+    st.markdown("##### 🔍 1. 品項選取：")
+    reg_mode = st.radio("請選擇登記模式：", ["既有品項【重複登記】", "填寫新名稱【首次登記】"], horizontal=True)
 
     chosen_name = ""
     default_id = ""
     default_p_unit, default_u_unit, default_c_factor, default_safety = "", "", 1.0, 0.0
 
-    if reg_mode == "從既有品項【重複登記】":
+    if reg_mode == "既有品項【重複登記】":
         options_display = [f"--- 請選擇已建立的{item_type[:2]} ---"]
         for _, row in existing_items_df.iterrows():
             if row['status'] == 0:
@@ -83,7 +80,7 @@ with po_tabs[0]:
         final_id = st.text_input("項目編號", value=default_id, disabled=True)
         
         if prefix == 'C':
-            st.markdown("##### 💰 2. 請輸入本次帳單金額與對應歸帳年月（防止跨年財報錯誤）：")
+            st.markdown("##### 💰 2. 請輸入本次帳單金額與歸帳年月（防止跨年月財報錯誤）：")
             col_bill1, col_bill2 = st.columns([2, 2])
             with col_bill1:
                 total_invoice_amount = st.number_input("本次帳單【繳費總金額】($)", min_value=0.0, value=0.0, step=10.0)
@@ -96,23 +93,23 @@ with po_tabs[0]:
             p_unit, u_unit, c_factor, po_qty, s_stock = "次", "次", 1.0, 1.0, 0.0
             v_name, v_phone, exp_str = "公共事業/其他", "", ""
         else:
-            st.markdown("##### 📦 2. 確認或填寫本批次的包裝規格與單位（皆為必填）：")
+            st.markdown("##### 📦 2. 確認本批次資訊：")
             col_spec1, col_spec2, col_spec3 = st.columns(3)
-            with col_spec1: p_unit = st.text_input("大包裝進貨單位 (如:台斤、箱)", value=default_p_unit).strip()
-            with col_spec2: u_unit = st.text_input("廚房基本使用小單位 (如:g、個)", value=default_u_unit).strip()
-            with col_spec3: c_factor = st.number_input("轉換率 (一大包等於多少小單位)", min_value=0.0001, value=float(max(default_c_factor, 0.0001)), step=1.0)
+            with col_spec1: p_unit = st.text_input("大包裝進貨單位 (如:箱、盒)", value=default_p_unit).strip()
+            with col_spec2: u_unit = st.text_input("廚房基本使用小單位 (如:g、顆)", value=default_u_unit).strip()
+            with col_spec3: c_factor = st.number_input("轉換率 (一箱有幾顆)", min_value=0.0001, value=float(max(default_c_factor, 0.0001)), step=1.0)
 
-            st.markdown("##### 💰 3. 請填寫本次採購的實際數據與供應商資訊：")
+            st.markdown("##### 💰 3. 請填寫本次採購的資訊：")
             col_po1, col_po2, col_po3 = st.columns(3)
             with col_po1: po_qty = st.number_input(f"進貨大包裝總數量", min_value=0.0, value=0.0, step=1.0)
-            with col_po2: total_invoice_amount = st.number_input("本次進貨【採購總金額】($)", min_value=0.0, value=0.0, step=10.0)
-            with col_po3: s_stock = st.number_input(f"設定最低安全預警量", min_value=0.0, value=float(default_safety), step=1.0)
+            with col_po2: total_invoice_amount = st.number_input("本次進貨總金額", min_value=0.0, value=0.0, step=10.0)
+            with col_po3: s_stock = st.number_input(f"設定最低安全預警量 (選填)", min_value=0.0, value=float(default_safety), step=1.0)
                 
             col_vendor1, col_vendor2, col_vendor3 = st.columns(3)
             with col_vendor1: v_name = st.text_input("供應商店名 (選填)", value="")
             with col_vendor2: v_phone = st.text_input("供應商電話 (選填)", value="")
             with col_vendor3:
-                expiry_input = st.date_input("請選取有效期限", value=None, key="po_exp_date")
+                expiry_input = st.date_input("請選取有效期限 (選填)", value=None, key="po_exp_date")
                 exp_str = expiry_input.strftime("%Y-%m-%d") if expiry_input is not None else ""
 
         total_use_units = po_qty * c_factor
@@ -198,8 +195,6 @@ with po_tabs[0]:
 # 分頁 2：歷史採購單錯誤修正
 # ==========================================
 with po_tabs[1]:
-    st.markdown("##### 🔍 歷史採購單精準篩選面板：")
-    
     col_f1, col_f2 = st.columns(2)
     with col_f1:
         time_filter = st.selectbox(
@@ -275,7 +270,7 @@ with po_tabs[1]:
                 return f"【批次 {int(r['批次編號'])}】({r['進貨日期']}) {r['商品編號']}-{r['商品名稱']} (原進貨大包裝:{r['進貨大包裝數']:.1f}{r['進貨單位']}, 剩餘:{r['剩餘大包裝數']:.1f}{r['進貨單位']})"
                 
         batch_options = df_all_batches.apply(format_batch_option, axis=1).tolist()
-        selected_batch_str = st.selectbox("🎯 請選取您想要修改或補正的採購單批次：", batch_options)
+        selected_batch_str = st.selectbox("🎯 請選取想要修改的採購單批次：", batch_options)
         
         if " — [編號:" in selected_batch_str:
             target_batch_id = int(selected_batch_str.split(" — [編號:")[1].split("]")[0])

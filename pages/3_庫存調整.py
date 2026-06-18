@@ -7,11 +7,11 @@ from database.db_core import log_history, trigger_toast, show_pending_toast
 
 show_pending_toast()
 
-st.subheader("🔧 庫存微調與報廢管理面板")
+st.subheader("🔧 庫存管理面板")
 
 current_user = st.session_state.get('current_user', '老 闆')
 
-stock_adj_cate = st.radio("🗂️ 請選擇要調整的項目類別：", ["僅看 食材 (R)", "僅看 用品 (S)"], horizontal=True)
+stock_adj_cate = st.radio("🗂️ 請選擇要調整的項目類別：", [" 食材 (R)", " 用品 (S)"], horizontal=True)
 
 if "食材" in stock_adj_cate: 
     prefix_filter = "R%"
@@ -49,7 +49,7 @@ if not df_unique_items.empty:
             axis=1
         ).tolist()
         
-        selected_batch_row = st.selectbox("🎯 2. 請選擇該品項欲更動的精確進貨批次：", batch_options)
+        selected_batch_row = st.selectbox("🎯 2. 請選擇該品項欲更動的進貨批次：", batch_options)
         
         batch_id_part = int(selected_batch_row.split("【批次編號: ")[1].split("】")[0])
         
@@ -66,9 +66,9 @@ if not df_unique_items.empty:
             st.markdown(f"> 📊 **當前選擇批次狀態：** **{item_name}** (進貨日期: {orig_inbound_date}) ｜ 目前系統登記庫存量： **{current_qty} {unit_label}**")
             
             with st.form("inventory_adjustment_form"):
-                adj_type = st.radio("動作選擇", ["過期損耗/報廢 (扣減庫存)", "手動補正/盤盈回補 (增加庫存)"], horizontal=True)
+                adj_type = st.radio("動作選擇", ["過期損耗/報廢 (扣減庫存)", "手動補正(增加庫存)"], horizontal=True)
                 # 🎯 依據您的要求，此處移除 min_value 限制，允許輸入負數
-                adj_qty = st.number_input(f"請輸入異動變更的數量 ({unit_label})", value=1.0, step=1.0)
+                adj_qty = st.number_input(f"請輸入異動變更的數量 ({unit_label})  ", value=1.0, step=1.0)
                 
                 st.markdown("###### 📅 請指定此筆損耗歸屬之完整年份與月份（確保跨年財報精確）：")
                 col_adj_y, col_adj_m = st.columns(2)
