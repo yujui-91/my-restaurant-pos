@@ -4,7 +4,8 @@ import re
 from datetime import datetime, timedelta
 
 def init_db():
-    conn = sqlite3.connect('inventory.db')
+    conn = sqlite3.connect('inventory.db', timeout=30.0)
+    conn.execute("PRAGMA journal_mode=WAL;")
     cursor = conn.cursor()
     
     # 1. 商品/物料資料表 (status 欄位：1=啟用, 0=下架/停用)
@@ -112,7 +113,8 @@ def init_db():
     conn.close()
 
 def log_history(user, action, details):
-    conn = sqlite3.connect('inventory.db')
+    conn = sqlite3.connect('inventory.db', timeout=30.0)
+    conn.execute("PRAGMA journal_mode=WAL;")
     cursor = conn.cursor()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute("INSERT INTO history (timestamp, user, action, details) VALUES (?, ?, ?, ?)", (now, user, action, details))
@@ -147,7 +149,8 @@ def deduct_stock_fifo(prod_id, qty_to_deduct, cursor):
     return True, total_deducted_cost, deducted_batches
 
 def get_next_raw_id():
-    conn = sqlite3.connect('inventory.db')
+    conn = sqlite3.connect('inventory.db', timeout=30.0)
+    conn.execute("PRAGMA journal_mode=WAL;")
     cursor = conn.cursor()
     cursor.execute("SELECT prod_id FROM products WHERE prod_id LIKE 'R%'")
     ids = cursor.fetchall()
@@ -156,7 +159,8 @@ def get_next_raw_id():
     return f"R{max_num + 1:03d}"
 
 def get_next_dish_id():
-    conn = sqlite3.connect('inventory.db')
+    conn = sqlite3.connect('inventory.db', timeout=30.0)
+    conn.execute("PRAGMA journal_mode=WAL;")
     cursor = conn.cursor()
     cursor.execute("SELECT prod_id FROM products WHERE prod_id LIKE 'P%'")
     ids = cursor.fetchall()
@@ -165,7 +169,8 @@ def get_next_dish_id():
     return f"P{max_num + 1:03d}"
 
 def get_next_supply_id():
-    conn = sqlite3.connect('inventory.db')
+    conn = sqlite3.connect('inventory.db', timeout=30.0)
+    conn.execute("PRAGMA journal_mode=WAL;")
     cursor = conn.cursor()
     cursor.execute("SELECT prod_id FROM products WHERE prod_id LIKE 'S%'")
     ids = cursor.fetchall()
@@ -174,7 +179,8 @@ def get_next_supply_id():
     return f"S{max_num + 1:03d}"
 
 def get_next_bill_id():
-    conn = sqlite3.connect('inventory.db')
+    conn = sqlite3.connect('inventory.db', timeout=30.0)
+    conn.execute("PRAGMA journal_mode=WAL;")
     cursor = conn.cursor()
     cursor.execute("SELECT prod_id FROM products WHERE prod_id LIKE 'C%'")
     ids = cursor.fetchall()
@@ -183,7 +189,8 @@ def get_next_bill_id():
     return f"C{max_num + 1:03d}"
 
 def update_purchase_batch(batch_id, prod_id, new_original_qty, new_cost, p_unit, u_unit, c_factor, s_stock, v_name, v_phone, exp_str):
-    conn = sqlite3.connect('inventory.db')
+    conn = sqlite3.connect('inventory.db', timeout=30.0)
+    conn.execute("PRAGMA journal_mode=WAL;")
     cursor = conn.cursor()
     
     cursor.execute("SELECT qty, original_qty FROM stock_batches WHERE batch_id = ?", (batch_id,))
@@ -216,7 +223,8 @@ def update_purchase_batch(batch_id, prod_id, new_original_qty, new_cost, p_unit,
     conn.close()
 
 def update_dish_and_bom(dish_id, new_price, recipe_list):
-    conn = sqlite3.connect('inventory.db')
+    conn = sqlite3.connect('inventory.db', timeout=30.0)
+    conn.execute("PRAGMA journal_mode=WAL;")
     cursor = conn.cursor()
     cursor.execute("UPDATE products SET price = ? WHERE prod_id = ?", (new_price, dish_id))
     cursor.execute("DELETE FROM bom WHERE parent_id = ?", (dish_id,))
