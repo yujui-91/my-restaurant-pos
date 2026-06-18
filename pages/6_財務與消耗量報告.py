@@ -6,18 +6,12 @@ import re
 import json
 import plotly.express as px
 from datetime import datetime, timedelta
-# ✨ 關鍵相容修正：引入 get_db_conn
 from database.db_core import show_pending_toast, get_db_conn
 
-# 檢查 session_state 中的登入狀態，若未登入則阻斷畫面並提示
-# if not st.session_state.get("password_correct", False):
-#     st.warning("🔒 請先前往首頁登入管理系統！")
-#     st.stop()
 show_pending_toast()
 
 st.subheader("📊 門市營收、成本與損益分析報告")
 
-# 加入手機模式切換開關
 use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=False, key="finance_mobile_toggle")
 
 # ==========================================
@@ -25,7 +19,7 @@ use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=Fal
 # ==========================================
 report_option = st.selectbox(
     "📅 請選擇財務統計區間：", 
-    ["今天", "過去 7 天", "過去 30 天", "自訂區間 (自選起訖日期)"], 
+    ["今天", "過去 7 天", "過去 30 定", "自訂區間 (自選起訖日期)"], 
     key="finance_time_filter"
 )
 
@@ -58,63 +52,117 @@ while current_ptr <= end_date:
     covered_target_months.add(current_ptr.strftime("%Y-%m"))
     current_ptr += timedelta(days=1)
 
+# ==================== 【財務與消耗量報告 快取大數據唯讀查詢函數封裝】 ====================
+@st.cache_data(ttl=60)
+def cached_get_sales_summary(start_str, end_str):
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT COALESCE(SUM(total_revenue), 0.0) AS rev, COALESCE(SUM(total_cost), 0.0) AS cst
+        FROM orders 
+        WHERE status = 1 AND timestamp BETWEEN ? AND ?
+    ''', (start_str, end_str))
+    r = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(r, columns=cols)
+
+@st.cache_data(ttl=60)
+def cached_get_dish_rank(start_str, end_str):
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT oi.prod_name AS 餐點名稱, SUM(oi.qty) AS 銷售份數
+        FROM order_items oi
+        JOIN orders o ON oi.order_id = o.order_id
+        WHERE o.status = 1 AND o.timestamp BETWEEN ? AND ?
+        GROUP BY oi.prod_name
+        ORDER BY 銷售份數 DESC
+    ''', (start_str, end_str))
+    r = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(r, columns=cols)
+
+@st.cache_data(ttl=60)
+def cached_get_material_usage(start_str, end_str):
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT om.mat_name AS 食材物料, SUM(om.qty) AS 消耗總數量
+        FROM order_materials om
+        JOIN orders o ON om.order_id = o.order_id
+        WHERE o.status = 1 AND o.timestamp BETWEEN ? AND ?
+        GROUP BY om.mat_name
+        ORDER BY 消耗總數量 DESC
+    ''', (start_str, end_str))
+    r = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(r, columns=cols)
+
+@st.cache_data(ttl=60)
+def cached_get_expenses_raw():
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute("SELECT action, details, timestamp FROM history WHERE action LIKE '手動調整庫存-%'")
+    r = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(r, columns=cols)
+
+@st.cache_data(ttl=60)
+def cached_get_actual_purchase_details(start_date_str, end_date_str):
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT s.batch_id, s.prod_id, p.prod_name, s.original_qty, s.cost, s.inbound_date, p.purchase_unit
+        FROM stock_batches s
+        JOIN products p ON s.prod_id = p.prod_id
+        WHERE (s.prod_id LIKE 'R%' OR s.prod_id LIKE 'S%' OR s.prod_id LIKE 'C%')
+          AND s.inbound_date BETWEEN ? AND ?
+        ORDER BY s.inbound_date DESC, s.batch_id DESC
+    ''', (start_date_str, end_date_str))
+    r = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(r, columns=cols)
+
+@st.cache_data(ttl=60)
+def cached_get_operational_expenses_base():
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute("SELECT s.batch_id, s.prod_id, p.prod_name, s.qty, s.cost, s.inbound_date FROM stock_batches s JOIN products p ON s.prod_id = p.prod_id WHERE s.prod_id LIKE 'C%'")
+    r_cb = cursor.fetchall()
+    cols_cb = [desc[0] for desc in cursor.description]
+    
+    cursor.execute("SELECT id, action, details, timestamp FROM history WHERE details LIKE '%目標歸帳月份:%' ORDER BY id ASC")
+    r_ch = cursor.fetchall()
+    cols_ch = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(r_cb, columns=cols_cb), pd.DataFrame(r_ch, columns=cols_ch)
+# ============================================================================
+
+
 # ==========================================
-# 📊 資料庫核心撈取與高速 SQL 底層聚合
+# 資料庫核心撈取與高速 快取 SQL 底層聚合載入
 # ==========================================
-# ✨ 關鍵相容修正：改為 get_db_conn
-conn = get_db_conn()
-cursor = conn.cursor()
 
 # 1. 營業額與精準成本摘要
-cursor.execute('''
-    SELECT COALESCE(SUM(total_revenue), 0.0) AS rev, COALESCE(SUM(total_cost), 0.0) AS cst
-    FROM orders 
-    WHERE status = 1 AND timestamp BETWEEN ? AND ?
-''', (start_str, end_str))
-r_summary = cursor.fetchall()
-c_summary = [desc[0] for desc in cursor.description]
-df_sales_summary = pd.DataFrame(r_summary, columns=c_summary)
-
+df_sales_summary = cached_get_sales_summary(start_str, end_str)
 total_revenue = float(df_sales_summary.iloc[0]['rev'])
 total_food_cost = float(df_sales_summary.iloc[0]['cst'])
 
 # 2. 餐點排行明細
-cursor.execute('''
-    SELECT oi.prod_name AS 餐點名稱, SUM(oi.qty) AS 銷售份數
-    FROM order_items oi
-    JOIN orders o ON oi.order_id = o.order_id
-    WHERE o.status = 1 AND o.timestamp BETWEEN ? AND ?
-    GROUP BY oi.prod_name
-    ORDER BY 銷售份數 DESC
-''', (start_str, end_str))
-r_dish = cursor.fetchall()
-c_dish = [desc[0] for desc in cursor.description]
-df_dish_rank_raw = pd.DataFrame(r_dish, columns=c_dish)
+df_dish_rank_raw = cached_get_dish_rank(start_str, end_str)
 dish_sales = dict(zip(df_dish_rank_raw['餐點名稱'], df_dish_rank_raw['銷售份數']))
 
 # 3. 原物料消耗明細
-cursor.execute('''
-    SELECT om.mat_name AS 食材物料, SUM(om.qty) AS 消耗總數量
-    FROM order_materials om
-    JOIN orders o ON om.order_id = o.order_id
-    WHERE o.status = 1 AND o.timestamp BETWEEN ? AND ?
-    GROUP BY om.mat_name
-    ORDER BY 消耗總數量 DESC
-''', (start_str, end_str))
-r_mat = cursor.fetchall()
-c_mat = [desc[0] for desc in cursor.description]
-df_mat_rank_raw = pd.DataFrame(r_mat, columns=c_mat)
+df_mat_rank_raw = cached_get_material_usage(start_str, end_str)
 material_usage = dict(zip(df_mat_rank_raw['食材物料'], df_mat_rank_raw['消耗總數量']))
 
 # 4. 損耗記錄
-cursor.execute('''
-    SELECT action, details, timestamp FROM history 
-    WHERE action LIKE '手動調整庫存-%'
-''')
-r_exp = cursor.fetchall()
-c_exp = [desc[0] for desc in cursor.description]
-df_expenses_raw = pd.DataFrame(r_exp, columns=c_exp)
-
+df_expenses_raw = cached_get_expenses_raw()
 total_stock_loss = 0.0
 for _, row in df_expenses_raw.iterrows():
     if "品項:C" not in row['action']:
@@ -135,18 +183,7 @@ for _, row in df_expenses_raw.iterrows():
                 total_stock_loss += abs(change_amt) if change_amt < 0 else 0.0
 
 # 5. 物料進貨明細
-cursor.execute('''
-    SELECT s.batch_id, s.prod_id, p.prod_name, s.original_qty, s.cost, s.inbound_date, p.purchase_unit
-    FROM stock_batches s
-    JOIN products p ON s.prod_id = p.prod_id
-    WHERE (s.prod_id LIKE 'R%' OR s.prod_id LIKE 'S%' OR s.prod_id LIKE 'C%')
-      AND s.inbound_date BETWEEN ? AND ?
-    ORDER BY s.inbound_date DESC, s.batch_id DESC
-''', (start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")))
-r_actual = cursor.fetchall()
-c_actual = [desc[0] for desc in cursor.description]
-df_actual_purchase_details = pd.DataFrame(r_actual, columns=c_actual)
-
+df_actual_purchase_details = cached_get_actual_purchase_details(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
 total_purchase_cost = 0.0
 purchase_records = []
 for _, row in df_actual_purchase_details.iterrows():
@@ -172,25 +209,7 @@ for _, row in df_actual_purchase_details.iterrows():
     })
 
 # 6. 固定費用特殊歸帳歷史
-cursor.execute('''
-    SELECT s.batch_id, s.prod_id, p.prod_name, s.qty, s.cost, s.inbound_date
-    FROM stock_batches s
-    JOIN products p ON s.prod_id = p.prod_id
-    WHERE s.prod_id LIKE 'C%'
-''')
-r_cb = cursor.fetchall()
-c_cb = [desc[0] for desc in cursor.description]
-df_c_batches = pd.DataFrame(r_cb, columns=c_cb)
-
-cursor.execute('''
-    SELECT id, action, details, timestamp FROM history
-    WHERE details LIKE '%目標歸帳月份:%'
-    ORDER BY id ASC
-''')
-r_ch = cursor.fetchall()
-c_ch = [desc[0] for desc in cursor.description]
-df_c_history = pd.DataFrame(r_ch, columns=c_ch)
-conn.close()
+df_c_batches, df_c_history = cached_get_operational_expenses_base()
 
 batch_target_months = {}
 for _, log_row in df_c_history.iterrows():

@@ -4,13 +4,8 @@ import pandas as pd
 import sqlite3
 import re
 from datetime import datetime, timedelta
-# ✨ 關鍵相容修正：引入 get_db_conn
 from database.db_core import log_history, get_next_raw_id, get_next_supply_id, get_next_bill_id, update_purchase_batch, trigger_toast, show_pending_toast, get_db_conn
 
-# 檢查 session_state 中的登入狀態，若未登入則阻斷畫面並提示
-# if not st.session_state.get("password_correct", False):
-#     st.warning("🔒 請先前往首頁登入管理系統！")
-#     st.stop()
 show_pending_toast()
 
 st.subheader("📝 採購進貨與費用登記單")
@@ -18,6 +13,41 @@ st.subheader("📝 採購進貨與費用登記單")
 current_user = st.session_state.get('current_user', '老 闆')
 
 po_tabs = st.tabs(["📥 新進貨單登記", "✏️ 歷史採購單修正"])
+
+# ==================== 【採購進貨 快取唯讀查詢函數封裝】 ====================
+@st.cache_data(ttl=60)
+def cached_fetch_existing_items_for_po(prefix):
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT prod_id, prod_name, purchase_unit, use_unit, conversion_factor, safety_stock, status FROM products WHERE prod_id LIKE ?", 
+        (f"{prefix}%",)
+    )
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(rows, columns=cols)
+
+@st.cache_data(ttl=60)
+def cached_fetch_history_batches(where_clause, params_tuple):
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute(f'''
+        SELECT s.batch_id as 批次編號, s.prod_id as 商品編號, p.prod_name as 商品名稱, 
+               s.qty as 當前小單位庫存, s.original_qty as 原始小單位庫存, p.purchase_unit as 進貨單位, p.use_unit as 使用單位,
+               p.conversion_factor as 轉換率, (s.original_qty / p.conversion_factor) as 進貨大包裝數,
+               (s.qty / p.conversion_factor) as 剩餘大包裝數,
+               (s.qty * s.cost) as 推估總金額, s.expiry_date as 有效期限, s.vendor_name as 供應商, s.vendor_phone as 供應商電話,
+               s.inbound_date as 進貨日期, p.safety_stock as 安全庫存
+        FROM stock_batches s JOIN products p ON s.prod_id = p.prod_id 
+        {where_clause}
+        ORDER BY s.batch_id DESC
+    ''', list(params_tuple))
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(rows, columns=cols)
+# ============================================================================
 
 # ==========================================
 # 分頁 1：新進貨單登記 (智慧自動上架與 UI 鎖死優化)
@@ -29,17 +59,8 @@ with po_tabs[0]:
     elif "用品" in item_type: prefix = 'S'
     else: prefix = 'C'
 
-    # ✨ 關鍵相容修正：改為 get_db_conn 與 cursor fetch 轉 DataFrame
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT prod_id, prod_name, purchase_unit, use_unit, conversion_factor, safety_stock, status FROM products WHERE prod_id LIKE ?", 
-        (f"{prefix}%",)
-    )
-    rows_po = cursor.fetchall()
-    cols_po = [desc[0] for desc in cursor.description]
-    existing_items_df = pd.DataFrame(rows_po, columns=cols_po)
-    conn.close()
+    # 🟢 使用快取獲取既出品項
+    existing_items_df = cached_fetch_existing_items_for_po(prefix)
 
     st.markdown("##### 🔍 1. 品項選取：")
     reg_mode = st.radio("請選擇登記模式：", ["既有品項【重複登記】", "填寫新名稱【首次登記】"], horizontal=True)
@@ -54,7 +75,7 @@ with po_tabs[0]:
             if row['status'] == 0:
                 options_display.append(f"{row['prod_name']} (🔴 已下架，採購將自動啟用)")
             else:
-                options_display.append(row['status'] == 0 and f"{row['prod_name']} (🔴 已下架，採購將自動啟用)" or row['prod_name'])
+                options_display.append(row['prod_name'])
                 
         chosen_select_display = st.selectbox("下拉搜尋現有品項", options_display, index=0)
         
@@ -72,7 +93,6 @@ with po_tabs[0]:
         if chosen_input_name.strip() != "":
             chosen_name = chosen_input_name.strip()
             
-            # ✨ 關鍵相容修正：改為 get_db_conn
             conn = get_db_conn()
             cursor = conn.cursor()
             cursor.execute("SELECT prod_id, purchase_unit, use_unit, conversion_factor, safety_stock FROM products WHERE prod_name = ?", (chosen_name,))
@@ -143,7 +163,6 @@ with po_tabs[0]:
                 st.error("❌ 錯誤：【本次進貨採購總金額】必須大於 0！")
             else:
                 today_str = datetime.now().strftime("%Y-%m-%d")
-                # ✨ 關鍵相容修正：改為 get_db_conn
                 conn = get_db_conn()
                 cursor = conn.cursor()
                 
@@ -182,6 +201,8 @@ with po_tabs[0]:
                 
                 conn.commit()
                 conn.close()
+                
+                st.cache_data.clear() # 🟢 新進貨單成功寫入，全面重置後台快取
                 
                 if prefix == 'C':
                     month_digits = int(selected_month_str.replace("月", ""))
@@ -256,24 +277,8 @@ with po_tabs[1]:
         
     where_clause = " WHERE " + " AND ".join(query_conditions) if query_conditions else ""
 
-    # ✨ 關鍵相容修正：改為 get_db_conn
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute(f'''
-        SELECT s.batch_id as 批次編號, s.prod_id as 商品編號, p.prod_name as 商品名稱, 
-               s.qty as 當前小單位庫存, s.original_qty as 原始小單位庫存, p.purchase_unit as 進貨單位, p.use_unit as 使用單位,
-               p.conversion_factor as 轉換率, (s.original_qty / p.conversion_factor) as 進貨大包裝數,
-               (s.qty / p.conversion_factor) as 剩餘大包裝數,
-               (s.qty * s.cost) as 推估總金額, s.expiry_date as 有效期限, s.vendor_name as 供應商, s.vendor_phone as 供應商電話,
-               s.inbound_date as 進貨日期, p.safety_stock as 安全庫存
-        FROM stock_batches s JOIN products p ON s.prod_id = p.prod_id 
-        {where_clause}
-        ORDER BY s.batch_id DESC
-    ''', query_params)
-    rows_hist_b = cursor.fetchall()
-    cols_hist_b = [desc[0] for desc in cursor.description]
-    df_all_batches = pd.DataFrame(rows_hist_b, columns=cols_hist_b)
-    conn.close()
+    # 🟢 調用快取查詢函數（轉換 params 為元組以利快取比對鍵值）
+    df_all_batches = cached_fetch_history_batches(where_clause, tuple(query_params))
     
     st.divider()
     
@@ -312,9 +317,7 @@ with po_tabs[1]:
                     key="edit_bill_amount_input"
                 )
             
-            # 從歷史稽核日誌反查先前設定的年份與月份作為預設回退依據
             old_assigned_month_str = ""
-            # ✨ 關鍵相容修正：改為 get_db_conn
             conn = get_db_conn()
             cursor = conn.cursor()
             cursor.execute("SELECT details FROM history WHERE details LIKE ? ORDER BY id DESC LIMIT 1", (f"%目標歸帳月份:%(賬單批次: {target_batch_id})%",))
@@ -324,7 +327,6 @@ with po_tabs[1]:
                 hist_row = cursor.fetchone()
             conn.close()
             
-            # 建立預設回退的 Date 物件
             default_edit_date = datetime.now().date()
             if hist_row:
                 target_month_match = re.search(r"目標歸帳月份:\s*(\d{4})-(\d{2})", hist_row[0])
@@ -421,6 +423,9 @@ with po_tabs[1]:
                         audit_trail += f" * 轉換率：自 {matched_batch_row['轉換率']} 變更為 {new_c_factor}\n"
 
                 update_purchase_batch(target_batch_id, matched_batch_row['商品編號'], new_total_use_units, new_calculated_cost, new_p_unit, new_u_unit, new_c_factor, new_safety, new_v_name, new_v_phone, new_exp_str)
+                
+                st.cache_data.clear() # 🟢 修正單完成覆蓋，清空後台快取
+                
                 log_history(current_user, "採購單更正", audit_trail)
                 
                 trigger_toast(f"💾 資料覆蓋成功！已防止已扣除庫存復活！", icon="✏️")

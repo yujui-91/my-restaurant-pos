@@ -3,13 +3,8 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 from datetime import datetime, timedelta
-# ✨ 關鍵相容修正：引入 get_db_conn
 from database.db_core import get_db_conn
 
-# 檢查 session_state 中的登入狀態，若未登入則阻斷畫面並提示
-# if not st.session_state.get("password_correct", False):
-#     st.warning("🔒 請先前往首頁登入管理系統！")
-#     st.stop()
 st.subheader("📜 歷史動作審計軌跡")
 
 current_user = st.session_state.get('current_user', '老 闆')
@@ -67,27 +62,30 @@ with col_f2:
 
 st.caption(f"目前查看審計區間：{start_dt.strftime('%Y-%m-%d %H:%M:%S')} ～ {end_dt.strftime('%Y-%m-%d %H:%M:%S')}")
 
-# ==========================================
-# 📊 依據「大方向」條件組合 SQL 撈出最終歷史紀錄
-# ==========================================
-# ✨ 關鍵相容修正：改為 get_db_conn 與 手動 cursor.fetchall
-conn = get_db_conn()
-cursor = conn.cursor()
+# ==================== 【動作審計 快取唯讀查詢函數封裝】 ====================
+@st.cache_data(ttl=60)
+def cached_fetch_audit_history(start_str, end_str, selected_main_action):
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    
+    sql_query = "SELECT timestamp AS 時間, user AS 操作人, action AS 動作, details AS 詳細說明 FROM history WHERE timestamp BETWEEN ? AND ?"
+    sql_params = [start_str, end_str]
 
-sql_query = "SELECT timestamp AS 時間, user AS 操作人, action AS 動作, details AS 詳細說明 FROM history WHERE timestamp BETWEEN ? AND ?"
-sql_params = [start_str, end_str]
+    if selected_main_action != "--- 全部動作項目 ---":
+        sql_query += " AND main_category = ?"
+        sql_params.append(selected_main_action)
 
-if selected_main_action != "--- 全部動作項目 ---":
-    sql_query += " AND main_category = ?"
-    sql_params.append(selected_main_action)
+    sql_query += " ORDER BY id DESC"
 
-sql_query += " ORDER BY id DESC"
+    cursor.execute(sql_query, sql_params)
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(rows, columns=cols)
+# ============================================================================
 
-cursor.execute(sql_query, sql_params)
-rows_hist = cursor.fetchall()
-cols_hist = [desc[0] for desc in cursor.description]
-df_hist = pd.DataFrame(rows_hist, columns=cols_hist)
-conn.close()
+# 🟢 呼叫唯讀快取函數
+df_hist = cached_fetch_audit_history(start_str, end_str, selected_main_action)
 
 # ==========================================
 # 🛠️ 核心改善：將詳細說明內干擾閱讀的 ||STRUCT_DATA|| JSON 字串切除

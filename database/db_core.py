@@ -270,15 +270,136 @@ def show_pending_toast():
         st.toast(q["text"], icon=q["icon"])
         st.session_state.toast_queue = None
 
-@st.cache_data(ttl=60) # 設定 TTL 為 60 秒，60秒內的操作完全不消耗遠端資料庫流量
+
+# ============================================================================
+# 🟢 【快取查詢優化中心】 將原本零散在各分頁的唯讀查詢，統一收納封裝至此
+# ============================================================================
+
+@st.cache_data(ttl=60)
 def fetch_active_products(prefix='P%'):
-    """快取獲取啟用的商品/餐點列表"""
+    """快取獲取啟用的商品/餐點列表（支援 R%、S%、C% 彈性帶入）"""
     conn = get_db_conn()
     cursor = conn.cursor()
     cursor.execute(
         "SELECT prod_id, prod_name, price, cost, use_unit, safety_stock FROM products WHERE status = 1 AND prod_id LIKE ?", 
         (prefix,)
     )
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(rows, columns=cols)
+
+@st.cache_data(ttl=60)
+def cached_fetch_dish_bom_recipe(target_dish_id):
+    """快取單一餐點的 BOM 食材配方配比"""
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT p.prod_name as 食材名稱, b.child_id as 食材編號, b.qty_needed as 單位用量, p.use_unit as 單位
+        FROM bom b JOIN products p ON b.child_id = p.prod_id WHERE b.parent_id = ?
+    ''', (target_dish_id,))
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(rows, columns=cols)
+
+@st.cache_data(ttl=30)
+def cached_fetch_today_orders(start_str, end_str):
+    """快取當日出餐與歷史點餐更正紀錄明細"""
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, timestamp, user, details FROM history 
+        WHERE action IN ('多品項收銀結帳', '更正點餐數量') AND timestamp BETWEEN ? AND ?
+        ORDER BY id DESC
+    ''', (start_str, end_str))
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(rows, columns=cols)
+
+@st.cache_data(ttl=60)
+def cached_fetch_all_products_raw(prefix='P%'):
+    """快取獲取指定類別的全品項原始對照表（包含已下架與啟用品項，用於控制面板）"""
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute("SELECT prod_id, prod_name, price, cost, use_unit, purchase_unit, conversion_factor, safety_stock, status FROM products WHERE prod_id LIKE ?", (prefix,))
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(rows, columns=cols)
+
+@st.cache_data(ttl=60)
+def cached_fetch_history_batches(where_clause, params_tuple):
+    """快取進貨單歷史批次修正列表（動態接收篩選條件）"""
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute(f'''
+        SELECT s.batch_id as 批次編號, s.prod_id as 商品編號, p.prod_name as 商品名稱, 
+               s.qty as 當前小單位庫存, s.original_qty as 原始小單位庫存, p.purchase_unit as 進貨單位, p.use_unit as 使用單位,
+               p.conversion_factor as 轉換率, (s.original_qty / p.conversion_factor) as 進貨大包裝數,
+               (s.qty / p.conversion_factor) as 剩餘大包裝數,
+               (s.qty * s.cost) as 推估總金額, s.expiry_date as 有效期限, s.vendor_name as 供應商, s.vendor_phone as 供應商電話,
+               s.inbound_date as 進貨日期, p.safety_stock as 安全庫存
+        FROM stock_batches s JOIN products p ON s.prod_id = p.prod_id 
+        {where_clause}
+        ORDER BY s.batch_id DESC
+    ''', list(params_tuple))
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(rows, columns=cols)
+
+@st.cache_data(ttl=60)
+def cached_fetch_unique_items_to_adjust(prefix):
+    """快取撈取在庫量大於 0 且處於啟用狀態的待庫存微調品項列表"""
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT DISTINCT p.prod_id, p.prod_name 
+        FROM products p
+        JOIN stock_batches s ON p.prod_id = s.prod_id
+        WHERE p.prod_id LIKE ? AND p.status = 1 AND s.qty > 0
+        ORDER BY p.prod_id
+    ''', (prefix,))
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(rows, columns=cols)
+
+@st.cache_data(ttl=60)
+def cached_fetch_batches_by_prod(target_prod_id):
+    """快取撈取特定原物料之所有尚有在庫量的進貨有效批次清單（先進先出排序）"""
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT s.batch_id, s.qty, s.expiry_date, s.inbound_date, s.vendor_name, s.vendor_phone, p.use_unit, p.cost
+        FROM stock_batches s 
+        JOIN products p ON s.prod_id = p.prod_id
+        WHERE s.prod_id = ? AND s.qty > 0
+        ORDER BY s.expiry_date ASC, s.inbound_date ASC
+    ''', (target_prod_id,))
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(rows, columns=cols)
+
+@st.cache_data(ttl=60)
+def cached_fetch_audit_history(start_str, end_str, selected_main_action):
+    """快取純唯讀歷史動作審計軌跡，支援多維度索引加速"""
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    
+    sql_query = "SELECT timestamp AS 時間, user AS 操作人, action AS 動作, details AS 詳細說明 FROM history WHERE timestamp BETWEEN ? AND ?"
+    sql_params = [start_str, end_str]
+
+    if selected_main_action != "--- 全部動作項目 ---":
+        sql_query += " AND main_category = ?"
+        sql_params.append(selected_main_action)
+
+    sql_query += " ORDER BY id DESC"
+
+    cursor.execute(sql_query, sql_params)
     rows = cursor.fetchall()
     cols = [desc[0] for desc in cursor.description]
     conn.close()

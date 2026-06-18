@@ -3,18 +3,12 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 from datetime import datetime
-# ✨ 關鍵相容修正：引入 get_db_conn
 from database.db_core import log_history, trigger_toast, show_pending_toast, get_db_conn
 
-# 檢查 session_state 中的登入狀態，若未登入則阻斷畫面並提示
-# if not st.session_state.get("password_correct", False):
-#     st.warning("🔒 請先前往首頁登入管理系統！")
-#     st.stop()
 show_pending_toast()
 
 st.subheader("📋 存貨盤點核實")
 
-# 加入手機模式切換開關
 use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=False, key="audit_mobile_toggle")
 
 current_user = st.session_state.get('current_user', '老 闆')
@@ -22,28 +16,24 @@ current_user = st.session_state.get('current_user', '老 闆')
 audit_cate_filter = st.radio("🗂️ 請選擇盤點項目類別：", ["食材 (R)", "用品 (S)"], horizontal=True)
 prefix_char = "R%" if "食材" in audit_cate_filter else "S%"
 
-# ✨ 關鍵相容修正：改為 get_db_conn
-conn = get_db_conn()
-cursor = conn.cursor()
-cursor.execute('''
-    SELECT DISTINCT s.prod_id as 商品編號, p.prod_name as 商品名稱 
-    FROM stock_batches s 
-    JOIN products p ON s.prod_id = p.prod_id 
-    WHERE s.prod_id LIKE ? AND s.qty > 0
-''', (prefix_char,))
-rows_audit = cursor.fetchall()
-cols_audit = [desc[0] for desc in cursor.description]
-df_products_in_stock = pd.DataFrame(rows_audit, columns=cols_audit)
-conn.close()
+# ==================== 【存貨盤點 快取唯讀查詢函數封裝】 ====================
+@st.cache_data(ttl=60)
+def cached_fetch_products_in_stock_for_audit(prefix):
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT DISTINCT s.prod_id as 商品編號, p.prod_name as 商品名稱 
+        FROM stock_batches s 
+        JOIN products p ON s.prod_id = p.prod_id 
+        WHERE s.prod_id LIKE ? AND s.qty > 0
+    ''', (prefix,))
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    conn.close()
+    return pd.DataFrame(rows, columns=cols)
 
-if not df_products_in_stock.empty:
-    selected_product_str = st.selectbox(
-        "🔍 1. 請選擇要盤點的商品項目：", 
-        df_products_in_stock['商品編號'] + " - " + df_products_in_stock['商品名稱']
-    )
-    target_prod_id = selected_product_str.split(" - ")[0]
-    
-    # ✨ 關鍵相容修正：改為 get_db_conn
+@st.cache_data(ttl=60)
+def cached_fetch_batch_details_for_audit(target_prod_id):
     conn = get_db_conn()
     cursor = conn.cursor()
     cursor.execute('''
@@ -53,10 +43,24 @@ if not df_products_in_stock.empty:
         WHERE s.prod_id = ? AND s.qty > 0
         ORDER BY s.inbound_date ASC, s.batch_id ASC
     ''', (target_prod_id,))
-    rows_batches = cursor.fetchall()
-    cols_batches = [desc[0] for desc in cursor.description]
-    df_batches = pd.DataFrame(rows_batches, columns=cols_batches)
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
     conn.close()
+    return pd.DataFrame(rows, columns=cols)
+# ============================================================================
+
+# 🟢 改由快取函數撈取可盤點品項
+df_products_in_stock = cached_fetch_products_in_stock_for_audit(prefix_char)
+
+if not df_products_in_stock.empty:
+    selected_product_str = st.selectbox(
+        "🔍 1. 請選擇要盤點的商品項目：", 
+        df_products_in_stock['商品編號'] + " - " + df_products_in_stock['商品名稱']
+    )
+    target_prod_id = selected_product_str.split(" - ")[0]
+    
+    # 🟢 改由快取函數撈取特定盤點品項的批次清單
+    df_batches = cached_fetch_batch_details_for_audit(target_prod_id)
     
     if not df_batches.empty:
         if use_mobile_view:
@@ -132,7 +136,6 @@ if not df_products_in_stock.empty:
                         else:
                             audit_status = "完全吻合 (無誤差)"
                         
-                        # ✨ 關鍵相容修正：改為 get_db_conn
                         conn = get_db_conn()
                         cursor = conn.cursor()
                         cursor.execute('''
@@ -143,6 +146,8 @@ if not df_products_in_stock.empty:
                         
                         conn.commit()
                         conn.close()
+                        
+                        st.cache_data.clear() # 🟢 實盤數據更新成功，清空快取
                         
                         log_details = (
                             f"盤點核實覆蓋。品項：【{item_name}({target_prod_id})】的[批次 {target_batch_id}]。習得歷史進貨日: {orig_inbound}，原登記供應商: {orig_vendor if orig_vendor else '無'}。"
