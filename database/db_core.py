@@ -111,49 +111,7 @@ def init_db():
                         unit TEXT,
                         deducted_batches_json TEXT)''')
     
-    # 預設測試資料
-    cursor.execute("SELECT COUNT(*) FROM products")
-    if cursor.fetchone()[0] == 0:
-        today = datetime.now().strftime("%Y-%m-%d")
-        exp_1 = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
-        exp_2 = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
-        
-        cursor.executemany("""
-            INSERT INTO products (
-                prod_id, prod_name, cost, price, safety_stock, 
-                purchase_unit, use_unit, conversion_factor, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, [
-            ('R001', '澳洲牛肉', 0.5, 0.0, 1000, '箱(20kg)', 'g', 20000.0, 1),
-            ('R002', '麵條', 5.0, 0.0, 50, '箱(100份)', '份', 100.0, 1),
-            ('R003', '高湯', 0.02, 0.0, 5000, '桶(20L)', 'ml', 20000.0, 1),
-            ('R004', '蔥花', 0.1, 0.0, 200, '袋(1kg)', 'g', 1000.0, 1),
-            ('S001', '外帶紙盒', 3.5, 0.0, 100, '束(50個)', '個', 50.0, 1),
-            ('S002', '免洗筷', 0.5, 0.0, 200, '包(100雙)', '雙', 100.0, 1),
-            ('P001', '招牌牛肉麵(成品)', 0.0, 180.0, 0, '碗', '碗', 1.0, 1)
-        ])
-        
-        cursor.executemany("""
-            INSERT INTO stock_batches (
-                prod_id, qty, expiry_date, inbound_date, 
-                vendor_name, vendor_phone, cost, original_qty
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, [
-            ('R001', 500, exp_1, today, '豪好吃肉品批發', '0912-345678', 0.5, 500.0),   
-            ('R001', 2000, exp_2, today, '豪好吃肉品批發', '0912-345678', 0.5, 2000.0),  
-            ('R002', 60, exp_2, today, '大豐製麵廠', '', 5.0, 60.0), 
-            ('R003', 10000, exp_2, today, '', '', 0.02, 10000.0),         
-            ('R004', 150, exp_1, today, '全聯農產', '02-22334455', 0.1, 150.0),
-            ('S001', 100, '', today, '大同包裝材料行', '0988-111222', 3.5, 100.0), 
-            ('S002', 200, '', today, '大同包裝材料行', '0988-111222', 0.5, 200.0)
-        ])
-        
-        cursor.executemany("INSERT INTO bom VALUES (?, ?, ?)", [
-            ('P001', 'R001', 150.0),
-            ('P001', 'R002', 1.0),
-            ('P001', 'R003', 300.0),
-            ('P001', 'R004', 5.0)
-        ])
+    # ✨ 【已完全移除預設測試資料插入邏輯】 保持初始資料庫完全乾淨
         
     # 建立與升級優化索引（確保大分類等查詢均走高精準索引）
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_timestamp_action ON history (timestamp, action);")
@@ -165,8 +123,6 @@ def init_db():
         
     conn.commit()
     conn.close()
-
-# database/db_core.py 中的 log_history 函數修正
 
 def log_history(user, action, details, main_category="", shared_cursor=None):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -232,6 +188,9 @@ def deduct_stock_fifo(prod_id, qty_to_deduct, cursor):
             
     return True, total_deducted_cost, deducted_batches
 
+# ====================================================================
+# ✨ 【自動編號邏輯優化】全面升級為 4 位數格式，空資料庫自動由 0001 起算
+# ====================================================================
 def get_next_raw_id():
     conn = sqlite3.connect('inventory.db', timeout=30.0)
     conn.execute("PRAGMA journal_mode=WAL;")
@@ -240,7 +199,7 @@ def get_next_raw_id():
     ids = cursor.fetchall()
     conn.close()
     max_num = max([int(re.findall(r'\d+', pid)[0]) for (pid,) in ids if re.findall(r'\d+', pid)] + [0])
-    return f"R{max_num + 1:03d}"
+    return f"R{max_num + 1:04d}"  # 升級為 4 位數，例如: R0001
 
 def get_next_dish_id():
     conn = sqlite3.connect('inventory.db', timeout=30.0)
@@ -250,7 +209,7 @@ def get_next_dish_id():
     ids = cursor.fetchall()
     conn.close()
     max_num = max([int(re.findall(r'\d+', pid)[0]) for (pid,) in ids if re.findall(r'\d+', pid)] + [0])
-    return f"P{max_num + 1:03d}"
+    return f"P{max_num + 1:04d}"  # 升級為 4 位數，例如: P0001
 
 def get_next_supply_id():
     conn = sqlite3.connect('inventory.db', timeout=30.0)
@@ -260,7 +219,7 @@ def get_next_supply_id():
     ids = cursor.fetchall()
     conn.close()
     max_num = max([int(re.findall(r'\d+', pid)[0]) for (pid,) in ids if re.findall(r'\d+', pid)] + [0])
-    return f"S{max_num + 1:03d}"
+    return f"S{max_num + 1:04d}"  # 升級為 4 位數，例如: S0001
 
 def get_next_bill_id():
     conn = sqlite3.connect('inventory.db', timeout=30.0)
@@ -270,7 +229,7 @@ def get_next_bill_id():
     ids = cursor.fetchall()
     conn.close()
     max_num = max([int(re.findall(r'\d+', pid)[0]) for (pid,) in ids if re.findall(r'\d+', pid)] + [0])
-    return f"C{max_num + 1:03d}"
+    return f"C{max_num + 1:04d}"  # 升級為 4 位數，例如: C0001
 
 def update_purchase_batch(batch_id, prod_id, new_original_qty, new_cost, p_unit, u_unit, c_factor, s_stock, v_name, v_phone, exp_str):
     conn = sqlite3.connect('inventory.db', timeout=30.0)
