@@ -23,21 +23,24 @@ current_user = st.session_state.get('current_user', '老 闆')
 if 'pos_shopping_cart' not in st.session_state:
     st.session_state.pos_shopping_cart = []
 
-# 安全替換：讀取既有餐點
+# 🔥 關鍵相容修正 1：替換原 pd.read_sql_query
 conn = get_db_conn()
 cursor = conn.cursor()
 cursor.execute("SELECT prod_id, prod_name, price FROM products WHERE status = 1 AND prod_id LIKE 'P%'")
-rows_dishes = cursor.fetchall()
-cols_dishes = [desc[0] for desc in cursor.description]
-existing_dishes = pd.DataFrame(rows_dishes, columns=cols_dishes)
+r_dishes = cursor.fetchall()
+c_dishes = [desc[0] for desc in cursor.description]
+existing_dishes = pd.DataFrame(r_dishes, columns=c_dishes)
 
-# 安全替換：讀取原物料
 cursor.execute("SELECT prod_id, prod_name, use_unit, cost FROM products WHERE status = 1 AND (prod_id LIKE 'R%' OR prod_id LIKE 'S%')")
-rows_raw = cursor.fetchall()
-cols_raw = [desc[0] for desc in cursor.description]
-all_raw_df = pd.DataFrame(rows_raw, columns=cols_raw)
-cursor.close()
+r_raw = cursor.fetchall()
+c_raw = [desc[0] for desc in cursor.description]
+all_raw_df = pd.DataFrame(r_raw, columns=c_raw)
 conn.close()
+
+# ✨ 宣告手機模式按鈕專用的安全回呼函式，防止 StreamlitAPIException
+def adjust_qty_callback(state_key, delta):
+    current_val = st.session_state.get(state_key, 0)
+    st.session_state[state_key] = max(0, current_val + delta)
 
 def calculate_cart_estimated_cost(cart_items):
     if not cart_items:
@@ -130,9 +133,7 @@ with pos_tabs[0]:
     if st.session_state.pos_shopping_cart:
         total_bill_amount = 0
         
-        # 根據是否啟用手機檢視切換不同介面
         if use_mobile_view:
-            # 📱 手機大按鈕卡片排版模式
             cart_changed = False
             action_type = None
             target_idx = None
@@ -149,7 +150,6 @@ with pos_tabs[0]:
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # ➕ ➖ 🗑️ 點擊按鈕列
                     btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 1.2])
                     with btn_col1:
                         if st.button("➖ 減少", key=f"cart_minus_{idx}", use_container_width=True):
@@ -165,7 +165,6 @@ with pos_tabs[0]:
                             target_idx = idx
                     st.markdown("<div style='margin-bottom:15px;'></div>", unsafe_allow_html=True)
             
-            # 執行按鈕點擊後的數據變更邏輯
             if action_type is not None:
                 if action_type == "plus":
                     st.session_state.pos_shopping_cart[target_idx]['qty'] += 1
@@ -183,7 +182,6 @@ with pos_tabs[0]:
                 st.rerun()
                 
         else:
-            # 💻 桌機傳統表格編輯模式
             df_cart = pd.DataFrame(st.session_state.pos_shopping_cart)
             df_cart['小計'] = df_cart['price'] * df_cart['qty']
             df_cart['刪除'] = False
@@ -263,27 +261,21 @@ with pos_tabs[0]:
                 if st.button("✅ 出餐", type="primary", use_container_width=True):
                     all_mats_needed = {}
                     
-                    # 🔥【死鎖修復點一】：先在完全不打開 UPDATE 交易的狀態下，把所需的 BOM 資料全部 SELECT 出來
+                    # 🔥【死鎖修復點一】：將其餘部分修改為高效相容的讀取
                     conn_read = get_db_conn()
                     cursor_read = conn_read.cursor()
                     for cart_item in st.session_state.pos_shopping_cart:
                         d_id = cart_item['prod_id']
                         d_qty = cart_item['qty']
                         
-                        # 安全替換：手動 execute + fetchall 封裝
                         cursor_read.execute("SELECT child_id, qty_needed FROM bom WHERE parent_id = ?", (d_id,))
-                        rows_bom = cursor_read.fetchall()
-                        cols_bom = [desc[0] for desc in cursor_read.description]
-                        db_bom = pd.DataFrame(rows_bom, columns=cols_bom)
-                        
-                        for _, bom_row in db_bom.iterrows():
-                            c_id = bom_row['child_id']
-                            needed_units = float(bom_row['qty_needed']) * d_qty
+                        db_bom_rows = cursor_read.fetchall()
+                        for bom_row in db_bom_rows:
+                            c_id = bom_row[0]
+                            needed_units = float(bom_row[1]) * d_qty
                             all_mats_needed[c_id] = all_mats_needed.get(c_id, 0.0) + needed_units
-                    cursor_read.close()
                     conn_read.close()
                     
-                    # 準備進入獨佔修改階段
                     conn = get_db_conn()
                     cursor = conn.cursor()
                     
@@ -343,7 +335,6 @@ with pos_tabs[0]:
                                     "deducted_batches": batch_list
                                 })
                                 
-                            # 1. 準備寫入傳統歷史日誌
                             now_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             details_log = f"合併前台收銀：出餐明細 {confirm_msg}，總金額 ${total_bill_amount}，精準食材成本 ${actual_total_cost:.2f}。 消耗食材: " + ", ".join(log_mats_summary)
                             
@@ -355,10 +346,8 @@ with pos_tabs[0]:
                             }
                             final_log_entry = details_log + " ||STRUCT_DATA||" + json.dumps(structured_payload, ensure_ascii=False)
                             
-                            # 🔥 【修復點】：傳入 shared_cursor=cursor，在同一個連線下寫入歷史紀錄，防範死鎖
                             hist_id = log_history(current_user, "多品項收銀結帳", final_log_entry, shared_cursor=cursor)
                             
-                            # 2. 同步寫入新版結構化關聯銷售明細表
                             cursor.execute('''INSERT INTO orders (timestamp, user, total_revenue, total_cost, status, history_id)
                                               VALUES (?, ?, ?, ?, 1, ?)''', 
                                            (now_time_str, current_user, float(total_bill_amount), float(actual_total_cost), hist_id))
@@ -396,7 +385,7 @@ with pos_tabs[0]:
 
 
 # ==========================================
-# 分頁 2：修改當日出餐數量與作廢（新增：支援補加漏點餐點）
+# 分頁 2：修改當日出餐數量與作廢
 # ==========================================
 with pos_tabs[1]:
     st.markdown("##### 📝 當日出餐紀錄面版")
@@ -404,7 +393,7 @@ with pos_tabs[1]:
     today_start = datetime.now().strftime("%Y-%m-%d 00:00:00")
     today_end = datetime.now().strftime("%Y-%m-%d 23:59:59")
 
-    # 安全替換：讀取當日出餐紀錄
+    # 🔥 關鍵相容修正 2：替換原 pd.read_sql_query
     conn = get_db_conn()
     cursor = conn.cursor()
     cursor.execute('''
@@ -412,10 +401,9 @@ with pos_tabs[1]:
         WHERE action IN ('多品項收銀結帳', '更正點餐數量') AND timestamp BETWEEN ? AND ?
         ORDER BY id DESC
     ''', (today_start, today_end))
-    rows_today_orders = cursor.fetchall()
-    cols_today_orders = [desc[0] for desc in cursor.description]
-    df_today_orders = pd.DataFrame(rows_today_orders, columns=cols_today_orders)
-    cursor.close()
+    r_today = cursor.fetchall()
+    c_today = [desc[0] for desc in cursor.description]
+    df_today_orders = pd.DataFrame(r_today, columns=c_today)
     conn.close()
 
     if df_today_orders.empty:
@@ -452,7 +440,6 @@ with pos_tabs[1]:
             brief = brief_match.group(1) if brief_match else "明細解析失敗"
             order_options.append(f"單號 {hist_id} | 時間: {row['timestamp'].split(' ')[1]} | 明細: {brief}")
 
-        # 使用更明確的 key 防止跨分頁狀態干擾
         selected_order_str = st.selectbox("🎯 請選擇出單紀錄：", order_options, key="void_order_select_box")
         target_hist_id = int(selected_order_str.split("單號 ")[1].split(" |")[0])
         matched_order_row = df_today_orders[df_today_orders['id'] == target_hist_id].iloc[0]
@@ -463,7 +450,6 @@ with pos_tabs[1]:
         order_data = parsed_orders_cache[target_hist_id]
         orig_order_timestamp = order_data["orig_timestamp"] 
 
-        # 解析現有餐點品項
         if order_data["is_structured"]:
             parsed_dishes = [(d["prod_name"], d["qty"], d["prod_id"]) for d in order_data["dishes"]]
             parsed_total_revenue = order_data["total_revenue"]
@@ -517,7 +503,6 @@ with pos_tabs[1]:
                                 p_cost = cursor.fetchone()[0] or 0.0
                                 cursor.execute("INSERT INTO stock_batches (prod_id, qty, original_qty, expiry_date, inbound_date, vendor_name, cost) VALUES (?, ?, ?, '', ?, '前台作廢退回', ?)", (mat_id, refund_qty, refund_qty, today_str, p_cost))
                     
-                    # 🔥 同步更新新版訂單結構状態 (0=已作廢)
                     cursor.execute("UPDATE orders SET status = 0 WHERE history_id = ?", (target_hist_id,))
                     
                     conn.commit()
@@ -539,14 +524,12 @@ with pos_tabs[1]:
             st.markdown("----")
             st.markdown("##### ➕ 餐點品項：")
             
-            # 使用 Session State 初始化這筆單據獨立的「額外加點暫存池」
             add_pool_key = f"order_add_pool_{target_hist_id}"
             if add_pool_key not in st.session_state:
                 st.session_state[add_pool_key] = []
                 
             col_add_order1, col_add_order2 = st.columns([3, 1])
             with col_add_order1:
-                # 排除已經點購的品項，避免下拉重複選取
                 existing_names = [d[0] for d in parsed_dishes]
                 available_dishes = existing_dishes[~existing_dishes['prod_name'].isin(existing_names)]
                 
@@ -559,65 +542,48 @@ with pos_tabs[1]:
                         st.error("請先選擇要補加的餐點品項！")
                     else:
                         matched_append = existing_dishes[existing_dishes['prod_name'] == selected_append_dish].iloc[0]
-                        # 檢查加加池是否已有，沒有就新增
                         if not any(x[0] == matched_append['prod_name'] for x in st.session_state[add_pool_key]):
                             st.session_state[add_pool_key].append((matched_append['prod_name'], 1, matched_append['prod_id']))
                             trigger_toast(f"已將漏點的 【{matched_append['prod_name']}】 補配至修改畫面上！", icon="➕")
                             st.rerun()
                             
-            # 將補加暫存池裡面的東西合併進當前要顯示的餐點清單中
             for app_item in st.session_state[add_pool_key]:
                 if not any(x[0] == app_item[0] for x in parsed_dishes):
                     parsed_dishes.append(app_item)
-            # ==========================================
 
             st.markdown("###### 📝 請在下方輸入該單「正確」的餐點數量：")
             new_dish_qtys = {}
             has_qty_changed = False
-            
-            # 用於手機模式大按鈕狀態更新
-            qty_btn_triggered = False
-            qty_btn_target_name = None
-            qty_btn_target_val = None
 
             for d_name, d_qty, d_id in parsed_dishes:
                 is_new_appended = any(x[0] == d_name for x in st.session_state.get(add_pool_key, []))
                 label_txt = f"【{d_name}】之正確出餐份數 (原單無此餐點)" if is_new_appended else f"【{d_name}】之正確出餐份數 (原為 {d_qty} 份)"
                 
-                # 判斷是否使用手機大按鈕排版
+                session_qty_key = f"edit_qty_{d_name}_{target_hist_id}"
+                # 🔥 修正點：確保元件綁定的 Key 在階段最開始就已安全初始化
+                if session_qty_key not in st.session_state:
+                    st.session_state[session_qty_key] = int(d_qty)
+                
                 if use_mobile_view:
                     st.markdown(f"**{label_txt}**")
                     col_q1, col_q2, col_q3 = st.columns([2, 1, 1])
                     
-                    # 取得目前表單控制元件的值（若 session_state 有紀錄則沿用）
-                    session_qty_key = f"edit_qty_{d_name}_{target_hist_id}"
-                    current_form_val = st.session_state.get(session_qty_key, int(d_qty))
-                    
                     with col_q1:
-                        new_q = st.number_input(label_txt, min_value=0, value=current_form_val, step=1, key=session_qty_key, label_visibility="collapsed")
+                        new_q = st.number_input(label_txt, min_value=0, step=1, key=session_qty_key, label_visibility="collapsed")
                     with col_q2:
-                        if st.button("➖ 1", key=f"btn_minus1_{d_name}", use_container_width=True):
-                            qty_btn_triggered = True
-                            qty_btn_target_name = d_name
-                            qty_btn_target_val = max(0, new_q - 1)
+                        # 🔥 關鍵修復：直接將加減邏輯綁定至 on_click 進行安全回呼，徹底解決 StreamlitAPIException
+                        st.button("➖ 1", key=f"btn_minus1_{d_name}", use_container_width=True, on_click=adjust_qty_callback, args=(session_qty_key, -1))
                     with col_q3:
-                        if st.button("➕ 1", key=f"btn_plus1_{d_name}", use_container_width=True):
-                            qty_btn_triggered = True
-                            qty_btn_target_name = d_name
-                            qty_btn_target_val = new_q + 1
+                        st.button("➕ 1", key=f"btn_plus1_{d_name}", use_container_width=True, on_click=adjust_qty_callback, args=(session_qty_key, 1))
                     st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
                 else:
-                    # 💻 桌機版一長條輸入框排版
-                    new_q = st.number_input(label_txt, min_value=0, value=int(d_qty), step=1, key=f"edit_qty_{d_name}_{target_hist_id}")
+                    new_q = st.number_input(label_txt, min_value=0, step=1, key=session_qty_key)
                 
+                # 同步捕捉最新的實盤數量數值
+                new_q = st.session_state[session_qty_key]
                 new_dish_qtys[d_name] = new_q
                 if new_q != int(d_qty):
                     has_qty_changed = True
-
-            # 處理手機模式下點擊快調加減按鈕的更新
-            if qty_btn_triggered:
-                st.session_state[f"edit_qty_{qty_btn_target_name}_{target_hist_id}"] = qty_btn_target_val
-                st.rerun()
 
             if st.button("💾 儲存出餐數量變更", type="primary", use_container_width=True, key=f"save_qty_edit_btn_{target_hist_id}"):
                 if not has_qty_changed:
@@ -626,7 +592,6 @@ with pos_tabs[1]:
                     conn = get_db_conn()
                     cursor = conn.cursor()
                     try:
-                        # 先將舊單先前消耗的原物料全部加回 (回滾庫存)
                         for mat in parsed_mats:
                             if mat.get("deducted_batches", []):
                                 for b_info in mat["deducted_batches"]:
@@ -639,7 +604,6 @@ with pos_tabs[1]:
                         new_confirm_msg = ""
                         new_cart_payload = []
 
-                        # 依據畫面上填寫的新數量，重新核算所有的餐點與物料需求
                         for d_name, _, d_id in parsed_dishes:
                             new_qty_val = new_dish_qtys[d_name]
                             cursor.execute("SELECT prod_id, price FROM products WHERE prod_name = ?", (d_name,))
@@ -662,7 +626,6 @@ with pos_tabs[1]:
                         new_mats_payload = []
                         log_mats_summary = []
 
-                        # 重新執行 FIFO 扣減新用量
                         for m_id, total_need in total_mats_needed_new.items():
                             cursor.execute("SELECT prod_name, use_unit FROM products WHERE prod_id = ?", (m_id,))
                             m_info = cursor.fetchone()
@@ -687,14 +650,12 @@ with pos_tabs[1]:
                             cursor.close()
                             conn.close()
                         else:
-                            # 重新計算移動平均成本
                             for m_id in total_mats_needed_new.keys():
                                 matched_hist_mat = next((m for m in parsed_mats if m["mat_id"] == m_id), None)
                                 hist_cost_fallback = 0.0
                                 if matched_hist_mat and "deducted_batches" in matched_hist_mat and matched_hist_mat["deducted_batches"]:
                                     hist_cost_fallback = float(matched_hist_mat["deducted_batches"][0].get("cost", 0.0))
 
-                                # 🔥【死鎖修復點二】：改用當前現有的同一個 cursor 通道，禁止建立新連線去 SELECT
                                 cursor.execute('''
                                     SELECT 
                                       CASE 
@@ -707,7 +668,6 @@ with pos_tabs[1]:
                                 calculated_avg_cost = cursor.fetchone()[0] or 0.0
                                 cursor.execute("UPDATE products SET cost = ? WHERE prod_id = ?", (float(calculated_avg_cost), m_id))
 
-                            # 修改舊歷史單據與正向銷售結構狀態 (2=已微調更正)
                             cursor.execute("UPDATE history SET action = '多品項收銀結帳-已微調更正' WHERE id = ?", (target_hist_id,))
                             cursor.execute("UPDATE orders SET status = 2 WHERE history_id = ?", (target_hist_id,))
 
@@ -723,10 +683,8 @@ with pos_tabs[1]:
                             }
                             updated_full_log = details_text_part + " ||STRUCT_DATA||" + json.dumps(new_payload_struct, ensure_ascii=False)
                             
-                            # 🔥 【核心修復點】：傳入 shared_cursor=cursor，在同一個連線通道內完成歷史寫入，拒絕死鎖！
                             new_hist_id = log_history(current_user, "更正點餐數量", updated_full_log, shared_cursor=cursor)
                             
-                            # 同步在新版訂單結構中，為這次更正獨立建立一張新訂單單據 (status=1 正常參與財報計算)
                             cursor.execute('''INSERT INTO orders (timestamp, user, total_revenue, total_cost, status, history_id)
                                               VALUES (?, ?, ?, ?, 1, ?)''', 
                                            (orig_order_timestamp, current_user, float(new_total_bill), float(final_new_cost), new_hist_id))
@@ -746,7 +704,6 @@ with pos_tabs[1]:
                             cursor.close()
                             conn.close()
                             
-                            # 清除該訂單的臨時加點暫存池
                             if add_pool_key in st.session_state:
                                 del st.session_state[add_pool_key]
                                 
@@ -1056,19 +1013,17 @@ with pos_tabs[2]:
             old_price = int(float(matched_dish['price']))
             
             if 'editing_recipe_dish_id' not in st.session_state or st.session_state.editing_recipe_dish_id != td_id:
-                # 安全替換：讀取餐點配方
+                # 🔥 關鍵相容修正 3：替換原 pd.read_sql_query
                 conn = get_db_conn()
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT p.prod_name as 食材名稱, b.child_id as 食材編號, b.qty_needed as 單位用量, p.use_unit as 單位
                     FROM bom b JOIN products p ON b.child_id = p.prod_id WHERE b.parent_id = ?
                 ''', (td_id,))
-                rows_recipe = cursor.fetchall()
-                cols_recipe = [desc[0] for desc in cursor.description]
-                db_recipe = pd.DataFrame(rows_recipe, columns=cols_recipe)
-                cursor.close()
+                r_bom = cursor.fetchall()
+                c_bom = [desc[0] for desc in cursor.description]
+                db_recipe = pd.DataFrame(r_bom, columns=c_bom)
                 conn.close()
-                
                 st.session_state.editing_recipe_list = db_recipe.to_dict(orient='records')
                 st.session_state.editing_recipe_dish_id = td_id
 
@@ -1121,7 +1076,7 @@ with pos_tabs[2]:
                     if row["移除"]:
                         has_changes = True
                         continue
-                    if row["單位用量"] != st.session_state.editing_recipe_list[idx]["單位用量"]:
+                    if row["單位用量"] != st.session_state.editing_recipe_list[idx]["toggle" in st.session_state and "單位用量" or "單位用量"]:
                         has_changes = True
                     updated_recipe_list.append({"食材名稱": row["食材名稱"], "食材編號": row["食材編號"], "單位用量": float(row["單位用量"]), "單位": row["單位"]})
                     
@@ -1182,14 +1137,13 @@ with pos_tabs[2]:
 # ==========================================
 with pos_tabs[3]:
     st.markdown("##### ❌ 菜單餐點下架控制面板")
-    # 安全替換：讀取正式菜單
+    # 🔥 關鍵相容修正 4：替換原 pd.read_sql_query
     conn = get_db_conn()
     cursor = conn.cursor()
     cursor.execute("SELECT prod_id, prod_name, price, status FROM products WHERE prod_id LIKE 'P%'")
-    rows_dishes_all = cursor.fetchall()
-    cols_dishes_all = [desc[0] for desc in cursor.description]
-    all_dishes_raw = pd.DataFrame(rows_dishes_all, columns=cols_dishes_all)
-    cursor.close()
+    r_all_d = cursor.fetchall()
+    c_all_d = [desc[0] for desc in cursor.description]
+    all_dishes_raw = pd.DataFrame(r_all_d, columns=c_all_d)
     conn.close()
     
     if all_dishes_raw.empty:
@@ -1233,14 +1187,13 @@ with pos_tabs[3]:
 
     st.markdown("---")
     st.markdown("##### ❌ 食材與用品庫存品項下架面板")
-    # 安全替換：讀取庫存物料
+    # 🔥 關鍵相容修正 5：替換原 pd.read_sql_query
     conn = get_db_conn()
     cursor = conn.cursor()
     cursor.execute("SELECT prod_id, prod_name, use_unit, status FROM products WHERE prod_id LIKE 'R%' OR prod_id LIKE 'S%'")
-    rows_mats_all = cursor.fetchall()
-    cols_mats_all = [desc[0] for desc in cursor.description]
-    all_mats_raw = pd.DataFrame(rows_mats_all, columns=cols_mats_all)
-    cursor.close()
+    r_all_m = cursor.fetchall()
+    c_all_m = [desc[0] for desc in cursor.description]
+    all_mats_raw = pd.DataFrame(r_all_m, columns=c_all_m)
     conn.close()
     
     if all_mats_raw.empty:
