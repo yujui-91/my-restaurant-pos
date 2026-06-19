@@ -684,8 +684,8 @@ with pos_tabs[2]:
     
     creation_mode = st.radio("🛠️ 請選擇餐點建立模式：", ["A模式：單份餐點", "B模式：整鍋"], horizontal=True)
 
-    # 定義需要支援換算的重量小單位清單
-    WEIGHT_UNITS = ['kg', 'kg', 'kg', 'kg', '公斤', 'g', '公克', 'g', '臺斤', '台斤']
+    # 包含所有需要做重量換算的廚房基本小單位
+    WEIGHT_UNITS = ['kg', '公斤', 'g', '公克', '臺斤', '台斤']
 
     if creation_mode == "A模式：單份餐點":
         with st.expander("🛠️ 展開配方調配面板", expanded=True):
@@ -697,7 +697,7 @@ with pos_tabs[2]:
                 
             st.markdown("###### ➕ 食材用量：")
             
-            # 調整為 4 欄位，增加動態單位換算
+            # 分割為 4 欄，動態顯示單位換算下拉選單
             col_cus_mat1, col_cus_mat2, col_cus_convert, col_cus_mat3 = st.columns([2, 1, 1.5, 1])
             with col_cus_mat1:
                 dish_select_list = ["--- 請選擇食材 ---"] + all_raw_df['prod_name'].tolist()
@@ -712,13 +712,13 @@ with pos_tabs[2]:
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.markdown(f"**使用單位：** `{db_unit_a if db_unit_a else '未選擇'}`")
                 
-            # 重量單位動態判定與換算欄位顯示
+            # 重量單位動態判定與換算模式（修正為 臺斤、公斤 轉換成 公克）
             cus_conversion_mode = "不換算"
             if db_unit_a and db_unit_a.lower() in WEIGHT_UNITS:
                 with col_cus_convert:
                     cus_conversion_mode = st.selectbox(
-                        "單位換算",
-                        ["不換算 (依基本單位)", "公克(g) 轉 公斤(kg) [除以1000]", "公克(g) 轉 台斤/臺斤 [除以600]"],
+                        "輸入單位換算",
+                        ["不換算 (依基本單位輸入)", "公斤(kg) 轉 公克(g) [輸入數值 乘以 1000]", "台斤/臺斤 轉 公克(g) [輸入數值 乘以 600]"],
                         key="cus_conversion_mode_select"
                     )
             else:
@@ -727,7 +727,7 @@ with pos_tabs[2]:
                 
             with col_cus_mat3:
                 custom_max_val = 100000.0  
-                cus_mat_qty = st.number_input("單份餐點用量", min_value=0.0, max_value=custom_max_val, value=0.0, step=1.0, key="cus_qty_selector")
+                cus_mat_qty = st.number_input("輸入用量數值", min_value=0.0, max_value=custom_max_val, value=0.0, step=1.0, key="cus_qty_selector")
                 
             if 'custom_recipe_pool' not in st.session_state:
                 st.session_state.custom_recipe_pool = []
@@ -738,12 +738,12 @@ with pos_tabs[2]:
                 else:
                     mat_info = all_raw_df[all_raw_df['prod_name'] == cus_mat_name].iloc[0]
                     
-                    # 依換算模式計算實際轉入的小單位數量
+                    # 依換算模式將 台斤/公斤 數值轉換成 公克(g)
                     final_conv = cus_mat_qty 
-                    if cus_conversion_mode == "公克(g) 轉 公斤(kg) [除以1000]":
-                        final_conv = cus_mat_qty / 1000.0
-                    elif cus_conversion_mode == "公克(g) 轉 台斤/臺斤 [除以600]":
-                        final_conv = cus_mat_qty / 600.0
+                    if cus_conversion_mode == "公斤(kg) 轉 公克(g) [輸入數值 乘以 1000]":
+                        final_conv = cus_mat_qty * 1000.0
+                    elif cus_conversion_mode == "台斤/臺斤 轉 公克(g) [輸入數值 乘以 600]":
+                        final_conv = cus_mat_qty * 600.0
                     
                     ex_idx = next((i for i, item in enumerate(st.session_state.custom_recipe_pool) if item['食材編號'] == mat_info['prod_id']), None)
                     new_pool_dict = {"食材名稱": mat_info['prod_name'], "食材編號": mat_info['prod_id'], "單位用量": final_conv, "單位": mat_info['use_unit']}
@@ -758,7 +758,7 @@ with pos_tabs[2]:
                 df_pool['移除'] = False
                 edited_pool = st.data_editor(
                     df_pool,
-                    column_config={"食材編號": st.column_config.TextColumn("編號", disabled=True), "食材名稱": st.column_config.TextColumn("名稱", disabled=True), "單位用量": st.column_config.NumberColumn("用量(依基本小單位)", format="%.4f"), "移除": st.column_config.CheckboxColumn("移除")},
+                    column_config={"食材編號": st.column_config.TextColumn("編號", disabled=True), "食材名稱": st.column_config.TextColumn("名稱", disabled=True), "單位用量": st.column_config.NumberColumn("已換算最終用量(g)", format="%.4f"), "移除": st.column_config.CheckboxColumn("移除")},
                     disabled=["食材編號", "食材名稱", "單位"],
                     key="pool_editor",
                     use_container_width=True
@@ -847,7 +847,7 @@ with pos_tabs[2]:
 
             st.markdown("###### ➕ 食材用量：")
             
-            # 調整為 4 欄位，增加動態單位換算
+            # 分割為 4 欄，動態顯示單位換算下拉選單
             col_b_mat1, col_b_mat2, col_b_convert, col_b_mat3 = st.columns([2, 1, 1.5, 1])
             with col_b_mat1:
                 b_dish_select_list = ["--- 請選擇食材 ---"] + all_raw_df['prod_name'].tolist()
@@ -862,13 +862,13 @@ with pos_tabs[2]:
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.markdown(f"**投入單位：** `{db_unit_b if db_unit_b else '未選擇'}`")
                 
-            # 重量單位動態判定與換算欄位顯示
+            # 重量單位動態判定與換算模式（修正為 臺斤、公斤 轉換成 公克）
             b_conversion_mode = "不換算"
             if db_unit_b and db_unit_b.lower() in WEIGHT_UNITS:
                 with col_b_convert:
                     b_conversion_mode = st.selectbox(
-                        "單位換算",
-                        ["不換算 (依基本單位)", "公克(g) 轉 公斤(kg) [除以1000]", "公克(g) 轉 台斤/臺斤 [除以600]"],
+                        "輸入單位換算",
+                        ["不換算 (依基本單位輸入)", "公斤(kg) 轉 公克(g) [輸入數值 乘以 1000]", "台斤/臺斤 轉 公克(g) [輸入數值 乘以 600]"],
                         key="b_conversion_mode_select"
                     )
             else:
@@ -876,7 +876,7 @@ with pos_tabs[2]:
                     st.text_input("單位換算", value="無需換算", disabled=True, key="b_conversion_disabled")
                 
             with col_b_mat3:
-                b_mat_qty = st.number_input("投入此整鍋的總用量", min_value=0.0, value=0.0, step=1.0, key="b_qty_selector")
+                b_mat_qty = st.number_input("輸入投入整鍋的數值", min_value=0.0, value=0.0, step=1.0, key="b_qty_selector")
 
             if 'pot_recipe_pool' not in st.session_state:
                 st.session_state.pot_recipe_pool = []
@@ -887,12 +887,12 @@ with pos_tabs[2]:
                 else:
                     mat_info = all_raw_df[all_raw_df['prod_name'] == b_mat_name].iloc[0]
                     
-                    # 依換算模式計算實際轉入的小單位數量
+                    # 依換算模式將 台斤/公斤 數值轉換成 公克(g)
                     final_conv = b_mat_qty
-                    if b_conversion_mode == "公克(g) 轉 公斤(kg) [除以1000]":
-                        final_conv = b_mat_qty / 1000.0
-                    elif b_conversion_mode == "公克(g) 轉 台斤/臺斤 [除開600]":
-                        final_conv = b_mat_qty / 600.0
+                    if b_conversion_mode == "公斤(kg) 轉 公克(g) [輸入數值 乘以 1000]":
+                        final_conv = b_mat_qty * 1000.0
+                    elif b_conversion_mode == "台斤/臺斤 轉 公克(g) [輸入數值 乘以 600]":
+                        final_conv = b_mat_qty * 600.0
 
                     ex_idx = next((i for i, item in enumerate(st.session_state.pot_recipe_pool) if item['食材編號'] == mat_info['prod_id']), None)
                     new_pool_dict = {"食材名稱": mat_info['prod_name'], "食材編號": mat_info['prod_id'], "單位用量": final_conv, "單位": mat_info['use_unit']}
@@ -907,7 +907,7 @@ with pos_tabs[2]:
                 df_pot_pool['移除'] = False
                 edited_pot_pool = st.data_editor(
                     df_pot_pool,
-                    column_config={"食材編號": st.column_config.TextColumn("編號", disabled=True), "食材名稱": st.column_config.TextColumn("名稱", disabled=True), "單位用量": st.column_config.NumberColumn("整鍋總用量(依基本小單位)", format="%.4f"), "移除": st.column_config.CheckboxColumn("移除")},
+                    column_config={"食材編號": st.column_config.TextColumn("編號", disabled=True), "食材名稱": st.column_config.TextColumn("名稱", disabled=True), "單位用量": st.column_config.NumberColumn("整鍋總用量(g)", format="%.4f"), "移除": st.column_config.CheckboxColumn("移除")},
                     disabled=["食材編號", "食材名稱", "單位"],
                     key="pot_pool_editor",
                     use_container_width=True
