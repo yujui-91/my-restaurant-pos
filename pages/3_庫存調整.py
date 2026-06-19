@@ -4,6 +4,8 @@ import pandas as pd
 import sqlite3
 from datetime import datetime
 from database.db_core import log_history, trigger_toast, show_pending_toast, get_db_conn
+# 從 db_core 載入所需的快取函式
+from database.db_core import cached_fetch_unique_items_to_adjust, cached_fetch_batches_by_prod
 
 show_pending_toast()
 
@@ -20,41 +22,6 @@ if "食材" in stock_adj_cate:
 else: 
     prefix_filter = "S%"
 
-# ==================== 【庫存微調 快取唯讀查詢函數封裝】 ====================
-@st.cache_data(ttl=60)
-def cached_fetch_unique_items_to_adjust(prefix):
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT DISTINCT p.prod_id, p.prod_name 
-        FROM products p
-        JOIN stock_batches s ON p.prod_id = s.prod_id
-        WHERE p.prod_id LIKE ? AND p.status = 1 AND s.qty > 0
-        ORDER BY p.prod_id
-    ''', (prefix,))
-    rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(rows, columns=cols)
-
-@st.cache_data(ttl=60)
-def cached_fetch_batches_by_prod(target_prod_id):
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT s.batch_id, s.qty, p.use_unit, s.expiry_date, s.inbound_date, s.vendor_name 
-        FROM stock_batches s 
-        JOIN products p ON s.prod_id = p.prod_id
-        WHERE s.prod_id = ? AND s.qty > 0
-        ORDER BY s.expiry_date ASC, s.inbound_date ASC
-    ''', (target_prod_id,))
-    rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(rows, columns=cols)
-# ============================================================================
-
-# 🟢 改由快取函數撈取微調列表
 df_unique_items = cached_fetch_unique_items_to_adjust(prefix_filter)
 
 if not df_unique_items.empty:
@@ -62,7 +29,6 @@ if not df_unique_items.empty:
     selected_item_str = st.selectbox("🔍 1. 請先選取欲調整的項目名稱：", item_options)
     target_prod_id = selected_item_str.split(" - ")[0]
     
-    # 🟢 改由快取函數撈取當前品項的所有可用批次
     df_batches = cached_fetch_batches_by_prod(target_prod_id)
     
     if not df_batches.empty:
@@ -148,7 +114,7 @@ if not df_unique_items.empty:
                             conn.commit()
                             conn.close()
                             
-                            st.cache_data.clear() # 🟢 庫存異動手動調整完成，清空快取重新加載明細
+                            st.cache_data.clear()
                             
                             month_digits = int(adj_month_str.replace("月", ""))
                             formatted_target_month = f"{selected_adj_year}-{month_digits:02d}"

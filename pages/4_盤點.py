@@ -4,6 +4,8 @@ import pandas as pd
 import sqlite3
 from datetime import datetime
 from database.db_core import log_history, trigger_toast, show_pending_toast, get_db_conn
+# 從 db_core 載入所需的快取函式
+from database.db_core import cached_fetch_products_in_stock_for_audit, cached_fetch_batch_details_for_audit
 
 show_pending_toast()
 
@@ -16,40 +18,6 @@ current_user = st.session_state.get('current_user', '老 闆')
 audit_cate_filter = st.radio("🗂️ 請選擇盤點項目類別：", ["食材 (R)", "用品 (S)"], horizontal=True)
 prefix_char = "R%" if "食材" in audit_cate_filter else "S%"
 
-# ==================== 【存貨盤點 快取唯讀查詢函數封裝】 ====================
-@st.cache_data(ttl=60)
-def cached_fetch_products_in_stock_for_audit(prefix):
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT DISTINCT s.prod_id as 商品編號, p.prod_name as 商品名稱 
-        FROM stock_batches s 
-        JOIN products p ON s.prod_id = p.prod_id 
-        WHERE s.prod_id LIKE ? AND s.qty > 0
-    ''', (prefix,))
-    rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(rows, columns=cols)
-
-@st.cache_data(ttl=60)
-def cached_fetch_batch_details_for_audit(target_prod_id):
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT s.batch_id, s.qty, s.expiry_date, s.inbound_date, s.vendor_name, s.vendor_phone, p.use_unit, p.cost
-        FROM stock_batches s
-        JOIN products p ON s.prod_id = p.prod_id
-        WHERE s.prod_id = ? AND s.qty > 0
-        ORDER BY s.inbound_date ASC, s.batch_id ASC
-    ''', (target_prod_id,))
-    rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(rows, columns=cols)
-# ============================================================================
-
-# 🟢 改由快取函數撈取可盤點品項
 df_products_in_stock = cached_fetch_products_in_stock_for_audit(prefix_char)
 
 if not df_products_in_stock.empty:
@@ -59,7 +27,6 @@ if not df_products_in_stock.empty:
     )
     target_prod_id = selected_product_str.split(" - ")[0]
     
-    # 🟢 改由快取函數撈取特定盤點品項的批次清單
     df_batches = cached_fetch_batch_details_for_audit(target_prod_id)
     
     if not df_batches.empty:
@@ -147,7 +114,7 @@ if not df_products_in_stock.empty:
                         conn.commit()
                         conn.close()
                         
-                        st.cache_data.clear() # 🟢 實盤數據更新成功，清空快取
+                        st.cache_data.clear()
                         
                         log_details = (
                             f"盤點核實覆蓋。品項：【{item_name}({target_prod_id})】的[批次 {target_batch_id}]。習得歷史進貨日: {orig_inbound}，原登記供應商: {orig_vendor if orig_vendor else '無'}。"

@@ -4,14 +4,13 @@ import pandas as pd
 import sqlite3
 from datetime import datetime, timedelta
 from database.db_core import get_db_conn
+# 從 db_core 載入所需的快取函式
+from database.db_core import cached_fetch_audit_history
 
 st.subheader("📜 歷史動作審計軌跡")
 
 current_user = st.session_state.get('current_user', '老 闆')
 
-# ==========================================
-# 🔍 頂部複合篩選面板 (大方向動作篩選)
-# ==========================================
 col_f1, col_f2 = st.columns(2)
 
 with col_f1:
@@ -21,10 +20,6 @@ with col_f1:
         index=1,
         key="history_filter"
     )
-    if history_time_option == "今天":
-        pass
-    elif history_time_option in ["過去 7 天"]:
-        history_time_option = "過去 7 天"
 
 now = datetime.now()
 if history_time_option == "今天":
@@ -62,40 +57,11 @@ with col_f2:
 
 st.caption(f"目前查看審計區間：{start_dt.strftime('%Y-%m-%d %H:%M:%S')} ～ {end_dt.strftime('%Y-%m-%d %H:%M:%S')}")
 
-# ==================== 【動作審計 快取唯讀查詢函數封裝】 ====================
-@st.cache_data(ttl=60)
-def cached_fetch_audit_history(start_str, end_str, selected_main_action):
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    
-    sql_query = "SELECT timestamp AS 時間, user AS 操作人, action AS 動作, details AS 詳細說明 FROM history WHERE timestamp BETWEEN ? AND ?"
-    sql_params = [start_str, end_str]
-
-    if selected_main_action != "--- 全部動作項目 ---":
-        sql_query += " AND main_category = ?"
-        sql_params.append(selected_main_action)
-
-    sql_query += " ORDER BY id DESC"
-
-    cursor.execute(sql_query, sql_params)
-    rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(rows, columns=cols)
-# ============================================================================
-
-# 🟢 呼叫唯讀快取函數
 df_hist = cached_fetch_audit_history(start_str, end_str, selected_main_action)
 
-# ==========================================
-# 🛠️ 核心改善：將詳細說明內干擾閱讀的 ||STRUCT_DATA|| JSON 字串切除
-# ==========================================
 if not df_hist.empty:
     df_hist['詳細說明'] = df_hist['詳細說明'].apply(lambda x: str(x).split("||STRUCT_DATA||")[0] if "||STRUCT_DATA||" in str(x) else x)
 
-# ==========================================
-# 📱 畫面呈現區 (細項與詳細說明在此輸出)
-# ==========================================
 if not df_hist.empty:
     st.metric("符合條件紀錄數", len(df_hist))
     

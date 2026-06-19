@@ -7,6 +7,15 @@ import json
 import plotly.express as px
 from datetime import datetime, timedelta
 from database.db_core import show_pending_toast, get_db_conn
+# 從 db_core 載入所需的快取函式
+from database.db_core import (
+    cached_get_sales_summary,
+    cached_get_dish_rank,
+    cached_get_material_usage,
+    cached_get_expenses_raw,
+    cached_get_actual_purchase_details,
+    cached_get_operational_expenses_base
+)
 
 show_pending_toast()
 
@@ -14,9 +23,6 @@ st.subheader("📊 門市營收、成本與損益分析報告")
 
 use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=False, key="finance_mobile_toggle")
 
-# ==========================================
-# 🔍 頂部複合時間篩選面板
-# ==========================================
 report_option = st.selectbox(
     "📅 請選擇財務統計區間：", 
     ["今天", "過去 7 天", "過去 30 定", "自訂區間 (自選起訖日期)"], 
@@ -52,116 +58,16 @@ while current_ptr <= end_date:
     covered_target_months.add(current_ptr.strftime("%Y-%m"))
     current_ptr += timedelta(days=1)
 
-# ==================== 【財務與消耗量報告 快取大數據唯讀查詢函數封裝】 ====================
-@st.cache_data(ttl=60)
-def cached_get_sales_summary(start_str, end_str):
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT COALESCE(SUM(total_revenue), 0.0) AS rev, COALESCE(SUM(total_cost), 0.0) AS cst
-        FROM orders 
-        WHERE status = 1 AND timestamp BETWEEN ? AND ?
-    ''', (start_str, end_str))
-    r = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(r, columns=cols)
-
-@st.cache_data(ttl=60)
-def cached_get_dish_rank(start_str, end_str):
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT oi.prod_name AS 餐點名稱, SUM(oi.qty) AS 銷售份數
-        FROM order_items oi
-        JOIN orders o ON oi.order_id = o.order_id
-        WHERE o.status = 1 AND o.timestamp BETWEEN ? AND ?
-        GROUP BY oi.prod_name
-        ORDER BY 銷售份數 DESC
-    ''', (start_str, end_str))
-    r = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(r, columns=cols)
-
-@st.cache_data(ttl=60)
-def cached_get_material_usage(start_str, end_str):
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT om.mat_name AS 食材物料, SUM(om.qty) AS 消耗總數量
-        FROM order_materials om
-        JOIN orders o ON om.order_id = o.order_id
-        WHERE o.status = 1 AND o.timestamp BETWEEN ? AND ?
-        GROUP BY om.mat_name
-        ORDER BY 消耗總數量 DESC
-    ''', (start_str, end_str))
-    r = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(r, columns=cols)
-
-@st.cache_data(ttl=60)
-def cached_get_expenses_raw():
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute("SELECT action, details, timestamp FROM history WHERE action LIKE '手動調整庫存-%'")
-    r = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(r, columns=cols)
-
-@st.cache_data(ttl=60)
-def cached_get_actual_purchase_details(start_date_str, end_date_str):
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT s.batch_id, s.prod_id, p.prod_name, s.original_qty, s.cost, s.inbound_date, p.purchase_unit
-        FROM stock_batches s
-        JOIN products p ON s.prod_id = p.prod_id
-        WHERE (s.prod_id LIKE 'R%' OR s.prod_id LIKE 'S%' OR s.prod_id LIKE 'C%')
-          AND s.inbound_date BETWEEN ? AND ?
-        ORDER BY s.inbound_date DESC, s.batch_id DESC
-    ''', (start_date_str, end_date_str))
-    r = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(r, columns=cols)
-
-@st.cache_data(ttl=60)
-def cached_get_operational_expenses_base():
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute("SELECT s.batch_id, s.prod_id, p.prod_name, s.qty, s.cost, s.inbound_date FROM stock_batches s JOIN products p ON s.prod_id = p.prod_id WHERE s.prod_id LIKE 'C%'")
-    r_cb = cursor.fetchall()
-    cols_cb = [desc[0] for desc in cursor.description]
-    
-    cursor.execute("SELECT id, action, details, timestamp FROM history WHERE details LIKE '%目標歸帳月份:%' ORDER BY id ASC")
-    r_ch = cursor.fetchall()
-    cols_ch = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(r_cb, columns=cols_cb), pd.DataFrame(r_ch, columns=cols_ch)
-# ============================================================================
-
-
-# ==========================================
-# 資料庫核心撈取與高速 快取 SQL 底層聚合載入
-# ==========================================
-
-# 1. 營業額與精準成本摘要
 df_sales_summary = cached_get_sales_summary(start_str, end_str)
 total_revenue = float(df_sales_summary.iloc[0]['rev'])
 total_food_cost = float(df_sales_summary.iloc[0]['cst'])
 
-# 2. 餐點排行明細
 df_dish_rank_raw = cached_get_dish_rank(start_str, end_str)
 dish_sales = dict(zip(df_dish_rank_raw['餐點名稱'], df_dish_rank_raw['銷售份數']))
 
-# 3. 原物料消耗明細
 df_mat_rank_raw = cached_get_material_usage(start_str, end_str)
 material_usage = dict(zip(df_mat_rank_raw['食材物料'], df_mat_rank_raw['消耗總數量']))
 
-# 4. 損耗記錄
 df_expenses_raw = cached_get_expenses_raw()
 total_stock_loss = 0.0
 for _, row in df_expenses_raw.iterrows():
@@ -182,7 +88,6 @@ for _, row in df_expenses_raw.iterrows():
                 change_amt = float(amt_match.group(1))
                 total_stock_loss += abs(change_amt) if change_amt < 0 else 0.0
 
-# 5. 物料進貨明細
 df_actual_purchase_details = cached_get_actual_purchase_details(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
 total_purchase_cost = 0.0
 purchase_records = []
@@ -208,7 +113,6 @@ for _, row in df_actual_purchase_details.iterrows():
         "進貨總額": this_purchase_amt
     })
 
-# 6. 固定費用特殊歸帳歷史
 df_c_batches, df_c_history = cached_get_operational_expenses_base()
 
 batch_target_months = {}
@@ -250,10 +154,7 @@ net_profit = gross_profit - total_op_expense - total_stock_loss
 margin = (net_profit / total_revenue * 100) if total_revenue > 0 else 0.0
 gross_margin = (gross_profit / total_revenue * 100) if total_revenue > 0 else 0.0
 
-# ==========================================
-# 🏪 面板呈現區 1：經營損益平衡總覽
-# ==========================================
-st.markdown("### 🧾 門市動態損益")
+st.markdown("### 橫 門市動態損益")
 st.info(f"💡 **會計帳生效中：** 目前選擇的區間涵蓋了 {', '.join(covered_target_months)} 的帳單 顯示當前固定資產與費用。")
 
 if use_mobile_view:
@@ -277,9 +178,6 @@ else:
 
 st.divider()
 
-# ==========================================
-# 🏆 面板呈現區 2：餐點排行與原物料消耗
-# ==========================================
 if use_mobile_view:
     st.markdown("### 餐點銷售排行")
     if dish_sales:
@@ -317,9 +215,6 @@ else:
 
 st.divider()
 
-# ==========================================
-# 📥 面板呈現區 4：採購進貨明細追蹤
-# ==========================================
 st.markdown("### 📥 採購進貨明細追蹤")
 
 if not purchase_records:

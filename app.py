@@ -2,43 +2,17 @@ import streamlit as st
 import pandas as pd
 from database.db_core import init_db, trigger_toast, show_pending_toast, log_history
 from database.db_core import get_db_conn
+# 從 db_core 載入所需的快取函式
+from database.db_core import (
+    cached_fetch_safety_items,
+    cached_fetch_low_stock_alerts,
+    cached_fetch_merged_stock,
+    cached_fetch_batch_details,
+    cached_fetch_disabled_items_with_stock,
+    cached_fetch_disabled_batches
+)
+
 st.set_page_config(layout="wide")
-
-# # def check_password():
-# #     """如果密碼正確則返回 True，否則顯示登入畫面並返回 False。"""
-    
-# #     # 1. 優先從 st.secrets 讀取密碼，若雲端尚未設定，則提供一個本地端預設密碼 (例如: 1234)
-# #     # 建議之後在 Streamlit Cloud 的 Secrets 中設定後台密碼
-# #     correct_password = st.secrets.get("PASSWORD", "1234")
-
-# #     if "password_correct" not in st.session_state:
-# #         st.session_state.password_correct = False
-
-# #     # 已經成功登入，直接放行
-# #     if st.session_state.password_correct:
-# #         return True
-
-# #     # 顯示登入表單
-# #     st.markdown("<h3 style='text-align: center;'>🍳 赤山堡砂鍋 後台管理系統</h3>", unsafe_allow_html=True)
-    
-# #     with st.form("login_form", clear_on_submit=False):
-# #         st.markdown("#### 🔒 請輸入管理員密碼以進入後台")
-# #         password_input = st.text_input("密碼", type="password")
-# #         submit_button = st.form_submit_button("🔑 登入系統")
-        
-# #         if submit_button:
-# #             if password_input == correct_password:
-# #                 st.session_state.password_correct = True
-# #                 st.success("🎉 密碼正確！正在進入系統...")
-# #                 st.rerun()
-# #             else:
-# #                 st.error("❌ 密碼錯誤，請重新輸入！")
-                
-# #     return False
-
-# # 執行密碼檢查，若未登入則全面中斷後續主程式的渲染
-# if not check_password():
-#     st.stop()
 
 st.markdown("""
     <style>
@@ -50,7 +24,6 @@ st.markdown("""
             font-size: 15px !important;
             font-weight: 500;
         }
-        /* 手機卡片專用樣式 */
         .mobile-card {
             border: 1px solid #e6e6e6;
             border-radius: 8px;
@@ -76,7 +49,6 @@ st.title("🍳 赤山堡砂鍋 後台管理")
 
 init_db()
 
-st.sidebar.header("系統參數")
 if 'current_user' not in st.session_state:
     st.session_state.current_user = "老闆"
 
@@ -85,131 +57,6 @@ st.session_state.current_user = st.sidebar.text_input("操作人員", value=st.s
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ 快速微調安全庫存線")
 
-# ==================== 【Streamlit 快取唯讀查詢函數封裝】 ====================
-@st.cache_data(ttl=60)
-def cached_fetch_safety_items():
-    """快取獲取供安全庫存設定的品項列表 (R和S)"""
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM products WHERE status = 1 AND (prod_id LIKE 'R%' OR prod_id LIKE 'S%')")
-    rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(rows, columns=cols)
-
-@st.cache_data(ttl=60)
-def cached_fetch_low_stock_alerts():
-    """快取檢測低庫存補貨預警"""
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT p.prod_name, 
-               COALESCE((SELECT SUM(s.qty) FROM stock_batches s WHERE s.prod_id = p.prod_id AND s.qty > 0), 0) as total_qty, 
-               p.safety_stock, p.use_unit
-        FROM products p 
-        WHERE p.status = 1 AND (p.prod_id LIKE 'R%' OR p.prod_id LIKE 'S%')
-        GROUP BY p.prod_id 
-        HAVING total_qty < p.safety_stock
-    ''')
-    rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(rows, columns=cols)
-
-@st.cache_data(ttl=60)
-def cached_fetch_merged_stock(stock_filter):
-    """快取獲取目前庫存明細 (依據篩選條件動態變更快取鍵值)"""
-    if stock_filter == "僅看食材 (R)":
-        query_condition = "WHERE p.prod_id LIKE 'R%'"
-    elif stock_filter == "僅看用品 (S)":
-        query_condition = "WHERE p.prod_id LIKE 'S%'"
-    else:
-        query_condition = "WHERE (p.prod_id LIKE 'R%' OR p.prod_id LIKE 'S%')"
-
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute(f'''
-        SELECT p.prod_id as 編號, 
-               p.prod_name as 商品名稱, 
-               COALESCE(SUM(CASE WHEN s.qty > 0 THEN s.qty ELSE 0 END), 0) as 總庫存量, 
-               p.use_unit as 單位, 
-               CASE 
-                 WHEN COALESCE(SUM(CASE WHEN s.qty > 0 THEN s.qty ELSE 0 END), 0) > 0 
-                 THEN (SUM(CASE WHEN s.qty > 0 THEN s.qty * s.cost ELSE 0 END) / SUM(CASE WHEN s.qty > 0 THEN s.qty ELSE 0 END))
-                 ELSE p.cost 
-               END as 移動平均單位成本, 
-               COALESCE(SUM(CASE WHEN s.qty > 0 THEN s.qty * s.cost ELSE 0 END), 0) as 庫存總價值,
-               p.safety_stock as 安全庫存, 
-               p.status as 狀態碼
-        FROM products p 
-        LEFT JOIN stock_batches s ON p.prod_id = s.prod_id
-        {query_condition}
-        GROUP BY p.prod_id, p.prod_name, p.use_unit, p.safety_stock, p.status
-        ORDER BY p.status DESC, p.prod_id
-    ''')
-    rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(rows, columns=cols)
-
-@st.cache_data(ttl=60)
-def cached_fetch_batch_details(target_prod_id):
-    """快取獲取指定品項的有效進貨批次明細"""
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT s.batch_id as 批次編號, 
-               s.inbound_date as 進貨日期, 
-               s.qty as 剩餘庫存量, 
-               (s.qty * s.cost) as 當次進貨總金額,
-               s.expiry_date as 有效期限, 
-               s.vendor_name as 原始供應商,
-               s.vendor_phone as 供應商電話
-        FROM stock_batches s
-        WHERE s.prod_id = ? AND s.qty > 0
-        ORDER BY s.inbound_date ASC, s.batch_id ASC
-    ''', (target_prod_id,))
-    rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(rows, columns=cols)
-
-@st.cache_data(ttl=60)
-def cached_fetch_disabled_items_with_stock():
-    """快取獲取包含殘留庫存的已下架商品清單"""
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT DISTINCT p.prod_id, p.prod_name
-        FROM products p
-        JOIN stock_batches s ON p.prod_id = s.prod_id
-        WHERE p.status = 0 AND s.qty > 0
-        ORDER BY p.prod_id
-    ''')
-    rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(rows, columns=cols)
-
-@st.cache_data(ttl=60)
-def cached_fetch_disabled_batches(target_disabled_prod_id):
-    """快取獲取特定下架品項的殘留批次明細"""
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT s.batch_id, s.qty, s.original_qty, p.use_unit, s.inbound_date, s.expiry_date
-        FROM stock_batches s 
-        JOIN products p ON s.prod_id = p.prod_id 
-        WHERE s.prod_id = ? AND s.qty > 0
-        ORDER BY s.inbound_date ASC, s.batch_id ASC
-    ''', (target_disabled_prod_id,))
-    rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(rows, columns=cols)
-# ============================================================================
-
-# 呼叫快取安全庫存清單
 all_items_for_safety = cached_fetch_safety_items()
 
 if not all_items_for_safety.empty:
@@ -232,10 +79,8 @@ if not all_items_for_safety.empty:
         conn.commit()
         conn.close()
         
-        # 🟢 精準清理快取，使安全庫存數據即時翻新
         st.cache_data.clear()
         
-        # 🔥 【歷史紀錄埋點優化】改為指定大分類為：⚙️ 餐點參數修正
         log_history(
             st.session_state.current_user, 
             f"修正餐點參數-安全庫存變更", 
@@ -246,7 +91,6 @@ if not all_items_for_safety.empty:
         trigger_toast(f"已將 【{matched_safety_row['prod_name']}】 的安全線更新為 {new_safety_value}", icon="⚙️")
         st.rerun()
 
-# 呼叫快取低庫存警告檢查
 df_alert_check = cached_fetch_low_stock_alerts()
 
 if not df_alert_check.empty:
@@ -257,18 +101,14 @@ if not df_alert_check.empty:
 
 st.subheader("📊 目前庫存明細")
 
-# 加入手機模式切換開關
 use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=False, key="home_mobile_toggle")
 
 stock_filter = st.selectbox("🔍 篩選庫存類別", ["顯示全部明細", "僅看食材 (R)", "僅看用品 (S)"], key="home_stock_filter")
 
-# 🟢 改由快取讀取庫存資訊，且原先嚴重的 for 迴圈 UPDATE 與 BOM 重算已在此被徹底移除！
 df_merged_stock = cached_fetch_merged_stock(stock_filter)
 
 if not df_merged_stock.empty:
-    # 根據開關狀態切換排版
     if use_mobile_view:
-        # 手機卡片式排版
         for _, row in df_merged_stock.iterrows():
             card_class = "mobile-card" if row['狀態碼'] == 1 else "mobile-card-disabled"
             disabled_text = " (已下架)" if row['狀態碼'] == 0 else ""
@@ -280,14 +120,12 @@ if not df_merged_stock.empty:
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # 第一列重要數據
                 col1, col2 = st.columns(2)
                 with col1:
                     st.metric(label="目前庫存", value=f"{row['總庫存量']:,.1f} {row['單位']}")
                 with col2:
                     st.metric(label="安全線", value=f"{row['安全庫存']:,.1f} {row['單位']}")
                 
-                # 第二列財務數據
                 col3, col4 = st.columns(2)
                 with col3:
                     st.caption(f"單位成本: **${row['移動平均單位成本']:,.4f}**")
@@ -296,7 +134,6 @@ if not df_merged_stock.empty:
                     
                 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
     else:
-        # 桌機表格排版
         def highlight_disabled(row):
             styles = [''] * len(row)
             name_idx = row.index.get_loc('商品名稱')
@@ -334,8 +171,6 @@ if not df_merged_stock.empty:
         )
         
         target_prod_id = selected_stock_item.split(" - ")[0]
-        
-        # 🟢 呼叫快取取得進貨批次明細
         df_batch_details = cached_fetch_batch_details(target_prod_id)
         
         matched_item_row = df_merged_stock[df_merged_stock['編號'] == target_prod_id].iloc[0]
@@ -364,7 +199,6 @@ if not df_merged_stock.empty:
         else:
             st.info("該品項目前無有效批次庫存。")
             
-    # 🟢 呼叫快取取得已下架含有庫存的商品
     df_unique_disabled_items = cached_fetch_disabled_items_with_stock()
     
     if not df_unique_disabled_items.empty:
@@ -375,7 +209,6 @@ if not df_merged_stock.empty:
         selected_disabled_item_str = st.selectbox("🔍 1. 選取欲清理的下架商品/食材：", disabled_item_options, key="clean_disabled_item_box")
         target_disabled_prod_id = selected_disabled_item_str.split(" - ")[0]
         
-        # 🟢 呼叫快取取得下架批次詳情
         df_disabled_batches = cached_fetch_disabled_batches(target_disabled_prod_id)
         
         if not df_disabled_batches.empty:
@@ -398,10 +231,8 @@ if not df_merged_stock.empty:
                 conn.commit()
                 conn.close()
                 
-                # 🟢 關鍵：清庫存變更完畢後立即清除快取，重新抓取
                 st.cache_data.clear()
                 
-                # 🔥 【優化動作與指定大類】完美落入 📋 庫存微調/報廢/盤點 分類中
                 log_history(
                     st.session_state.current_user, 
                     "手動調整庫存-下架殘留清理", 

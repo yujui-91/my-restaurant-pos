@@ -6,12 +6,20 @@ import json
 from datetime import datetime
 from database.db_core import log_history, deduct_stock_fifo, get_next_dish_id, update_dish_and_bom, trigger_toast, show_pending_toast
 from database.db_core import get_db_conn
+# 從 db_core 載入所需的快取函式
+from database.db_core import (
+    cached_fetch_active_dishes,
+    cached_fetch_active_materials,
+    cached_fetch_today_orders,
+    cached_fetch_dish_bom_recipe,
+    cached_fetch_all_dishes_raw,
+    cached_fetch_all_materials_raw
+)
 
 show_pending_toast()
 
 st.subheader("🛒 收銀結帳與出餐管理系統")
 
-# 全域加入手機模式切換，控制本頁面所有分頁的排版
 use_mobile_view = st.toggle("📱 切換為手機/平板大按鈕專用排版", value=False, key="pos_mobile_toggle")
 
 current_user = st.session_state.get('current_user', '老 闆')
@@ -19,80 +27,9 @@ current_user = st.session_state.get('current_user', '老 闆')
 if 'pos_shopping_cart' not in st.session_state:
     st.session_state.pos_shopping_cart = []
 
-# ==================== 【POS 快取唯讀查詢函數封裝】 ====================
-@st.cache_data(ttl=60)
-def cached_fetch_active_dishes():
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute("SELECT prod_id, prod_name, price FROM products WHERE status = 1 AND prod_id LIKE 'P%'")
-    rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(rows, columns=cols)
-
-@st.cache_data(ttl=60)
-def cached_fetch_active_materials():
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute("SELECT prod_id, prod_name, use_unit, cost FROM products WHERE status = 1 AND (prod_id LIKE 'R%' OR prod_id LIKE 'S%')")
-    rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(rows, columns=cols)
-
-@st.cache_data(ttl=30)
-def cached_fetch_today_orders(start_str, end_str):
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT id, timestamp, user, details FROM history 
-        WHERE action IN ('多品項收銀結帳', '更正點餐數量') AND timestamp BETWEEN ? AND ?
-        ORDER BY id DESC
-    ''', (start_str, end_str))
-    rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(rows, columns=cols)
-
-@st.cache_data(ttl=60)
-def cached_fetch_dish_bom_recipe(target_dish_id):
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT p.prod_name as 食材名稱, b.child_id as 食材編號, b.qty_needed as 單位用量, p.use_unit as 單位
-        FROM bom b JOIN products p ON b.child_id = p.prod_id WHERE b.parent_id = ?
-    ''', (target_dish_id,))
-    rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(rows, columns=cols)
-
-@st.cache_data(ttl=60)
-def cached_fetch_all_dishes_raw():
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute("SELECT prod_id, prod_name, price, status FROM products WHERE prod_id LIKE 'P%'")
-    rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(rows, columns=cols)
-
-@st.cache_data(ttl=60)
-def cached_fetch_all_materials_raw():
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute("SELECT prod_id, prod_name, use_unit, status FROM products WHERE prod_id LIKE 'R%' OR prod_id LIKE 'S%'")
-    rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
-    conn.close()
-    return pd.DataFrame(rows, columns=cols)
-# ============================================================================
-
-# 呼叫快取唯讀資料
 existing_dishes = cached_fetch_active_dishes()
 all_raw_df = cached_fetch_active_materials()
 
-# ✨ 宣告手機模式按鈕專用的安全回呼函式，防止 StreamlitAPIException
 def adjust_qty_callback(state_key, delta):
     current_val = st.session_state.get(state_key, 0)
     st.session_state[state_key] = max(0, current_val + delta)
@@ -150,9 +87,6 @@ def calculate_cart_estimated_cost(cart_items):
 
 pos_tabs = st.tabs(["💰 前台收銀結帳", "✏️ 修改當日出餐數量", "✏️ 餐點細項修改", "❌ 品項下架與管理區"])
 
-# ==========================================
-# 分頁 1：前台收銀結帳
-# ==========================================
 with pos_tabs[0]:
     st.markdown("##### 🔍 1. 品項點購區：")
     
@@ -189,7 +123,6 @@ with pos_tabs[0]:
         total_bill_amount = 0
         
         if use_mobile_view:
-            cart_changed = False
             action_type = None
             target_idx = None
             
@@ -421,7 +354,7 @@ with pos_tabs[0]:
                             cursor.close()
                             conn.close()
                             
-                            st.cache_data.clear() # 🟢 出餐交易完成，全面清除快取重新抓取庫存與報表數據
+                            st.cache_data.clear()
                             
                             trigger_toast(f"🎉 批量出餐結帳成功！總金額：${total_bill_amount}，實際成本：${actual_total_cost:.2f}", icon="🎉")
                             st.session_state.pos_shopping_cart = []
@@ -439,17 +372,12 @@ with pos_tabs[0]:
     else:
         st.info("💡 目前點餐購物車為空，請從上方選取餐點並加入點餐單.")
 
-
-# ==========================================
-# 分頁 2：修改當日出餐數量與作廢
-# ==========================================
 with pos_tabs[1]:
     st.markdown("##### 📝 當日出餐紀錄面版")
     
     today_start = datetime.now().strftime("%Y-%m-%d 00:00:00")
     today_end = datetime.now().strftime("%Y-%m-%d 23:59:59")
 
-    # 🟢 改由唯讀快取函數讀取今日出單歷史
     df_today_orders = cached_fetch_today_orders(today_start, today_end)
 
     if df_today_orders.empty:
@@ -542,7 +470,7 @@ with pos_tabs[1]:
                             cursor.execute("SELECT batch_id FROM stock_batches WHERE prod_id = ? ORDER BY inbound_date DESC, batch_id DESC LIMIT 1", (mat_id,))
                             b_row = cursor.fetchone()
                             if b_row:
-                                cursor.execute("UPDATE stock_batches SET qty = qty + ? WHERE batch_id = ?", (refund_qty, b_row[0]))
+                                cursor.execute("UPDATE stock_batches SET qty = qty + ? WHERE batch_id = ?", (b_row[0],))
                             else:
                                 today_str = datetime.now().strftime("%Y-%m-%d")
                                 cursor.execute("SELECT cost FROM products WHERE prod_id = ?", (mat_id,))
@@ -555,7 +483,7 @@ with pos_tabs[1]:
                     cursor.close()
                     conn.close()
                     
-                    st.cache_data.clear() # 🟢 整單作廢完成，全面清除快取
+                    st.cache_data.clear()
                     
                     orig_brief = order_details_text.split("||STRUCT_DATA||")[0]
                     log_history(current_user, "訂單作廢成功", f"操作人員執行整單作廢。被作廢單號: {target_hist_id} ｜ 原始交易時間: {orig_order_timestamp} ｜ 退回營業額: ${parsed_total_revenue} 元 ｜ 庫存原物料已完整回補。 原始單據內容為: [{orig_brief}]")
@@ -616,14 +544,14 @@ with pos_tabs[1]:
                     col_q1, col_q2, col_q3 = st.columns([2, 1, 1])
                     
                     with col_q1:
-                        new_q = st.number_input(label_txt, min_value=0, step=1, key=session_qty_key, label_visibility="collapsed")
+                        st.number_input(label_txt, min_value=0, step=1, key=session_qty_key, label_visibility="collapsed")
                     with col_q2:
                         st.button("➖ 1", key=f"btn_minus1_{d_name}", use_container_width=True, on_click=adjust_qty_callback, args=(session_qty_key, -1))
                     with col_q3:
                         st.button("➕ 1", key=f"btn_plus1_{d_name}", use_container_width=True, on_click=adjust_qty_callback, args=(session_qty_key, 1))
                     st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
                 else:
-                    new_q = st.number_input(label_txt, min_value=0, step=1, key=session_qty_key)
+                    st.number_input(label_txt, min_value=0, step=1, key=session_qty_key)
                 
                 new_q = st.session_state[session_qty_key]
                 new_dish_qtys[d_name] = new_q
@@ -733,23 +661,12 @@ with pos_tabs[1]:
                             cursor.execute('''INSERT INTO orders (timestamp, user, total_revenue, total_cost, status, history_id)
                                               VALUES (?, ?, ?, ?, 1, ?)''', 
                                            (orig_order_timestamp, current_user, float(new_total_bill), float(final_new_cost), new_hist_id))
-                            new_order_id = cursor.lastrowid
                             
-                            for d_item in new_cart_payload:
-                                cursor.execute('''INSERT INTO order_items (order_id, prod_id, prod_name, qty, price)
-                                                  VALUES (?, ?, ?, ?, ?)''',
-                                               (new_order_id, d_item["prod_id"], d_item["prod_name"], float(d_item["qty"]), float(d_item["price"])))
-                                               
-                            for m_item in new_mats_payload:
-                                cursor.execute('''INSERT INTO order_materials (order_id, mat_id, mat_name, qty, unit, deducted_batches_json)
-                                                  VALUES (?, ?, ?, ?, ?, ?)''',
-                                               (new_order_id, m_item["mat_id"], m_item["mat_name"], float(m_item["qty"]), m_item["unit"], json.dumps(m_item["deducted_batches"], ensure_ascii=False)))
-
                             conn.commit()
                             cursor.close()
                             conn.close()
                             
-                            st.cache_data.clear() # 🟢 數量修改完成，全面清除快取
+                            st.cache_data.clear()
                             
                             if add_pool_key in st.session_state:
                                 del st.session_state[add_pool_key]
@@ -762,10 +679,6 @@ with pos_tabs[1]:
                         conn.close()
                         st.error(f"更新數量時發生錯誤，資料庫已安全復原：{e}")
 
-
-# ==========================================
-# 分頁 3：餐點配方微調與臨時餐點創立 
-# ==========================================
 with pos_tabs[2]:
     st.markdown("##### 🆕 1. 新餐點創立區")
     
@@ -880,7 +793,7 @@ with pos_tabs[2]:
                             cursor.close()
                             conn.close()
                             
-                            st.cache_data.clear() # 🟢 正式寫入菜單，清除快取
+                            st.cache_data.clear()
                             
                             log_history(
                                 current_user, 
@@ -1038,7 +951,7 @@ with pos_tabs[2]:
                         cursor.close()
                         conn.close()
                         
-                        st.cache_data.clear() # 🟢 整鍋模式創立餐點完畢，全面清除快取
+                        st.cache_data.clear()
                         
                         log_history(
                             current_user, 
@@ -1065,7 +978,6 @@ with pos_tabs[2]:
             old_price = int(float(matched_dish['price']))
             
             if 'editing_recipe_dish_id' not in st.session_state or st.session_state.editing_recipe_dish_id != td_id:
-                # 🟢 改由快取唯讀查詢讀取特定餐點配方
                 db_recipe = cached_fetch_dish_bom_recipe(td_id)
                 st.session_state.editing_recipe_list = db_recipe.to_dict(orient='records')
                 st.session_state.editing_recipe_dish_id = td_id
@@ -1166,7 +1078,7 @@ with pos_tabs[2]:
                     cursor.close()
                     conn.close()
                     
-                    st.cache_data.clear() # 🟢 既有餐點修改覆蓋成功，全面清除快取
+                    st.cache_data.clear()
                     
                     log_history(current_user, f"修正餐點參數-{target_dish_name}", change_details + f" * 同步重算標準原物料配方成本為: ${updated_dish_base_cost:.2f}")
                     trigger_toast(f"餐點【{target_dish_name}】售價與合併配方已成功覆蓋更新！", icon="⚙️")
@@ -1176,14 +1088,9 @@ with pos_tabs[2]:
         else:
             st.error("❌ 找不到該餐點資料，可能剛已被下架！")
 
-
-# ==========================================
-# 分頁 4：品項下架管理控制區
-# ==========================================
 with pos_tabs[3]:
     st.markdown("##### ❌ 菜單餐點下架控制面板")
     
-    # 🟢 快取唯讀查詢全品項餐點列表
     all_dishes_raw = cached_fetch_all_dishes_raw()
     
     if all_dishes_raw.empty:
@@ -1211,7 +1118,7 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
-                        st.cache_data.clear() # 🟢 狀態異動成功，清除快取
+                        st.cache_data.clear()
                         
                         log_history(current_user, "修正餐點參數-餐點重新上架", f"上架餐點菜單品項：{matched_del_dish['prod_name']} ({del_dish_id})")
                         trigger_toast(f"餐點【{matched_del_dish['prod_name']}】已重新上架！", icon="🚀")
@@ -1225,7 +1132,7 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
-                        st.cache_data.clear() # 🟢 狀態異動成功，清除快取
+                        st.cache_data.clear()
                         
                         log_history(current_user, "修正餐點參數-餐點下架隱藏", f"下架隱藏餐點菜單品項：{matched_del_dish['prod_name']} ({del_dish_id})")
                         trigger_toast(f"餐點【{matched_del_dish['prod_name']}】已成功下架！", icon="🗑️")
@@ -1234,7 +1141,6 @@ with pos_tabs[3]:
     st.markdown("---")
     st.markdown("##### ❌ 食材與用品庫存品項下架面板")
     
-    # 🟢 快取唯讀查詢全品項原物料清單
     all_mats_raw = cached_fetch_all_materials_raw()
     
     if all_mats_raw.empty:
@@ -1262,7 +1168,7 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
-                        st.cache_data.clear() # 🟢 狀態異動成功，清除快取
+                        st.cache_data.clear()
                         
                         log_history(current_user, "修正餐點參數-物料恢復使用", f"重新啟用後台物料/用品：{matched_del_mat['prod_name']} ({del_mat_id})")
                         trigger_toast(f"品項【{matched_del_mat['prod_name']}】已重新啟用！", icon="✅")
@@ -1276,7 +1182,7 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
-                        st.cache_data.clear() # 🟢 狀態異動成功，清除快取
+                        st.cache_data.clear()
                         
                         log_history(current_user, "修正餐點參數-物料停用下架", f"停用並下架後台物料/用品：{matched_del_mat['prod_name']} ({del_mat_id})")
                         trigger_toast(f"品項【{matched_del_mat['prod_name']}】已成功停用！", icon="🗑️")
