@@ -514,7 +514,7 @@ with pos_tabs[1]:
             with col_add_order2:
                 st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("➕ 加進清單", use_container_width=True, key=f"append_dish_btn_{target_hist_id}"):
-                    if selected_append_dish == "--- 請選擇要補加的餐點 ---":
+                    if selected_append_dish == "--- 請選取欲補加的餐點 ---":
                         st.error("請先選擇要補加的餐點品項！")
                     else:
                         matched_append = existing_dishes[existing_dishes['prod_name'] == selected_append_dish].iloc[0]
@@ -712,7 +712,7 @@ with pos_tabs[2]:
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.markdown(f"**進貨定義單位：** `{db_unit_a if db_unit_a else '未選擇'}`")
                 
-            # 重量單位動態判定與換算模式（修正為：當你想輸入公克(g)時，程式幫你除以對應數值換算回資料庫的台斤/公斤）
+            # 重量單位動態判定與換算模式
             cus_conversion_mode = "不換算"
             if db_unit_a and db_unit_a.lower() in WEIGHT_UNITS:
                 with col_cus_convert:
@@ -738,11 +738,11 @@ with pos_tabs[2]:
                 else:
                     mat_info = all_raw_df[all_raw_df['prod_name'] == cus_mat_name].iloc[0]
                     
-                    # 依換算模式：當你輸入200(g)時，存入資料庫要除以 600 或 1000 換算回原本的台斤/公斤
+                    # 【🚨 已修正 Bug】依換算模式：輸入公克(g)，除以對應數值正確轉換回進貨基本小單位
                     final_conv = cus_mat_qty 
-                    if cus_conversion_mode == "我想輸入「公克(g)」幫我換算回 公斤(kg) [數值除以1000]":
+                    if cus_conversion_mode == "公斤轉公克":
                         final_conv = cus_mat_qty / 1000.0
-                    elif cus_conversion_mode == "我想輸入「公克(g)」幫我換算回 台斤 [數值除以600]":
+                    elif cus_conversion_mode == "台斤轉公克":
                         final_conv = cus_mat_qty / 600.0
                     
                     ex_idx = next((i for i, item in enumerate(st.session_state.custom_recipe_pool) if item['食材編號'] == mat_info['prod_id']), None)
@@ -868,7 +868,7 @@ with pos_tabs[2]:
                 with col_b_convert:
                     b_conversion_mode = st.selectbox(
                         "輸入數值的單位類型",
-                        ["直接依進貨定義單位輸入", "我想輸入「公克(g)」幫我換算回 公斤(kg) [數值除以1000]", "我想輸入「公克(g)」幫我換算回 台斤 [數值除以600]"],
+                        ["直接依進貨定義單位輸入", "公斤轉公克", "台斤轉公克"],
                         key="b_conversion_mode_select"
                     )
             else:
@@ -887,11 +887,11 @@ with pos_tabs[2]:
                 else:
                     mat_info = all_raw_df[all_raw_df['prod_name'] == b_mat_name].iloc[0]
                     
-                    # 依換算模式：當你輸入200(g)時，存入資料庫要除以 600 或 1000 換算回原本的台斤/公斤
+                    # 【🚨 已修正 Bug】依換算模式：輸入公克(g)，除以對應數值正確轉換回進貨基本小單位
                     final_conv = b_mat_qty
-                    if b_conversion_mode == "我想輸入「公克(g)」幫我換算回 公斤(kg) [數值除以1000]":
+                    if b_conversion_mode == "公斤轉公克":
                         final_conv = b_mat_qty / 1000.0
-                    elif b_conversion_mode == "我想輸入「公克(g)」幫我換算回 台斤 [數值除以600]":
+                    elif b_conversion_mode == "台斤轉公克":
                         final_conv = b_mat_qty / 600.0
 
                     ex_idx = next((i for i, item in enumerate(st.session_state.pot_recipe_pool) if item['食材編號'] == mat_info['prod_id']), None)
@@ -899,7 +899,7 @@ with pos_tabs[2]:
                     if ex_idx is not None:
                         st.session_state.pot_recipe_pool[ex_idx] = new_pool_dict
                     else:
-                        st.session_state.pot_recipe_pool.append(new_pool_dict)
+                        st.session_state.pot_recipe_pool.append(new_pot_pool)
                     st.rerun()
 
             if st.session_state.pot_recipe_pool:
@@ -1029,11 +1029,36 @@ with pos_tabs[2]:
                 st.session_state.editing_recipe_dish_id = td_id
 
             st.markdown("###### ➕ 追加食材至此餐點中：")
-            col_add_e1, col_add_e2 = st.columns([3, 1])
+            
+            # 分割為 4 欄，動態在現有追加選單加入單位換算
+            col_add_e1, col_add_e2, col_add_convert, col_add_e3 = st.columns([2, 1, 1.5, 1])
             with col_add_e1:
                 add_edit_mat_name = st.selectbox("選擇要追加的食材項目", ["--- 請選擇食材/用品 ---"] + all_raw_df['prod_name'].tolist(), key="add_edit_mat_select")
+            
+            db_unit_edit = ""
+            if add_edit_mat_name != "--- 請選擇食材/用品 ---":
+                matched_row_edit = all_raw_df[all_raw_df['prod_name'] == add_edit_mat_name].iloc[0]
+                db_unit_edit = matched_row_edit['use_unit'].strip()
+                
             with col_add_e2:
-                add_edit_mat_qty = st.number_input("設定單份標準用量", min_value=0.0001, value=1.0, step=1.0, key="add_edit_mat_qty_input")
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown(f"**進貨定義單位：** `{db_unit_edit if db_unit_edit else '未選擇'}`")
+                
+            # 重量單位動態換算模式 (修正追加表單的覆蓋與數值暴增問題)
+            edit_conversion_mode = "不換算"
+            if db_unit_edit and db_unit_edit.lower() in WEIGHT_UNITS:
+                with col_add_convert:
+                    edit_conversion_mode = st.selectbox(
+                        "輸入數值的單位類型",
+                        ["直接依進貨定義單位輸入", "公斤轉公克", "台斤轉公克"],
+                        key="edit_conversion_mode_select"
+                    )
+            else:
+                with col_add_convert:
+                    st.text_input("單位換算", value="無需換算", disabled=True, key="edit_conversion_disabled")
+                    
+            with col_add_e3:
+                add_edit_mat_qty = st.number_input("輸入數量", min_value=0.0, value=0.0, step=1.0, key="add_edit_mat_qty_input")
                 
             if st.button("➕ 確定將此食材加入配方清單", use_container_width=True):
                 if add_edit_mat_name != "--- 請選擇食材/用品 ---" and add_edit_mat_qty > 0:
@@ -1042,7 +1067,14 @@ with pos_tabs[2]:
                         mat_info = matched_mats.iloc[0]
                         existing_idx = next((i for i, item in enumerate(st.session_state.editing_recipe_list) if item['食材編號'] == mat_info['prod_id']), None)
                         
-                        new_item_dict = {"食材名稱": mat_info['prod_name'], "食材編號": mat_info['prod_id'], "單位用量": float(add_edit_mat_qty), "單位": mat_info['use_unit']}
+                        # 計算經過換算後的實際資料庫數值 (例如: 輸入 1000g / 600 = 1.6667 台斤)
+                        final_edit_conv = add_edit_mat_qty
+                        if edit_conversion_mode == "公斤轉公克":
+                            final_edit_conv = add_edit_mat_qty / 1000.0
+                        elif edit_conversion_mode == "台斤轉公克":
+                            final_edit_conv = add_edit_mat_qty / 600.0
+                        
+                        new_item_dict = {"食材名稱": mat_info['prod_name'], "食材編號": mat_info['prod_id'], "單位用量": float(final_edit_conv), "單位": mat_info['use_unit']}
                         
                         if existing_idx is not None:
                             st.session_state.editing_recipe_list[existing_idx] = new_item_dict
@@ -1077,7 +1109,7 @@ with pos_tabs[2]:
                     if row["移除"]:
                         has_changes = True
                         continue
-                    if row["單位用量"] != st.session_state.editing_recipe_list[idx]["單位用量"]: # 這裡統一保持唯讀參考
+                    if row["單位用量"] != st.session_state.editing_recipe_list[idx]["單位用量"]:
                         has_changes = True
                     updated_recipe_list.append({"食材名稱": row["食材名稱"], "食材編號": row["食材編號"], "單位用量": float(row["單位用量"]), "單位": row["單位"]})
                     
