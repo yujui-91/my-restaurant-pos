@@ -680,7 +680,7 @@ with pos_tabs[1]:
                             avail = cursor.fetchone()[0] or 0.0
                             if avail < total_need:
                                 insufficient_flag = True
-                                insufficient_msg += f"❌ 修正失敗：微調後共需要物料【m_name】{total_need:.1f}，回補後全庫僅剩 {avail:.1f}！\n"
+                                insufficient_msg += f"❌ 修正失敗：微調後共需要物料【{m_name}】{total_need:.1f}，回補後全庫僅剩 {avail:.1f}！\n"
                             else:
                                 success, deducted_cost_val, batch_list = deduct_stock_fifo(m_id, total_need, cursor)
                                 if not success:
