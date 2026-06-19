@@ -467,15 +467,7 @@ with pos_tabs[1]:
                                     (float(b_info["qty"]), b_info["batch_id"])
                                 )
                         else:
-                            cursor.execute("SELECT batch_id FROM stock_batches WHERE prod_id = ? ORDER BY inbound_date DESC, batch_id DESC LIMIT 1", (mat_id,))
-                            b_row = cursor.fetchone()
-                            if b_row:
-                                cursor.execute("UPDATE stock_batches SET qty = qty + ? WHERE batch_id = ?", (b_row[0],))
-                            else:
-                                today_str = datetime.now().strftime("%Y-%m-%d")
-                                cursor.execute("SELECT cost FROM products WHERE prod_id = ?", (mat_id,))
-                                p_cost = cursor.fetchone()[0] or 0.0
-                                cursor.execute("INSERT INTO stock_batches (prod_id, qty, original_qty, expiry_date, inbound_date, vendor_name, cost) VALUES (?, ?, ?, '', ?, '前台作廢退回', ?)", (mat_id, refund_qty, refund_qty, today_str, p_cost))
+                            cursor.execute("UPDATE stock_batches SET qty = qty + ? WHERE batch_id = (SELECT batch_id FROM stock_batches WHERE prod_id = ? ORDER BY inbound_date DESC, batch_id DESC LIMIT 1)", (refund_qty, mat_id))
                     
                     cursor.execute("UPDATE orders SET status = 0 WHERE history_id = ?", (target_hist_id,))
                     
@@ -560,7 +552,7 @@ with pos_tabs[1]:
 
             if st.button("💾 儲存出餐數量變更", type="primary", use_container_width=True, key=f"save_qty_edit_btn_{target_hist_id}"):
                 if not has_qty_changed:
-                    st.info("數量沒有 any 變動，無需修正。")
+                    st.info("數量沒有變動，無需修正。")
                 else:
                     conn = get_db_conn()
                     cursor = conn.cursor()
@@ -684,9 +676,8 @@ with pos_tabs[2]:
     
     creation_mode = st.radio("🛠️ 請選擇餐點建立模式：", ["A模式：單份餐點", "B模式：整鍋"], horizontal=True)
 
-    # 包含所有需要做重量與液體換算的定義單位列表 (移除 kl 單位)
+    # 包含所有需要做重量換算的定義單位列表
     WEIGHT_UNITS = ['kg', '公斤', 'g', '公克', '臺斤', '台斤', 'Kg', 'KG']
-    LIQUID_UNITS = ['ml', '毫升', 'l', '公升', 'L']
 
     if creation_mode == "A模式：單份餐點":
         with st.expander("🛠️ 展開配方調配面板", expanded=True):
@@ -713,13 +704,13 @@ with pos_tabs[2]:
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.markdown(f"**進貨定義單位：** `{db_unit_a if db_unit_a else '未選擇'}`")
                 
-            # 重量與液體單位智慧選取與防呆判定 (已移除 kl)
+            # 重量單位智慧選取與防呆判定（已完全移除公升與毫升換算）
             cus_conversion_mode = "不換算"
             if db_unit_a:
                 unit_lower = db_unit_a.lower()
                 with col_cus_convert:
                     # 情況1: 進貨單位是 重量 (公斤/KG/g)
-                    if unit_lower in ['kg', '公斤', 'g', '公克', 'kg']:
+                    if unit_lower in ['kg', '公斤', 'g', '公克']:
                         cus_conversion_mode = st.selectbox(
                             "輸入數值的單位類型",
                             ["直接依進貨定義單位輸入", "公斤轉公克"],
@@ -731,20 +722,6 @@ with pos_tabs[2]:
                             "輸入數值的單位類型",
                             ["直接依進貨定義單位輸入", "台斤轉公克"],
                             key="cus_conversion_mode_select_weight_tw"
-                        )
-                    # 情況3: 進貨單位是 液體 (毫升/ml)
-                    elif unit_lower in ['ml', '毫升']:
-                        cus_conversion_mode = st.selectbox(
-                            "輸入數值的單位類型",
-                            ["直接依進貨定義單位輸入", "毫升轉公升"],
-                            key="cus_conversion_mode_select_liquid_ml"
-                        )
-                    # 情況4: 進貨單位是 液體 (公升/l)
-                    elif unit_lower in ['l', '公升']:
-                        cus_conversion_mode = st.selectbox(
-                            "輸入數值的單位類型",
-                            ["直接依進貨定義單位輸入", "公升轉毫升"],
-                            key="cus_conversion_mode_select_liquid_l"
                         )
                     else:
                         st.text_input("單位換算", value="無需換算", disabled=True, key="cus_conversion_disabled")
@@ -765,16 +742,12 @@ with pos_tabs[2]:
                 else:
                     mat_info = all_raw_df[all_raw_df['prod_name'] == cus_mat_name].iloc[0]
                     
-                    # 依智慧選取模式進行精準換算 (僅保留公升與毫升互轉)
+                    # 依智慧選取模式進行精準換算 (僅保留重量換算)
                     final_conv = cus_mat_qty 
                     if cus_conversion_mode == "公斤轉公克":
                         final_conv = cus_mat_qty / 1000.0
                     elif cus_conversion_mode == "台斤轉公克":
                         final_conv = cus_mat_qty / 600.0
-                    elif cus_conversion_mode == "公升轉毫升":  # 實際需要ml，輸入公升 -> 乘1000
-                        final_conv = cus_mat_qty * 1000.0
-                    elif cus_conversion_mode == "毫升轉公升":  # 實際需要公升，輸入毫升 -> 除1000
-                        final_conv = cus_mat_qty / 1000.0
                     
                     ex_idx = next((i for i, item in enumerate(st.session_state.custom_recipe_pool) if item['食材編號'] == mat_info['prod_id']), None)
                     new_pool_dict = {"食材名稱": mat_info['prod_name'], "食材編號": mat_info['prod_id'], "單位用量": final_conv, "單位": mat_info['use_unit']}
@@ -893,12 +866,12 @@ with pos_tabs[2]:
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.markdown(f"**進貨定義單位：** `{db_unit_b if db_unit_b else '未選擇'}`")
                 
-            # 重量與液體單位智慧選取與防呆判定 (B模式，已移除 kl)
+            # 重量單位智慧選取與防呆判定 (B模式，已完全移除公升與毫升換算)
             b_conversion_mode = "不換算"
             if db_unit_b:
                 unit_lower_b = db_unit_b.lower()
                 with col_b_convert:
-                    if unit_lower_b in ['kg', '公斤', 'g', '公克', 'kg']:
+                    if unit_lower_b in ['kg', '公斤', 'g', '公克']:
                         b_conversion_mode = st.selectbox(
                             "輸入數值的單位類型",
                             ["直接依進貨定義單位輸入", "公斤轉公克"],
@@ -909,18 +882,6 @@ with pos_tabs[2]:
                             "輸入數值的單位類型",
                             ["直接依進貨定義單位輸入", "台斤轉公克"],
                             key="b_conversion_mode_select_weight_tw"
-                        )
-                    elif unit_lower_b in ['ml', '毫升']:
-                        b_conversion_mode = st.selectbox(
-                            "輸入數值的單位類型",
-                            ["直接依進貨定義單位輸入", "公升轉毫升"],
-                            key="b_conversion_mode_select_liquid_ml"
-                        )
-                    elif unit_lower_b in ['l', '公升']:
-                        b_conversion_mode = st.selectbox(
-                            "輸入數值的單位類型",
-                            ["直接依進貨定義單位輸入", "毫升轉公升"],
-                            key="b_conversion_mode_select_liquid_l"
                         )
                     else:
                         st.text_input("單位換算", value="無需換算", disabled=True, key="b_conversion_disabled")
@@ -940,16 +901,12 @@ with pos_tabs[2]:
                 else:
                     mat_info = all_raw_df[all_raw_df['prod_name'] == b_mat_name].iloc[0]
                     
-                    # 依換算模式精準計算 (僅保留公升與毫升互轉)
+                    # 依換算模式精準計算 (僅保留重量換算)
                     final_conv = b_mat_qty
                     if b_conversion_mode == "公斤轉公克":
                         final_conv = b_mat_qty / 1000.0
                     elif b_conversion_mode == "台斤轉公克":
                         final_conv = b_mat_qty / 600.0
-                    elif b_conversion_mode == "公升轉毫升":
-                        final_conv = b_mat_qty * 1000.0
-                    elif b_conversion_mode == "毫升轉公升":
-                        final_conv = b_mat_qty / 1000.0
 
                     ex_idx = next((i for i, item in enumerate(st.session_state.pot_recipe_pool) if item['食材編號'] == mat_info['prod_id']), None)
                     new_pool_dict = {"食材名稱": mat_info['prod_name'], "食材編號": mat_info['prod_id'], "單位用量": final_conv, "單位": mat_info['use_unit']}
@@ -1101,12 +1058,12 @@ with pos_tabs[2]:
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.markdown(f"**進貨定義單位：** `{db_unit_edit if db_unit_edit else '未選擇'}`")
                 
-            # 重量與液體單位智慧選取與防呆判定 (修改/追加模式，已移除 kl)
+            # 重量單位智慧選取與防呆判定 (修改/追加模式，已完全移除公升與毫升換算)
             edit_conversion_mode = "不換算"
             if db_unit_edit:
                 unit_lower_edit = db_unit_edit.lower()
                 with col_add_convert:
-                    if unit_lower_edit in ['kg', '公斤', 'g', '公克', 'kg']:
+                    if unit_lower_edit in ['kg', '公斤', 'g', '公克']:
                         edit_conversion_mode = st.selectbox(
                             "輸入數值的單位類型",
                             ["直接依進貨定義單位輸入", "公斤轉公克"],
@@ -1117,18 +1074,6 @@ with pos_tabs[2]:
                             "輸入數值的單位類型",
                             ["直接依進貨定義單位輸入", "台斤轉公克"],
                             key="edit_conversion_mode_select_weight_tw"
-                        )
-                    elif unit_lower_edit in ['ml', '毫升']:
-                        edit_conversion_mode = st.selectbox(
-                            "輸入數值的單位類型",
-                            ["直接依進貨定義單位輸入", "公升轉毫升"],
-                            key="edit_conversion_mode_select_liquid_ml"
-                        )
-                    elif unit_lower_edit in ['l', '公升']:
-                        edit_conversion_mode = st.selectbox(
-                            "輸入數值的單位類型",
-                            ["直接依進貨定義單位輸入", "毫升轉公升"],
-                            key="edit_conversion_mode_select_liquid_l"
                         )
                     else:
                         st.text_input("單位換算", value="無需換算", disabled=True, key="edit_conversion_disabled")
@@ -1146,16 +1091,12 @@ with pos_tabs[2]:
                         mat_info = matched_mats.iloc[0]
                         existing_idx = next((i for i, item in enumerate(st.session_state.editing_recipe_list) if item['食材編號'] == mat_info['prod_id']), None)
                         
-                        # 精準處理對應的換算公式 (僅保留公升與毫升互轉)
+                        # 精準處理對應的換算公式 (僅保留重量換算)
                         final_edit_conv = add_edit_mat_qty
                         if edit_conversion_mode == "公斤轉公克":
                             final_edit_conv = add_edit_mat_qty / 1000.0
                         elif edit_conversion_mode == "台斤轉公克":
                             final_edit_conv = add_edit_mat_qty / 600.0
-                        elif edit_conversion_mode == "公升轉毫升":
-                            final_edit_conv = add_edit_mat_qty * 1000.0
-                        elif edit_conversion_mode == "毫升轉公升":
-                            final_edit_conv = add_edit_mat_qty / 1000.0
                         
                         new_item_dict = {"食材名稱": mat_info['prod_name'], "食材編號": mat_info['prod_id'], "單位用量": float(final_edit_conv), "單位": mat_info['use_unit']}
                         
