@@ -736,14 +736,14 @@ with pos_tabs[2]:
                     elif unit_lower in ['ml', '毫升']:
                         cus_conversion_mode = st.selectbox(
                             "輸入數值的單位類型",
-                            ["直接依進貨定義單位輸入", "公升轉毫升"],
+                            ["直接依進貨定義單位輸入", "毫升轉公升"],
                             key="cus_conversion_mode_select_liquid_ml"
                         )
                     # 情況4: 進貨單位是 液體 (公升/l)
                     elif unit_lower in ['l', '公升']:
                         cus_conversion_mode = st.selectbox(
                             "輸入數值的單位類型",
-                            ["直接依進貨定義單位輸入", "毫升轉公升"],
+                            ["直接依進貨定義單位輸入", "公升轉毫升"],
                             key="cus_conversion_mode_select_liquid_l"
                         )
                     else:
