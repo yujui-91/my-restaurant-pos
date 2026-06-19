@@ -718,7 +718,7 @@ with pos_tabs[2]:
                 with col_cus_convert:
                     cus_conversion_mode = st.selectbox(
                         "輸入數值的單位類型",
-                        ["直接依進貨定義單位輸入", "我想輸入「公克(g)」幫我換算回 公斤(kg) [數值除以1000]", "我想輸入「公克(g)」幫我換算回 台斤 [數值除以600]"],
+                        ["直接依進貨定義單位輸入", "公斤轉公克", "台斤轉公克"],
                         key="cus_conversion_mode_select"
                     )
             else:
