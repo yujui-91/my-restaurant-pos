@@ -1077,7 +1077,7 @@ with pos_tabs[2]:
                     if row["移除"]:
                         has_changes = True
                         continue
-                    if row["單位用量"] != st.session_state.editing_recipe_list[idx]["鍵入用量"]: # 這裡統一保持唯讀參考
+                    if row["單位用量"] != st.session_state.editing_recipe_list[idx]["單位用量"]: # 這裡統一保持唯讀參考
                         has_changes = True
                     updated_recipe_list.append({"食材名稱": row["食材名稱"], "食材編號": row["食材編號"], "單位用量": float(row["單位用量"]), "單位": row["單位"]})
                     
