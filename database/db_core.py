@@ -6,6 +6,12 @@ import libsql
 import sqlite3
 import os
 import pandas as pd
+import pytz  # 引入時區套件
+
+def get_taiwan_now():
+    """獲取精準的台灣時間"""
+    tw_tz = pytz.timezone('Asia/Taipei')
+    return datetime.now(tw_tz)
 
 def get_db_conn():
     """
@@ -101,7 +107,7 @@ def init_db():
     conn.close()
 
 def log_history(user, action, details, main_category="", shared_cursor=None):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = get_taiwan_now().strftime("%Y-%m-%d %H:%M:%S")
     
     if not main_category:
         if action in ['多品項收銀結帳', '多品項收銀結帳-已微調更正', '訂單作廢成功', '更正點餐數量']:
@@ -257,7 +263,6 @@ def show_pending_toast():
 # 集中快取定義區（以下為新移入之快取函式，皆清楚備註對應分頁）
 # ============================================================================
 
-# 備註：對應【首頁 (app.py)】的快取 
 @st.cache_data(ttl=60)
 def cached_fetch_safety_items():
     """快取獲取供安全庫存設定的品項列表 (R和S)"""
@@ -269,7 +274,6 @@ def cached_fetch_safety_items():
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-# 備註：對應【首頁 (app.py)】的快取
 @st.cache_data(ttl=60)
 def cached_fetch_low_stock_alerts():
     """快取檢測低庫存補貨預警"""
@@ -289,10 +293,9 @@ def cached_fetch_low_stock_alerts():
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-# 備註：對應【首頁 (app.py)】的快取
 @st.cache_data(ttl=60)
 def cached_fetch_merged_stock(stock_filter):
-    """快取獲取目前庫存明細 (依據篩選條件動態變更快取鍵值)"""
+    """快取獲取目前庫存明細"""
     if stock_filter == "僅看食材 (R)":
         query_condition = "WHERE p.prod_id LIKE 'R%'"
     elif stock_filter == "僅看用品 (S)":
@@ -326,7 +329,6 @@ def cached_fetch_merged_stock(stock_filter):
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-# 備註：對應【首頁 (app.py)】的快取
 @st.cache_data(ttl=60)
 def cached_fetch_batch_details(target_prod_id):
     """快取獲取指定品項的有效進貨批次明細"""
@@ -349,7 +351,6 @@ def cached_fetch_batch_details(target_prod_id):
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-# 備註：對應【首頁 (app.py)】的快取
 @st.cache_data(ttl=60)
 def cached_fetch_disabled_items_with_stock():
     """快取獲取包含殘留庫存的已下架商品清單"""
@@ -367,7 +368,6 @@ def cached_fetch_disabled_items_with_stock():
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-# 備註：對應【首頁 (app.py)】的快取
 @st.cache_data(ttl=60)
 def cached_fetch_disabled_batches(target_disabled_prod_id):
     """快取獲取特定下架品項的殘留批次明細"""
@@ -385,7 +385,6 @@ def cached_fetch_disabled_batches(target_disabled_prod_id):
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-# 備註：對應【分頁 1：POS結帳 (pages/1_POS結帳.py)】的快取
 @st.cache_data(ttl=60)
 def cached_fetch_active_dishes():
     conn = get_db_conn()
@@ -396,7 +395,6 @@ def cached_fetch_active_dishes():
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-# 備註：對應【分頁 1：POS結帳 (pages/1_POS結帳.py)】的快取
 @st.cache_data(ttl=60)
 def cached_fetch_active_materials():
     conn = get_db_conn()
@@ -407,7 +405,6 @@ def cached_fetch_active_materials():
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-# 備註：對應【分頁 1：POS結帳 (pages/1_POS結帳.py)】的快取
 @st.cache_data(ttl=30)
 def cached_fetch_today_orders(start_str, end_str):
     conn = get_db_conn()
@@ -422,7 +419,6 @@ def cached_fetch_today_orders(start_str, end_str):
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-# 備註：對應【分頁 1：POS結帳 (pages/1_POS結帳.py)】的快取
 @st.cache_data(ttl=60)
 def cached_fetch_dish_bom_recipe(target_dish_id):
     conn = get_db_conn()
@@ -436,7 +432,6 @@ def cached_fetch_dish_bom_recipe(target_dish_id):
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-# 備註：對應【分頁 1：POS結帳 (pages/1_POS結帳.py)】的快取
 @st.cache_data(ttl=60)
 def cached_fetch_all_dishes_raw():
     conn = get_db_conn()
@@ -447,7 +442,6 @@ def cached_fetch_all_dishes_raw():
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-# 備註：對應【分頁 1：POS結帳 (pages/1_POS結帳.py)】的快取
 @st.cache_data(ttl=60)
 def cached_fetch_all_materials_raw():
     conn = get_db_conn()
@@ -458,7 +452,6 @@ def cached_fetch_all_materials_raw():
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-# 備註：對應【分頁 2：採購進貨單 (pages/2_採購進貨單.py)】的快取
 @st.cache_data(ttl=60)
 def cached_fetch_existing_items_for_po(prefix):
     conn = get_db_conn()
@@ -472,7 +465,6 @@ def cached_fetch_existing_items_for_po(prefix):
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-# 備註：對應【分頁 2：採購進貨單 (pages/2_採購進貨單.py)】的快取
 @st.cache_data(ttl=60)
 def cached_fetch_history_batches(where_clause, params_tuple):
     conn = get_db_conn()
@@ -493,7 +485,6 @@ def cached_fetch_history_batches(where_clause, params_tuple):
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-# 備註：對應【分頁 3：庫存調整 (pages/3_庫存調整.py)】的快取
 @st.cache_data(ttl=60)
 def cached_fetch_unique_items_to_adjust(prefix):
     conn = get_db_conn()
@@ -510,7 +501,6 @@ def cached_fetch_unique_items_to_adjust(prefix):
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-# 備註：對應【分頁 3：庫存調整 (pages/3_庫存調整.py)】的快取
 @st.cache_data(ttl=60)
 def cached_fetch_batches_by_prod(target_prod_id):
     conn = get_db_conn()
@@ -527,7 +517,6 @@ def cached_fetch_batches_by_prod(target_prod_id):
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-# 備註：對應【分頁 4：盤點 (pages/4_盤點.py)】的快取
 @st.cache_data(ttl=60)
 def cached_fetch_products_in_stock_for_audit(prefix):
     conn = get_db_conn()
@@ -543,7 +532,6 @@ def cached_fetch_products_in_stock_for_audit(prefix):
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-# 備註：對應【分頁 4：盤點 (pages/4_盤點.py)】的快取
 @st.cache_data(ttl=60)
 def cached_fetch_batch_details_for_audit(target_prod_id):
     conn = get_db_conn()
@@ -560,7 +548,6 @@ def cached_fetch_batch_details_for_audit(target_prod_id):
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-# 備註：對應【分頁 5：歷史記錄 (pages/5_歷史記錄.py)】的快取
 @st.cache_data(ttl=60)
 def cached_fetch_audit_history(start_str, end_str, selected_main_action):
     conn = get_db_conn()
@@ -581,7 +568,6 @@ def cached_fetch_audit_history(start_str, end_str, selected_main_action):
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-# 備註：對應【分頁 6：財務與消耗量報告 (pages/6_財務與消耗量報告.py)】的快取
 @st.cache_data(ttl=60)
 def cached_get_sales_summary(start_str, end_str):
     conn = get_db_conn()
@@ -596,7 +582,6 @@ def cached_get_sales_summary(start_str, end_str):
     conn.close()
     return pd.DataFrame(r, columns=cols)
 
-# 備註：對應【分頁 6：財務與消耗量報告 (pages/6_財務與消耗量報告.py)】的快取
 @st.cache_data(ttl=60)
 def cached_get_dish_rank(start_str, end_str):
     conn = get_db_conn()
@@ -614,7 +599,6 @@ def cached_get_dish_rank(start_str, end_str):
     conn.close()
     return pd.DataFrame(r, columns=cols)
 
-# 備註：對應【分頁 6：財務與消耗量報告 (pages/6_財務與消耗量報告.py)】的快取
 @st.cache_data(ttl=60)
 def cached_get_material_usage(start_str, end_str):
     conn = get_db_conn()
@@ -632,7 +616,6 @@ def cached_get_material_usage(start_str, end_str):
     conn.close()
     return pd.DataFrame(r, columns=cols)
 
-# 備註：對應【分頁 6：財務與消耗量報告 (pages/6_財務與消耗量報告.py)】的快取
 @st.cache_data(ttl=60)
 def cached_get_expenses_raw():
     conn = get_db_conn()
@@ -643,7 +626,6 @@ def cached_get_expenses_raw():
     conn.close()
     return pd.DataFrame(r, columns=cols)
 
-# 備註：對應【分頁 6：財務與消耗量報告 (pages/6_財務與消耗量報告.py)】的快取
 @st.cache_data(ttl=60)
 def cached_get_actual_purchase_details(start_date_str, end_date_str):
     conn = get_db_conn()
@@ -661,7 +643,6 @@ def cached_get_actual_purchase_details(start_date_str, end_date_str):
     conn.close()
     return pd.DataFrame(r, columns=cols)
 
-# 備註：對應【分頁 6：財務與消耗量報告 (pages/6_財務與消耗量報告.py)】的快取
 @st.cache_data(ttl=60)
 def cached_get_operational_expenses_base():
     conn = get_db_conn()
