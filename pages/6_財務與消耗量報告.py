@@ -30,10 +30,7 @@ report_option = st.selectbox(
     key="finance_time_filter"
 )
 
-# 依據台灣當下時間進行基準初始化
-import pytz
-tw_tz = pytz.timezone('Asia/Taipei')
-now = datetime.now(tw_tz)
+now = datetime.now()
 
 if report_option == "今天":
     start_date = now.date()
@@ -45,7 +42,6 @@ elif report_option == "過去 30 天":
     start_date = (now - timedelta(days=30)).date()
     end_date = now.date()
 else:
-    st.caption("💡 提示：若只想指定查看「某一天」，請將開始與結束日期選在同一天即可。")
     c1, c2 = st.columns(2)
     with c1:
         start_date = st.date_input("自訂開始日期", value=now.date() - timedelta(days=1), key="finance_start_day")
@@ -57,19 +53,19 @@ end_str = datetime.combine(end_date, datetime.max.time()).strftime("%Y-%m-%d %H:
 
 st.caption(f"📈 目前統計審計區間：{start_date} ～ {end_date}")
 
-# 計算當前統計區間涵蓋的每一天與各年份月份的天數分佈，用以精準天數均攤 (Pro-rata)
-covered_days_by_month = {}
+# 計算查詢區間內，每天分別落在哪個月份，用來做精確的天數均攤比對
+query_days_by_month = {}
 current_ptr = start_date
-total_query_days = 0
 while current_ptr <= end_date:
     m_str = current_ptr.strftime("%Y-%m")
-    covered_days_by_month[m_str] = covered_days_by_month.get(m_str, 0) + 1
-    total_query_days += 1
+    query_days_by_month[m_str] = query_days_by_month.get(m_str, 0) + 1
     current_ptr += timedelta(days=1)
 
-# 1. 營業總收入
+covered_target_months = set(query_days_by_month.keys())
+
 df_sales_summary = cached_get_sales_summary(start_str, end_str)
 total_revenue = float(df_sales_summary.iloc[0]['rev'])
+total_food_cost = float(df_sales_summary.iloc[0]['cst'])
 
 df_dish_rank_raw = cached_get_dish_rank(start_str, end_str)
 dish_sales = dict(zip(df_dish_rank_raw['餐點名稱'], df_dish_rank_raw['銷售份數']))
@@ -77,22 +73,41 @@ dish_sales = dict(zip(df_dish_rank_raw['餐點名稱'], df_dish_rank_raw['銷售
 df_mat_rank_raw = cached_get_material_usage(start_str, end_str)
 material_usage = dict(zip(df_mat_rank_raw['食材物料'], df_mat_rank_raw['消耗總數量']))
 
-# 2. 當期真實進貨成本 (直接拉取此查詢時間區間內實際登記的進貨總額 R + S)
+# 報廢損失計算保留於背景（若其他功能需要），但不再計入最終真實淨利公式
+df_expenses_raw = cached_get_expenses_raw()
+total_stock_loss = 0.0
+for _, row in df_expenses_raw.iterrows():
+    if "品項:C" not in row['action']:
+        details = row['details']
+        target_month_match = re.search(r"目標歸帳月份:\s*(\d{4}-\d{2})", details)
+        if target_month_match:
+            assigned_month = target_month_match.group(1)
+        else:
+            try:
+                assigned_month = datetime.strptime(row['timestamp'], "%Y-%m-%d %H:%M:%S").strftime("%Y-%m")
+            except:
+                assigned_month = ""
+        
+        if assigned_month in covered_target_months:
+            amt_match = re.search(r"總值變動:?\s*\$?(-?[\d\.]+)", details)
+            if amt_match:
+                change_amt = float(amt_match.group(1))
+                total_stock_loss += abs(change_amt) if change_amt < 0 else 0.0
+
 df_actual_purchase_details = cached_get_actual_purchase_details(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
 total_purchase_cost = 0.0
 purchase_records = []
 for _, row in df_actual_purchase_details.iterrows():
     this_purchase_amt = float(row['original_qty'] * row['cost'])
+    total_purchase_cost += this_purchase_amt
     
     p_id = row['prod_id']
     if p_id.startswith('R'):
         cate_label = "食材 (R)"
-        total_purchase_cost += this_purchase_amt # 食材進貨成本
-    elif p_id.startswith('S'):
-        cate_label = "用品 (S)"
-        total_purchase_cost += this_purchase_amt # 用品進貨成本
     elif p_id.startswith('C'):
         cate_label = "營運帳單 (C)"
+    elif p_id.startswith('S'):
+        cate_label = "用品 (S)"
     else:
         cate_label = "其他"
 
@@ -104,7 +119,6 @@ for _, row in df_actual_purchase_details.iterrows():
         "進貨總額": this_purchase_amt
     })
 
-# 3. 營運帳單費用天數均攤優化算法 (Pro-rata)，完美解決每天重複計算整月費用的問題
 df_c_batches, df_c_history = cached_get_operational_expenses_base()
 
 batch_target_months = {}
@@ -119,10 +133,8 @@ for _, log_row in df_c_history.iterrows():
             if b_id_str:
                 batch_target_months[int(b_id_str)] = assigned_month
 
-# 將所有帳單費用依照其歸屬月份加總
-monthly_bill_totals = {}
-monthly_bill_items = {}
-
+total_op_expense = 0.0
+c_expense_records = []
 for _, row in df_c_batches.iterrows():
     b_id = int(row['batch_id'])
     if b_id in batch_target_months:
@@ -133,60 +145,51 @@ for _, row in df_c_batches.iterrows():
         except:
             assigned_month = ""
             
-    if assigned_month:
-        expense_val = float(row['qty'] * row['cost'])
-        if expense_val > 0:
-            monthly_bill_totals[assigned_month] = monthly_bill_totals.get(assigned_month, 0.0) + expense_val
-            if assigned_month not in monthly_bill_items:
-                monthly_bill_items[assigned_month] = []
-            monthly_bill_items[assigned_month].append({"name": row['prod_name'], "val": expense_val})
-
-# 精算本次區間中，各月份應依天數比例分攤的帳單總合金額
-total_op_expense = 0.0
-c_expense_records = []
-
-for m_str, days_in_query in covered_days_by_month.items():
-    if m_str in monthly_bill_totals:
-        try:
-            yr, mn = map(int, m_str.split("-"))
-            days_in_month = calendar.monthrange(yr, mn)[1]
-        except:
-            days_in_month = 30
+    if assigned_month in covered_target_months:
+        full_expense_val = float(row['qty'] * row['cost'])
+        if full_expense_val > 0:
+            # 實作天數均攤 (Pro-rata)
+            try:
+                yr, mn = map(int, assigned_month.split("-"))
+                days_in_month = calendar.monthrange(yr, mn)[1]
+            except:
+                days_in_month = 30 # 備用防錯
             
-        # 計算此月份在此區間的均攤權重
-        ratio = days_in_query / days_in_month
-        month_total_amt = monthly_bill_totals[m_str]
-        total_op_expense += month_total_amt * ratio
-        
-        for item in monthly_bill_items[m_str]:
+            # 每日均攤費用
+            daily_cost = full_expense_val / days_in_month
+            # 乘上該月份在本次查詢區間內實際包含的天數
+            days_in_query = query_days_by_month.get(assigned_month, 0)
+            prorated_expense_val = daily_cost * days_in_query
+            
+            total_op_expense += prorated_expense_val
             c_expense_records.append({
-                "費用項目": f"{item['name']} ({m_str} 依區間天數均攤 {days_in_query}/{days_in_month})",
-                "金額": item['val'] * ratio
+                "費用項目": f"{row['prod_name']} (批次 {b_id})",
+                "全月總額": full_expense_val,
+                "期間均攤金額": prorated_expense_val
             })
 
-# 4. 損益與門市淨利率計算 (依據全新要求公式：總營業額 - 當天進貨成本 - 帳單費用)
+# 最終真實淨利公式修改（現金流水制）：總營業額 - 當期進貨成本 - 帳單費用均攤
 net_profit = total_revenue - total_purchase_cost - total_op_expense
-margin = (net_profit / total_revenue * 100) if total_revenue > 0 else 0.0
 
-st.markdown("### 🍳 門市動態損益")
-st.info(f"💡 **現金流水制生效中：** 真實淨利 = 營業總收入 - 期間進貨總額 - 帳單費用(天數均攤)。報廢損失已包含在進貨成本中，不再重複扣除。")
+st.markdown("### 橫 門市動態損益")
+st.info(f"💡 **現金流水與均攤制生效中：** 目前選擇的區間涵蓋了 {', '.join(covered_target_months)} 的帳單，已依查詢天數比例精準均攤費用。")
 
 if use_mobile_view:
     row1_c1, row1_c2, row1_c3 = st.columns(3)
     with row1_c1: st.metric("🏪 營業總收入", f"${total_revenue:,.0f}")
-    with row1_c2: st.metric("📥 期間進貨總額", f"${total_purchase_cost:,.0f}")
-    with row1_c3: st.metric("⚡ 帳單費用 (按日均攤)", f"${total_op_expense:,.1f}")
+    with row1_c2: st.metric("🥩 食材消耗成本", f"${total_food_cost:,.0f}")
+    with row1_c3: st.metric("⚡ 帳單費用 (均攤)", f"${total_op_expense:,.1f}")
         
     row2_c1, row2_c2 = st.columns(2)
-    with row2_c1: st.metric("🔥 最終真實淨利", f"${net_profit:,.1f}")
-    with row2_c2: st.metric("📈 門市淨利率", f"{margin:.1f}%")
+    with row2_c1: st.metric("📥 期間進貨總額", f"${total_purchase_cost:,.0f}")
+    with row2_c2: st.metric("🔥 最終真實淨利", f"${net_profit:,.1f}")
 else:
-    a, b, c, d, e = st.columns(5)
+    a, b, c, po_box, d = st.columns(5)
     a.metric("🏪 營業總收入", f"${total_revenue:,.0f}")
-    b.metric("📥 期間進貨總額", f"${total_purchase_cost:,.0f}")
-    c.metric("⚡ 帳單費用 (按日均攤)", f"${total_op_expense:,.1f}")
+    b.metric("🥩 食材消耗成本", f"${total_food_cost:,.0f}")
+    c.metric("⚡ 帳單費用 (均攤)", f"${total_op_expense:,.1f}")
+    po_box.metric("📥 期間進貨總額", f"${total_purchase_cost:,.0f}")  
     d.metric("🔥 最終真實淨利", f"${net_profit:,.1f}")
-    e.metric("📈 門市淨利率", f"{margin:.1f}%")
 
 st.divider()
 
