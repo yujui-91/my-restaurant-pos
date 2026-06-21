@@ -178,18 +178,18 @@ if use_mobile_view:
     row1_c1, row1_c2, row1_c3 = st.columns(3)
     with row1_c1: st.metric("🏪 營業總收入", f"${total_revenue:,.0f}")
     with row1_c2: st.metric("🥩 食材消耗成本", f"${total_food_cost:,.0f}")
-    with row1_c3: st.metric("⚡ 帳單費用 (均攤)", f"${total_op_expense:,.1f}")
+    with row1_c3: st.metric("⚡ 帳單費用 (月均攤)", f"${total_op_expense:,.1f}")
         
     row2_c1, row2_c2 = st.columns(2)
     with row2_c1: st.metric("📥 期間進貨總額", f"${total_purchase_cost:,.0f}")
-    with row2_c2: st.metric("🔥 最終真實淨利", f"${net_profit:,.1f}")
+    with row2_c2: st.metric("🔥 最終真實淨利(總收入-進貨-均分帳單費用)", f"${net_profit:,.1f}")
 else:
     a, b, c, po_box, d = st.columns(5)
     a.metric("🏪 營業總收入", f"${total_revenue:,.0f}")
     b.metric("🥩 食材消耗成本", f"${total_food_cost:,.0f}")
-    c.metric("⚡ 帳單費用 (均攤)", f"${total_op_expense:,.1f}")
+    c.metric("⚡ 帳單費用 (月均攤)", f"${total_op_expense:,.1f}")
     po_box.metric("📥 期間進貨總額", f"${total_purchase_cost:,.0f}")  
-    d.metric("🔥 最終真實淨利", f"${net_profit:,.1f}")
+    d.metric("🔥 最終真實淨利(總收入-進貨-均分帳單費用)", f"${net_profit:,.1f}")
 
 st.divider()
 

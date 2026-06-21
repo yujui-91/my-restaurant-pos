@@ -1146,6 +1146,24 @@ with pos_tabs[2]:
 
             new_dish_price = st.number_input("💵 調整此餐點售價", step=1, key="edit_price_input", value=max(old_price, 1))
             
+            # --- 新增功能：即時物料成本、純利、毛利率顯示區面版 ---
+            current_editing_cost = 0.0
+            for item in st.session_state.editing_recipe_list:
+                matched_raw = all_raw_df[all_raw_df['prod_id'] == item['食材編號']]
+                r_cost = float(matched_raw.iloc[0]['cost']) if not matched_raw.empty else 0.0
+                current_editing_cost += float(item['單位用量']) * r_cost
+
+            current_editing_profit = float(new_dish_price) - current_editing_cost
+            current_editing_margin = (current_editing_profit / new_dish_price * 100) if new_dish_price > 0 else 0.0
+
+            st.markdown(f"""
+            > 💡 **此餐點配方與售價即時動態預估試算面板：**
+            > * 調整後餐點售價： **{new_dish_price} 元**
+            > * 依目前用量推算【**單份標準原物料成本**】： **${current_editing_cost:,.2f} 元**
+            > * 預估修正後【**單份毛利**】： **${current_editing_profit:,.2f} 元** ｜ 預估毛利率: **{current_editing_margin:.1f}%**
+            """)
+            # ---------------------------------------------------
+            
             recipe_has_negative = any(float(item["單位用量"]) <= 0 for item in st.session_state.editing_recipe_list)
             
             if st.button("💾 確認變更", type="primary", use_container_width=True):
