@@ -24,6 +24,12 @@ st.subheader("📊 門市營收、成本與損益分析報告")
 
 use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=False, key="finance_mobile_toggle")
 
+MONTH_CHINESE = {
+    1: "一月", 2: "二月", 3: "三月", 4: "四月",
+    5: "五月", 6: "六月", 7: "七月", 8: "八月",
+    9: "九月", 10: "十月", 11: "十一月", 12: "十二月"
+}
+
 report_option = st.selectbox(
     "📅 請選擇財務統計區間：", 
     ["今天", "過去 7 天", "過去 30 天", "自訂區間 (自選起訖日期)"], 
@@ -31,7 +37,9 @@ report_option = st.selectbox(
 )
 
 now = datetime.now()
+current_month_zh = MONTH_CHINESE[now.month]
 
+# --- 日期判定邏輯 ---
 if report_option == "今天":
     start_date = now.date()
     end_date = now.date()
@@ -48,6 +56,12 @@ else:
     with c2:
         end_date = st.date_input("自訂結束日期", value=now.date(), key="finance_end_day")
 
+# --- 核心修改：轉換 start_date 與 end_date 的中文月份 ---
+# 透過 .month 取得數字（1~12），再丟進字典轉換成中文
+start_month_zh = MONTH_CHINESE[start_date.month]
+end_month_zh = MONTH_CHINESE[end_date.month]
+
+# --- 原始的字串轉換 ---
 start_str = datetime.combine(start_date, datetime.min.time()).strftime("%Y-%m-%d %H:%M:%S")
 end_str = datetime.combine(end_date, datetime.max.time()).strftime("%Y-%m-%d %H:%M:%S")
 
