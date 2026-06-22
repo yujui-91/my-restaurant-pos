@@ -63,9 +63,6 @@ else:
 start_month_zh = MONTH_CHINESE[start_date.strftime("%B")]
 end_month_zh = MONTH_CHINESE[end_date.strftime("%B")]
 
-# --- 原始的字串轉換 ---
-start_str = datetime.combine(start_date, datetime.min.time()).strftime("%Y-%m-%d %H:%M:%S")
-end_str = datetime.combine(end_date, datetime.max.time()).strftime("%Y-%m-%d %H:%M:%S")
 
 st.caption(f"📈 目前統計審計區間：{start_date} ～ {end_date}")
 
