@@ -17,7 +17,7 @@ with col_f1:
     history_time_option = st.selectbox(
         "📅 選擇查看時間區間",
         ["今天", "過去 7 天", "過去 30 天", "自訂區間 (自選起訖日期)"],
-        index=1,
+        index=0,
         key="history_filter"
     )
 
