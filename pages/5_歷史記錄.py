@@ -2,7 +2,6 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-import re
 from datetime import datetime, timedelta
 from database.db_core import get_db_conn
 # 從 db_core 載入所需的快取函式
@@ -60,24 +59,8 @@ st.caption(f"目前查看審計區間：{start_dt.strftime('%Y-%m-%d %H:%M:%S')}
 
 df_hist = cached_fetch_audit_history(start_str, end_str, selected_main_action)
 
-# 建立將日誌文字內的目標歸帳月份轉換為中文顯示的輔助函式
-def format_log_details_zh(text):
-    if not isinstance(text, str):
-        return text
-    # 分離原本的結構化 JSON 資料（若存在）
-    main_text = text.split("||STRUCT_DATA||")[0]
-    
-    # 透過正則表達式，將 "目標歸帳月份: YYYY-MM" 替換為 "目標歸帳月份: YYYY年M月"
-    def repl(match):
-        yr = match.group(1)
-        mn = int(match.group(2))
-        return f"目標歸帳月份: {yr}年{mn}月"
-        
-    return re.sub(r"目標歸帳月份:\s*(\d{4})-(\d{2})", repl, main_text)
-
 if not df_hist.empty:
-    # 套用中文格式化與移除結構化尾碼
-    df_hist['詳細說明'] = df_hist['詳細說明'].apply(format_log_details_zh)
+    df_hist['詳細說明'] = df_hist['詳細說明'].apply(lambda x: str(x).split("||STRUCT_DATA||")[0] if "||STRUCT_DATA||" in str(x) else x)
 
 if not df_hist.empty:
     st.metric("符合條件紀錄數", len(df_hist))

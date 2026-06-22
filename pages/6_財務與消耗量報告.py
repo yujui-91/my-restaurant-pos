@@ -53,16 +53,6 @@ end_str = datetime.combine(end_date, datetime.max.time()).strftime("%Y-%m-%d %H:
 
 st.caption(f"📈 目前統計審計區間：{start_date} ～ {end_date}")
 
-# 建立一個將 YYYY-MM 格式轉換為中文月份的輔助函式
-def to_chinese_month(ym_str):
-    if not ym_str or "-" not in ym_str:
-        return ym_str
-    try:
-        yr, mn = ym_str.split("-")
-        return f"{yr}年{int(mn)}月"
-    except:
-        return ym_str
-
 # 計算查詢區間內，每天分別落在哪個月份，用來做精確的天數均攤比對
 query_days_by_month = {}
 current_ptr = start_date
@@ -72,9 +62,6 @@ while current_ptr <= end_date:
     current_ptr += timedelta(days=1)
 
 covered_target_months = set(query_days_by_month.keys())
-
-# 將涵蓋的月份轉換成中文顯示文字
-covered_months_zh = [to_chinese_month(m) for m in sorted(list(covered_target_months))]
 
 df_sales_summary = cached_get_sales_summary(start_str, end_str)
 total_revenue = float(df_sales_summary.iloc[0]['rev'])
@@ -185,7 +172,7 @@ for _, row in df_c_batches.iterrows():
 net_profit = total_revenue - total_purchase_cost - total_op_expense
 
 st.markdown("### 橫 門市動態損益")
-st.info(f"💡 **現金流水與均攤制生效中：** 目前選擇的區間涵蓋了 {', '.join(covered_months_zh)} 的帳單，已依查詢天數比例精準均攤費用。")
+st.info(f"💡 **現金流水與均攤制生效中：** 目前選擇的區間涵蓋了 {', '.join(covered_target_months)} 的帳單，已依查詢天數比例精準均攤費用。")
 
 if use_mobile_view:
     row1_c1, row1_c2, row1_c3 = st.columns(3)
