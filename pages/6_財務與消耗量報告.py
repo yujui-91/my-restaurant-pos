@@ -25,9 +25,9 @@ st.subheader("📊 門市營收、成本與損益分析報告")
 use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=False, key="finance_mobile_toggle")
 
 MONTH_CHINESE = {
-    1: "一月", 2: "二月", 3: "三月", 4: "四月",
-    5: "五月", 6: "六月", 7: "七月", 8: "八月",
-    9: "九月", 10: "十月", 11: "十一月", 12: "十二月"
+    "January": "一月", "February": "二月", "March": "三月", "April": "四月",
+    "May": "五月", "June": "六月", "July": "七月", "August": "八月",
+    "September": "九月", "October": "十月", "November": "十一月", "December": "十二月"
 }
 
 report_option = st.selectbox(
