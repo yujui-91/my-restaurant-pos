@@ -24,13 +24,6 @@ st.subheader("📊 門市營收、成本與損益分析報告")
 
 use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=False, key="finance_mobile_toggle")
 
-# 英文月份對照中文
-MONTH_CHINESE = {
-    "January": "一月", "February": "二月", "March": "三月", "April": "四月",
-    "May": "五月", "June": "六月", "July": "七月", "August": "八月",
-    "September": "九月", "October": "十月", "November": "十一月", "December": "十二月"
-}
-
 report_option = st.selectbox(
     "📅 請選擇財務統計區間：", 
     ["今天", "過去 7 天", "過去 30 天", "自訂區間 (自選起訖日期)"], 
@@ -38,9 +31,6 @@ report_option = st.selectbox(
 )
 
 now = datetime.now()
-
-# 【修正 1】使用 .strftime("%B") 取得當前英文月份字串來查字典
-current_month_zh = MONTH_CHINESE[now.strftime("%B")]
 
 # --- 日期判定邏輯 ---
 if report_option == "今天":
@@ -59,11 +49,6 @@ else:
     with c2:
         end_date = st.date_input("自訂結束日期", value=now.date(), key="finance_end_day")
 
-# 【修正 2】將 start_date 與 end_date 也改用 .strftime("%B") 轉換，避免 KeyError
-start_month_zh = MONTH_CHINESE[start_date.strftime("%B")]
-end_month_zh = MONTH_CHINESE[end_date.strftime("%B")]
-
-# --- 原始的字串轉換 ---
 start_str = datetime.combine(start_date, datetime.min.time()).strftime("%Y-%m-%d %H:%M:%S")
 end_str = datetime.combine(end_date, datetime.max.time()).strftime("%Y-%m-%d %H:%M:%S")
 
