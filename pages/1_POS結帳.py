@@ -677,7 +677,7 @@ with pos_tabs[2]:
     creation_mode = st.radio("🛠️ 請選擇餐點建立模式：", ["A模式：單份餐點", "B模式：整鍋"], horizontal=True)
 
     # 包含所有需要做重量換算的定義單位列表
-    WEIGHT_UNITS = ['kg', '公斤', 'g', '公克', '臺斤', '台斤', 'Kg', 'KG']
+    WEIGHT_UNITS = ['kg', '公斤', 'g', '公克', '臺斤', '台斤', '斤', 'Kg', 'KG']
 
     if creation_mode == "A模式：單份餐點":
         with st.expander("🛠️ 展開配方調配面板", expanded=True):
@@ -717,7 +717,7 @@ with pos_tabs[2]:
                             key="cus_conversion_mode_select_weight_kg"
                         )
                     # 情況2: 進貨單位是 台斤
-                    elif unit_lower in ['臺斤', '台斤']:
+                    elif unit_lower in ['臺斤', '台斤', '斤']:
                         cus_conversion_mode = st.selectbox(
                             "輸入數值的單位類型",
                             ["直接依進貨定義單位輸入", "台斤轉公克"],
@@ -877,7 +877,7 @@ with pos_tabs[2]:
                             ["直接依進貨定義單位輸入", "公斤轉公克"],
                             key="b_conversion_mode_select_weight_kg"
                         )
-                    elif unit_lower_b in ['臺斤', '台斤']:
+                    elif unit_lower_b in ['臺斤', '台斤', '斤']:
                         b_conversion_mode = st.selectbox(
                             "輸入數值的單位類型",
                             ["直接依進貨定義單位輸入", "台斤轉公克"],
@@ -1069,7 +1069,7 @@ with pos_tabs[2]:
                             ["直接依進貨定義單位輸入", "公斤轉公克"],
                             key="edit_conversion_mode_select_weight_kg"
                         )
-                    elif unit_lower_edit in ['臺斤', '台斤']:
+                    elif unit_lower_edit in ['臺斤', '台斤', '斤']:
                         edit_conversion_mode = st.selectbox(
                             "輸入數值的單位類型",
                             ["直接依進貨定義單位輸入", "台斤轉公克"],
