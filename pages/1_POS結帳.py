@@ -705,6 +705,7 @@ with pos_tabs[2]:
                 st.markdown(f"**進貨定義單位：** `{db_unit_a if db_unit_a else '未選擇'}`")
                 
             # 重量單位智慧選取與防呆判定（已完全移除公升與毫升換算）
+            # 這裡不改動原本 A模式
             cus_conversion_mode = "不換算"
             if db_unit_a:
                 unit_lower = db_unit_a.lower()
@@ -866,7 +867,7 @@ with pos_tabs[2]:
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.markdown(f"**進貨定義單位：** `{db_unit_b if db_unit_b else '未選擇'}`")
                 
-            # 重量單位智慧選取與防呆判定 (B模式，已完全移除公升與毫升換算)
+            # 重量單位智慧選取與防呆判定 (B模式)
             b_conversion_mode = "不換算"
             if db_unit_b:
                 unit_lower_b = db_unit_b.lower()
@@ -940,20 +941,29 @@ with pos_tabs[2]:
                     st.session_state.pot_recipe_pool = new_pot_pool
                     st.rerun()
 
+                # --- 【重要修正點 1】大碗小碗成本與用量獨立切分試算邏輯 ---
+                single_large_cost = 0.0
+                single_small_cost = 0.0
+                
+                for p_item in st.session_state.pot_recipe_pool:
+                    matched_raw = all_raw_df[all_raw_df['prod_id'] == p_item['食材編號']]
+                    r_cost = float(matched_raw.iloc[0]['cost']) if not matched_raw.empty else 0.0
+                    
+                    # 總投入金額 = 投入總量 * 原物料進貨成本
+                    total_item_cost = p_item['單位用量'] * r_cost
+                    
+                    # 獨立計算大碗與小碗的單碗食材成本
+                    if pot_large_servings > 0:
+                        single_large_cost += total_item_cost / pot_large_servings
+                    if pot_small_servings > 0:
+                        single_small_cost += total_item_cost / pot_small_servings
+
+                # 計算全鍋物料總成本
                 total_pot_cost = 0.0
                 for p_item in st.session_state.pot_recipe_pool:
                     matched_raw = all_raw_df[all_raw_df['prod_id'] == p_item['食材編號']]
                     r_cost = float(matched_raw.iloc[0]['cost']) if not matched_raw.empty else 0.0
                     total_pot_cost += p_item['單位用量'] * r_cost
-
-                total_shares = (pot_large_servings * 1.5) + (pot_small_servings * 1.0)
-                
-                if total_shares > 0:
-                    cost_per_share = total_pot_cost / total_shares
-                    single_large_cost = cost_per_share * 1.5 if pot_large_servings > 0 else 0.0
-                    single_small_cost = cost_per_share * 1.0 if pot_small_servings > 0 else 0.0
-                else:
-                    single_large_cost, single_small_cost = 0.0, 0.0
 
                 st.markdown(f"""
                 > 📊 **🥣 整鍋成本拆分攤算即時面板：**
@@ -973,6 +983,7 @@ with pos_tabs[2]:
                         conn = get_db_conn()
                         cursor = conn.cursor()
                         
+                        # --- 【重要修正點 2】大碗資料庫獨立寫入作業 ---
                         if pot_large_servings > 0:
                             l_name = f"{pot_base_name}(大碗)"
                             cursor.execute("SELECT prod_id FROM products WHERE prod_name = ? AND status = 1", (l_name,))
@@ -983,10 +994,13 @@ with pos_tabs[2]:
                                 st.stop()
                             l_id = get_next_dish_id()
                             cursor.execute("INSERT INTO products VALUES (?, ?, ?, ?, 0.0, '碗', '碗', 1.0, 1)", (l_id, l_name, single_large_cost, float(pot_large_price)))
+                            
                             for item in st.session_state.pot_recipe_pool:
-                                single_l_qty = (item['單位用量'] / total_shares) * 1.5
+                                # 大碗單位用量 = 整鍋投入量 / 整鍋大碗總數量
+                                single_l_qty = item['單位用量'] / pot_large_servings
                                 cursor.execute("INSERT INTO bom VALUES (?, ?, ?)", (l_id, item['食材編號'], single_l_qty))
                         
+                        # --- 【重要修正點 3】小碗資料庫獨立寫入作業 ---
                         if pot_small_servings > 0:
                             s_name = f"{pot_base_name}(小碗)"
                             cursor.execute("SELECT prod_id FROM products WHERE prod_name = ? AND status = 1", (s_name,))
@@ -1003,8 +1017,10 @@ with pos_tabs[2]:
                                 s_id = get_next_dish_id()
                                 
                             cursor.execute("INSERT INTO products VALUES (?, ?, ?, ?, 0.0, '碗', '碗', 1.0, 1)", (s_id, s_name, single_small_cost, float(pot_small_price)))
+                            
                             for item in st.session_state.pot_recipe_pool:
-                                single_s_qty = (item['單位用量'] / total_shares) * 1.0
+                                # 小碗單位用量 = 整鍋投入量 / 整鍋小碗總數量
+                                single_s_qty = item['單位用量'] / pot_small_servings
                                 cursor.execute("INSERT INTO bom VALUES (?, ?, ?)", (s_id, item['食材編號'], single_s_qty))
                                 
                         conn.commit()
@@ -1016,7 +1032,7 @@ with pos_tabs[2]:
                         log_history(
                             current_user, 
                             f"修正餐點參數-整鍋拆分配方-{pot_base_name}", 
-                            f"透過 B模式 創立整鍋基底餐點：{pot_base_name}。整鍋物料總成本 ${total_pot_cost:.2f}。成功產出大碗成本 ${single_large_cost:.2f}/小碗成本 ${single_small_cost:.2f}."
+                            f"透過 B模式 創立整鍋基底餐點：{pot_base_name}。整鍋物料總成本 ${total_pot_cost:.2f}。成功獨立產出大碗成本 ${single_large_cost:.2f}/小碗成本 ${single_small_cost:.2f}."
                         )
                         trigger_toast(f"🎉 成功建立 【{pot_base_name}】 大/小碗成品餐點並加入菜單！", icon="🥣")
                         st.session_state.pot_recipe_pool = []
@@ -1044,7 +1060,6 @@ with pos_tabs[2]:
 
             st.markdown("###### ➕ 追加食材至此餐點中：")
             
-            # 分割為 4 欄，動態在現有追加選單加入單位換算
             col_add_e1, col_add_e2, col_add_convert, col_add_e3 = st.columns([2, 1, 1.5, 1])
             with col_add_e1:
                 add_edit_mat_name = st.selectbox("選擇要追加的食材項目", ["--- 請選擇食材/用品 ---"] + all_raw_df['prod_name'].tolist(), key="add_edit_mat_select")
@@ -1058,7 +1073,6 @@ with pos_tabs[2]:
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.markdown(f"**進貨定義單位：** `{db_unit_edit if db_unit_edit else '未選擇'}`")
                 
-            # 重量單位智慧選取與防呆判定 (修改/追加模式，已完全移除公升與毫升換算)
             edit_conversion_mode = "不換算"
             if db_unit_edit:
                 unit_lower_edit = db_unit_edit.lower()
@@ -1091,7 +1105,6 @@ with pos_tabs[2]:
                         mat_info = matched_mats.iloc[0]
                         existing_idx = next((i for i, item in enumerate(st.session_state.editing_recipe_list) if item['食材編號'] == mat_info['prod_id']), None)
                         
-                        # 精準處理對應的換算公式 (僅保留重量換算)
                         final_edit_conv = add_edit_mat_qty
                         if edit_conversion_mode == "公斤轉公克":
                             final_edit_conv = add_edit_mat_qty / 1000.0
@@ -1146,7 +1159,6 @@ with pos_tabs[2]:
 
             new_dish_price = st.number_input("💵 調整此餐點售價", step=1, key="edit_price_input", value=max(old_price, 1))
             
-            # --- 新增功能：即時物料成本、純利、毛利率顯示區面版 ---
             current_editing_cost = 0.0
             for item in st.session_state.editing_recipe_list:
                 matched_raw = all_raw_df[all_raw_df['prod_id'] == item['食材編號']]
@@ -1162,11 +1174,10 @@ with pos_tabs[2]:
             > * 依目前用量推算【**單份標準原物料成本**】： **${current_editing_cost:,.2f} 元**
             > * 預估修正後【**單份毛利**】： **${current_editing_profit:,.2f} 元** ｜ 預估毛利率: **{current_editing_margin:.1f}%**
             """)
-            # ---------------------------------------------------
             
             recipe_has_negative = any(float(item["單位用量"]) <= 0 for item in st.session_state.editing_recipe_list)
             
-            if st.button("💾 確認變更", type="primary", use_container_width=True):
+            if st.button("💾 寫入變更", type="primary", use_container_width=True):
                 if new_dish_price <= 0:
                     st.error("❌ 錯誤變更：販售價格必須為大於 0 的整數！儲存失敗。")
                 elif recipe_has_negative:
