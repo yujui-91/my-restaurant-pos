@@ -1157,20 +1157,24 @@ with pos_tabs[2]:
             else:
                 st.info("此餐點目前沒有任何配方物料，請利用上方追加。")
 
-            new_dish_price = st.number_input("💵 調整此餐點售價", step=1, key="edit_price_input", value=max(old_price, 1))
+            # --- 金額修改優化：預設為 0 作為選填指標，同時將 key 綁定餐點 ID 以便更換餐點時自動歸零重置 ---
+            new_dish_price = st.number_input("💵 調整此餐點售價（欲修改再輸入，維持原販售價請留 0）", min_value=0, step=1, value=0, key=f"edit_price_input_{td_id}")
             
+            # 若輸入 0，代表不變更價格，系統面板與資料庫會自動沿用舊原價 (old_price)
+            display_price = old_price if new_dish_price == 0 else new_dish_price
+
             current_editing_cost = 0.0
             for item in st.session_state.editing_recipe_list:
                 matched_raw = all_raw_df[all_raw_df['prod_id'] == item['食材編號']]
                 r_cost = float(matched_raw.iloc[0]['cost']) if not matched_raw.empty else 0.0
                 current_editing_cost += float(item['單位用量']) * r_cost
 
-            current_editing_profit = float(new_dish_price) - current_editing_cost
-            current_editing_margin = (current_editing_profit / new_dish_price * 100) if new_dish_price > 0 else 0.0
+            current_editing_profit = float(display_price) - current_editing_cost
+            current_editing_margin = (current_editing_profit / display_price * 100) if display_price > 0 else 0.0
 
             st.markdown(f"""
             > 💡 **此餐點配方與售價即時動態預估試算面板：**
-            > * 調整後餐點售價： **{new_dish_price} 元**
+            > * 調整後餐點售價： **{display_price} 元** {"*(維持原價)*" if new_dish_price == 0 else "*(已修正售價)*"}
             > * 依目前用量推算【**單份標準原物料成本**】： **${current_editing_cost:,.2f} 元**
             > * 預估修正後【**單份毛利**】： **${current_editing_profit:,.2f} 元** ｜ 預估毛利率: **{current_editing_margin:.1f}%**
             """)
@@ -1178,7 +1182,7 @@ with pos_tabs[2]:
             recipe_has_negative = any(float(item["單位用量"]) <= 0 for item in st.session_state.editing_recipe_list)
             
             if st.button("💾 寫入變更", type="primary", use_container_width=True):
-                if new_dish_price <= 0:
+                if display_price <= 0:
                     st.error("❌ 錯誤變更：販售價格必須為大於 0 的整數！儲存失敗。")
                 elif recipe_has_negative:
                     st.error("❌ 錯誤變更：保留的配方用量必須大於 0！(若要刪除物料請勾選後方的「移除」並重試)。儲存失敗。")
@@ -1186,8 +1190,8 @@ with pos_tabs[2]:
                     st.error("❌ 錯誤變更：修改後的配方清單不能為空！儲存失敗. ")
                 else:
                     change_details = f"修改餐點【{target_dish_name}({td_id})】配置：\n"
-                    if new_dish_price != old_price:
-                        change_details += f" * 價格：從 ${old_price} 改為 ${new_dish_price}\n"
+                    if display_price != old_price:
+                        change_details += f" * 價格：從 ${old_price} 改為 ${display_price}\n"
                         
                     recipe_list_to_save = []
                     updated_dish_base_cost = 0.0
@@ -1201,7 +1205,7 @@ with pos_tabs[2]:
                         
                     conn = get_db_conn()
                     cursor = conn.cursor()
-                    cursor.execute("UPDATE products SET price = ?, cost = ? WHERE prod_id = ?", (float(new_dish_price), updated_dish_base_cost, td_id))
+                    cursor.execute("UPDATE products SET price = ?, cost = ? WHERE prod_id = ?", (float(display_price), updated_dish_base_cost, td_id))
                     cursor.execute("DELETE FROM bom WHERE parent_id = ?", (td_id,))
                     for b_save in recipe_list_to_save:
                         cursor.execute("INSERT INTO bom VALUES (?, ?, ?)", (td_id, b_save['食材編號'], b_save['單位用量']))
