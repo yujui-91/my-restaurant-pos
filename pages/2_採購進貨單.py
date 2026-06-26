@@ -263,7 +263,8 @@ with po_tabs[1]:
         st.markdown("---")
         
         if is_bill:
-            st.markdown("##### 💰 填寫更正後的帳單金額與所屬年月（皆為必填）：")
+            st.markdown("##### 💰 填寫更正後的帳單名稱、金額與所屬年月（皆為必填）：")
+            new_prod_name = st.text_input("更正帳單費用名稱", value=str(matched_batch_row['商品名稱'])).strip()
             col_bill_e1, col_bill_e2 = st.columns([2, 2])
             
             with col_bill_e1:
@@ -314,7 +315,8 @@ with po_tabs[1]:
             new_v_name, new_v_phone, new_exp_str = "公共事業/其他", "", ""
             
         else:
-            st.markdown("##### 📦 填寫更正後的包裝規格與採購數據：")
+            st.markdown("##### 📦 填寫更正後的品項資訊與採購數據：")
+            new_prod_name = st.text_input("更正品項/食材名稱", value=str(matched_batch_row['商品名稱'])).strip()
             col_edit1, col_edit2, col_edit3 = st.columns(3)
             with col_edit1:
                 new_p_unit = st.text_input("大包裝進貨單位 (如:台斤、箱)", value=str(matched_batch_row['進貨單位'])).strip()
@@ -336,7 +338,9 @@ with po_tabs[1]:
                 new_exp_str = new_exp_input.strftime("%Y-%m-%d") if new_exp_input is not None else ""
 
         if st.button("💾 確認覆蓋並修正此筆採購資料"):
-            if not is_bill and new_p_unit == "":
+            if new_prod_name == "":
+                st.error("❌ 錯誤：【名稱】為必填欄位，請勿留空！")
+            elif not is_bill and new_p_unit == "":
                 st.error("❌ 錯誤：【大包裝進貨單位】為必填欄位，請勿留空！")
             elif not is_bill and new_u_unit == "":
                 st.error("❌ 錯誤：【廚房基本使用小單位】為必填欄位，請勿留空！")
@@ -357,7 +361,8 @@ with po_tabs[1]:
                     formatted_edit_month = f"{selected_year}-{edit_month_digits:02d}"
                     
                     audit_trail = f"歷史帳單修正【{matched_batch_row['商品名稱']}】 (賬單批次: {target_batch_id}):\n"
-                    
+                    if str(matched_batch_row['商品名稱']) != new_prod_name:
+                        audit_trail += f" * 帳單名稱：自【{matched_batch_row['商品名稱']}】變更為【{new_prod_name}】\n"
                     if old_assigned_month_str and old_assigned_month_str != formatted_edit_month:
                         audit_trail += f" * 費用月份：從原本 {old_assigned_month_str} 改成 {formatted_edit_month}\n"
                     else:
@@ -368,6 +373,8 @@ with po_tabs[1]:
                     audit_trail += f" 目標歸帳月份: {formatted_edit_month}"
                 else:
                     audit_trail = f"採購歷史修正【批次 {target_batch_id} - {matched_batch_row['商品名稱']}】 (賬單批次: {target_batch_id}):\n"
+                    if str(matched_batch_row['商品名稱']) != new_prod_name:
+                        audit_trail += f" * 商品名稱：自【{matched_batch_row['商品名稱']}】變更為【{new_prod_name}】\n"
                     if float(matched_batch_row['進貨大包裝數']) != new_po_qty:
                         audit_trail += f" * 進貨數量：自 {matched_batch_row['進貨大包裝數']} 修改為 {new_po_qty}\n"
                     if float(matched_batch_row['推估總金額']) != new_total_amount:
@@ -382,9 +389,16 @@ with po_tabs[1]:
 
                 update_purchase_batch(target_batch_id, matched_batch_row['商品編號'], new_total_use_units, new_calculated_cost, new_p_unit, new_u_unit, new_c_factor, new_safety, new_v_name, new_v_phone, new_exp_str)
                 
+                # 直接在此處更新 products 表之中的商品/帳單名稱
+                conn = get_db_conn()
+                cursor = conn.cursor()
+                cursor.execute("UPDATE products SET prod_name = ? WHERE prod_id = ?", (new_prod_name, matched_batch_row['商品編號']))
+                conn.commit()
+                conn.close()
+
                 st.cache_data.clear()
                 
                 log_history(current_user, "採購單更正", audit_trail)
                 
-                trigger_toast(f"💾 資料覆蓋成功！已防止已扣除庫存復活！", icon="✏️")
+                trigger_toast(f"💾 資料覆蓋成功！名稱與規格完美修正！", icon="✏️")
                 st.rerun()
