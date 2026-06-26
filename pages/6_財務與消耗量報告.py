@@ -15,7 +15,8 @@ from database.db_core import (
     cached_get_material_usage,
     cached_get_expenses_raw,
     cached_get_actual_purchase_details,
-    cached_get_operational_expenses_base
+    cached_get_operational_expenses_base,
+    get_taiwan_now
 )
 
 show_pending_toast()
@@ -30,7 +31,7 @@ report_option = st.selectbox(
     key="finance_time_filter"
 )
 
-now = datetime.now()
+now = get_taiwan_now()
 
 # --- 日期判定邏輯 ---
 if report_option == "今天":

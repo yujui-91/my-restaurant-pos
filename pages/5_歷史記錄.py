@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 from datetime import datetime, timedelta
-from database.db_core import get_db_conn
+from database.db_core import get_db_conn,get_taiwan_now
 # 從 db_core 載入所需的快取函式
 from database.db_core import cached_fetch_audit_history
 
@@ -21,7 +21,7 @@ with col_f1:
         key="history_filter"
     )
 
-now = datetime.now()
+now = get_taiwan_now()
 if history_time_option == "今天":
     start_dt = now.replace(hour=0, minute=0, second=0)
     end_dt = now.replace(hour=23, minute=59, second=59)
