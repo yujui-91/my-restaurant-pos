@@ -689,35 +689,40 @@ with pos_tabs[2]:
                 
             st.markdown("###### ➕ 食材用量：")
             
+            # 【功能新增】A模式：追加食材的大類篩選器
+            mat_filter_a = st.radio("🔍 篩選原物料類別", ["顯示全部", "僅看食材 (R)", "僅看用品 (S)"], horizontal=True, key="mat_filter_a")
+            if mat_filter_a == "僅看食材 (R)":
+                filtered_df_a = all_raw_df[all_raw_df['prod_id'].str.startswith('R')]
+            elif mat_filter_a == "僅看用品 (S)":
+                filtered_df_a = all_raw_df[all_raw_df['prod_id'].str.startswith('S')]
+            else:
+                filtered_df_a = all_raw_df
+
             # 分割為 4 欄，動態顯示單位換算下拉選單
             col_cus_mat1, col_cus_mat2, col_cus_convert, col_cus_mat3 = st.columns([2, 1, 1.5, 1])
             with col_cus_mat1:
-                dish_select_list = ["--- 請選擇食材 ---"] + all_raw_df['prod_name'].tolist()
+                dish_select_list = ["--- 請選擇食材 ---"] + filtered_df_a['prod_name'].tolist()
                 cus_mat_name = st.selectbox("選擇要加入的食材/用品名稱", dish_select_list, key="cus_mat_selector")
             
             db_unit_a = ""
             if cus_mat_name != "--- 請選擇食材 ---":
-                matched_row_a = all_raw_df[all_raw_df['prod_name'] == cus_mat_name].iloc[0]
+                matched_row_a = filtered_df_a[filtered_df_a['prod_name'] == cus_mat_name].iloc[0]
                 db_unit_a = matched_row_a['use_unit'].strip()
                 
             with col_cus_mat2:
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.markdown(f"**進貨定義單位：** `{db_unit_a if db_unit_a else '未選擇'}`")
                 
-            # 重量單位智慧選取與防呆判定（已完全移除公升與毫升換算）
-            # 這裡不改動原本 A模式
             cus_conversion_mode = "不換算"
             if db_unit_a:
                 unit_lower = db_unit_a.lower()
                 with col_cus_convert:
-                    # 情況1: 進貨單位是 重量 (公斤/KG/g)
                     if unit_lower in ['kg', '公斤', 'g', '公克']:
                         cus_conversion_mode = st.selectbox(
                             "輸入數值的單位類型",
                             ["直接依進貨定義單位輸入", "公斤轉公克"],
                             key="cus_conversion_mode_select_weight_kg"
                         )
-                    # 情況2: 進貨單位是 台斤
                     elif unit_lower in ['臺斤', '台斤', '斤']:
                         cus_conversion_mode = st.selectbox(
                             "輸入數值的單位類型",
@@ -741,9 +746,8 @@ with pos_tabs[2]:
                 if cus_mat_name == "--- 請選擇食材 ---" or cus_mat_qty <= 0:
                     st.error("請選擇有效原物料並輸入大於 0 的用量！")
                 else:
-                    mat_info = all_raw_df[all_raw_df['prod_name'] == cus_mat_name].iloc[0]
+                    mat_info = filtered_df_a[filtered_df_a['prod_name'] == cus_mat_name].iloc[0]
                     
-                    # 依智慧選取模式進行精準換算 (僅保留重量換算)
                     final_conv = cus_mat_qty 
                     if cus_conversion_mode == "公斤轉公克":
                         final_conv = cus_mat_qty / 1000.0
@@ -852,22 +856,30 @@ with pos_tabs[2]:
 
             st.markdown("###### ➕ 食材用量：")
             
+            # 【功能新增】B模式：追加食材的大類篩選器
+            mat_filter_b = st.radio("🔍 篩選原物料類別", ["顯示全部", "僅看食材 (R)", "僅看用品 (S)"], horizontal=True, key="mat_filter_b")
+            if mat_filter_b == "僅看食材 (R)":
+                filtered_df_b = all_raw_df[all_raw_df['prod_id'].str.startswith('R')]
+            elif mat_filter_b == "僅看用品 (S)":
+                filtered_df_b = all_raw_df[all_raw_df['prod_id'].str.startswith('S')]
+            else:
+                filtered_df_b = all_raw_df
+
             # 分割為 4 欄，動態顯示單位換算下拉選單
             col_b_mat1, col_b_mat2, col_b_convert, col_b_mat3 = st.columns([2, 1, 1.5, 1])
             with col_b_mat1:
-                b_dish_select_list = ["--- 請選擇食材 ---"] + all_raw_df['prod_name'].tolist()
+                b_dish_select_list = ["--- 請選擇食材 ---"] + filtered_df_b['prod_name'].tolist()
                 b_mat_name = st.selectbox("選擇此餐點的食材項目", b_dish_select_list, key="b_mat_selector")
             
             db_unit_b = ""
             if b_mat_name != "--- 請選擇食材 ---":
-                matched_row_b = all_raw_df[all_raw_df['prod_name'] == b_mat_name].iloc[0]
+                matched_row_b = filtered_df_b[filtered_df_b['prod_name'] == b_mat_name].iloc[0]
                 db_unit_b = matched_row_b['use_unit'].strip()
 
             with col_b_mat2:
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.markdown(f"**進貨定義單位：** `{db_unit_b if db_unit_b else '未選擇'}`")
                 
-            # 重量單位智慧選取與防呆判定 (B模式)
             b_conversion_mode = "不換算"
             if db_unit_b:
                 unit_lower_b = db_unit_b.lower()
@@ -900,9 +912,8 @@ with pos_tabs[2]:
                 if b_mat_name == "--- 請選擇食材 ---" or b_mat_qty <= 0:
                     st.error("請選擇有效原物料並輸入大於 0 的投入量！")
                 else:
-                    mat_info = all_raw_df[all_raw_df['prod_name'] == b_mat_name].iloc[0]
+                    mat_info = filtered_df_b[filtered_df_b['prod_name'] == b_mat_name].iloc[0]
                     
-                    # 依換算模式精準計算 (僅保留重量換算)
                     final_conv = b_mat_qty
                     if b_conversion_mode == "公斤轉公克":
                         final_conv = b_mat_qty / 1000.0
@@ -941,24 +952,19 @@ with pos_tabs[2]:
                     st.session_state.pot_recipe_pool = new_pot_pool
                     st.rerun()
 
-                # --- 【重要修正點 1】大碗小碗成本與用量獨立切分試算邏輯 ---
                 single_large_cost = 0.0
                 single_small_cost = 0.0
                 
                 for p_item in st.session_state.pot_recipe_pool:
                     matched_raw = all_raw_df[all_raw_df['prod_id'] == p_item['食材編號']]
                     r_cost = float(matched_raw.iloc[0]['cost']) if not matched_raw.empty else 0.0
-                    
-                    # 總投入金額 = 投入總量 * 原物料進貨成本
                     total_item_cost = p_item['單位用量'] * r_cost
                     
-                    # 獨立計算大碗與小碗的單碗食材成本
                     if pot_large_servings > 0:
                         single_large_cost += total_item_cost / pot_large_servings
                     if pot_small_servings > 0:
                         single_small_cost += total_item_cost / pot_small_servings
 
-                # 計算全鍋物料總成本
                 total_pot_cost = 0.0
                 for p_item in st.session_state.pot_recipe_pool:
                     matched_raw = all_raw_df[all_raw_df['prod_id'] == p_item['食材編號']]
@@ -983,7 +989,6 @@ with pos_tabs[2]:
                         conn = get_db_conn()
                         cursor = conn.cursor()
                         
-                        # --- 【重要修正點 2】大碗資料庫獨立寫入作業 ---
                         if pot_large_servings > 0:
                             l_name = f"{pot_base_name}(大碗)"
                             cursor.execute("SELECT prod_id FROM products WHERE prod_name = ? AND status = 1", (l_name,))
@@ -996,11 +1001,9 @@ with pos_tabs[2]:
                             cursor.execute("INSERT INTO products VALUES (?, ?, ?, ?, 0.0, '碗', '碗', 1.0, 1)", (l_id, l_name, single_large_cost, float(pot_large_price)))
                             
                             for item in st.session_state.pot_recipe_pool:
-                                # 大碗單位用量 = 整鍋投入量 / 整鍋大碗總數量
                                 single_l_qty = item['單位用量'] / pot_large_servings
                                 cursor.execute("INSERT INTO bom VALUES (?, ?, ?)", (l_id, item['食材編號'], single_l_qty))
                         
-                        # --- 【重要修正點 3】小碗資料庫獨立寫入作業 ---
                         if pot_small_servings > 0:
                             s_name = f"{pot_base_name}(小碗)"
                             cursor.execute("SELECT prod_id FROM products WHERE prod_name = ? AND status = 1", (s_name,))
@@ -1019,7 +1022,6 @@ with pos_tabs[2]:
                             cursor.execute("INSERT INTO products VALUES (?, ?, ?, ?, 0.0, '碗', '碗', 1.0, 1)", (s_id, s_name, single_small_cost, float(pot_small_price)))
                             
                             for item in st.session_state.pot_recipe_pool:
-                                # 小碗單位用量 = 整鍋投入量 / 整鍋小碗總數量
                                 single_s_qty = item['單位用量'] / pot_small_servings
                                 cursor.execute("INSERT INTO bom VALUES (?, ?, ?)", (s_id, item['食材編號'], single_s_qty))
                                 
@@ -1060,13 +1062,22 @@ with pos_tabs[2]:
 
             st.markdown("###### ➕ 追加食材至此餐點中：")
             
+            # 【功能新增】修改配方：追加食材的大類篩選器
+            mat_filter_edit = st.radio("🔍 篩選原物料類別", ["顯示全部", "僅看食材 (R)", "僅看用品 (S)"], horizontal=True, key="mat_filter_edit")
+            if mat_filter_edit == "僅看食材 (R)":
+                filtered_df_edit = all_raw_df[all_raw_df['prod_id'].str.startswith('R')]
+            elif mat_filter_edit == "僅看用品 (S)":
+                filtered_df_edit = all_raw_df[all_raw_df['prod_id'].str.startswith('S')]
+            else:
+                filtered_df_edit = all_raw_df
+
             col_add_e1, col_add_e2, col_add_convert, col_add_e3 = st.columns([2, 1, 1.5, 1])
             with col_add_e1:
-                add_edit_mat_name = st.selectbox("選擇要追加的食材項目", ["--- 請選擇食材/用品 ---"] + all_raw_df['prod_name'].tolist(), key="add_edit_mat_select")
+                add_edit_mat_name = st.selectbox("選擇要追加的食材項目", ["--- 請選擇食材/用品 ---"] + filtered_df_edit['prod_name'].tolist(), key="add_edit_mat_select")
             
             db_unit_edit = ""
             if add_edit_mat_name != "--- 請選擇食材/用品 ---":
-                matched_row_edit = all_raw_df[all_raw_df['prod_name'] == add_edit_mat_name].iloc[0]
+                matched_row_edit = filtered_df_edit[filtered_df_edit['prod_name'] == add_edit_mat_name].iloc[0]
                 db_unit_edit = matched_row_edit['use_unit'].strip()
                 
             with col_add_e2:
@@ -1100,7 +1111,7 @@ with pos_tabs[2]:
                 
             if st.button("➕ 確定將此食材加入配方清單", use_container_width=True):
                 if add_edit_mat_name != "--- 請選擇食材/用品 ---" and add_edit_mat_qty > 0:
-                    matched_mats = all_raw_df[all_raw_df['prod_name'] == add_edit_mat_name]
+                    matched_mats = filtered_df_edit[filtered_df_edit['prod_name'] == add_edit_mat_name]
                     if not matched_mats.empty:
                         mat_info = matched_mats.iloc[0]
                         existing_idx = next((i for i, item in enumerate(st.session_state.editing_recipe_list) if item['食材編號'] == mat_info['prod_id']), None)
@@ -1157,10 +1168,8 @@ with pos_tabs[2]:
             else:
                 st.info("此餐點目前沒有任何配方物料，請利用上方追加。")
 
-            # --- 金額修改優化：預設為 0 作為選填指標，同時將 key 綁定餐點 ID 以便更換餐點時自動歸零重置 ---
             new_dish_price = st.number_input("💵 調整此餐點售價（欲修改再輸入，維持原販售價請留 0）", min_value=0, step=1, value=0, key=f"edit_price_input_{td_id}")
             
-            # 若輸入 0，代表不變更價格，系統面板與資料庫會自動沿用舊原價 (old_price)
             display_price = old_price if new_dish_price == 0 else new_dish_price
 
             current_editing_cost = 0.0
@@ -1196,7 +1205,7 @@ with pos_tabs[2]:
                     recipe_list_to_save = []
                     updated_dish_base_cost = 0.0
                     for item in st.session_state.editing_recipe_list:
-                        recipe_list_to_save.append({"食材編號": item["食材編號"], "單位用量": item["單位用量"]})
+                        recipe_list_to_save.append({"食材編號": item["橫件編號" if "橫件編號" in item else "食材編號"], "單位用量": item["單位用量"]})
                         change_details += f" * 食材【{item['食材名稱']}】用量設定為 {item['單位用量']} {item['單位']}\n"
                         
                         matched_raw = all_raw_df[all_raw_df['prod_id'] == item['食材編號']]
