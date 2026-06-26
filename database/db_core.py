@@ -436,7 +436,7 @@ def cached_fetch_dish_bom_recipe(target_dish_id):
 def cached_fetch_all_dishes_raw():
     conn = get_db_conn()
     cursor = conn.cursor()
-    cursor.execute("SELECT prod_id, prod_name, price, status FROM products WHERE prod_id LIKE 'P%'")
+    cursor.execute("SELECT prod_id, prod_name,cost, price, status FROM products WHERE prod_id LIKE 'P%'")
     rows = cursor.fetchall()
     cols = [desc[0] for desc in cursor.description]
     conn.close()
@@ -446,7 +446,7 @@ def cached_fetch_all_dishes_raw():
 def cached_fetch_all_materials_raw():
     conn = get_db_conn()
     cursor = conn.cursor()
-    cursor.execute("SELECT prod_id, prod_name, use_unit, status FROM products WHERE prod_id LIKE 'R%' OR prod_id LIKE 'S%'")
+    cursor.execute("SELECT prod_id, prod_name, use_unit, cost, status FROM products WHERE prod_id LIKE 'R%' OR prod_id LIKE 'S%'")
     rows = cursor.fetchall()
     cols = [desc[0] for desc in cursor.description]
     conn.close()

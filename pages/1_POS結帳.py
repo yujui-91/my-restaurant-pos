@@ -1241,7 +1241,7 @@ with pos_tabs[3]:
         st.info("開出系統中尚無餐點。")
     else:
         all_dishes_raw['狀態'] = all_dishes_raw['status'].apply(lambda s: "🔴 已下架隱藏" if s == 0 else "🟢 正常販售中")
-        st.dataframe(all_dishes_raw[['prod_id', 'prod_name', 'price', '狀態']], use_container_width=True, hide_index=True)
+        st.dataframe(all_dishes_raw[['prod_id', 'prod_name', 'cost', 'price', '狀態']], use_container_width=True, hide_index=True)
         
         col_del1, col_del2 = st.columns(2)
         with col_del1:
