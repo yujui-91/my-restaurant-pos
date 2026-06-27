@@ -49,10 +49,23 @@ st.title("🍳 赤山堡砂鍋 後台管理")
 
 init_db()
 
+# --- 修改處：設定預設操作人員為「老闆娘」 ---
 if 'current_user' not in st.session_state:
-    st.session_state.current_user = "老闆"
+    st.session_state.current_user = "老闆娘"
 
-st.session_state.current_user = st.sidebar.text_input("操作人員", value=st.session_state.current_user)
+# --- 修改處：將手動輸入改為五位特定名單的下拉式選單 ---
+user_list = ["老闆", "老闆娘", "堃原", "育睿", "芹媖"]
+# 確保若 session_state 的值不在名單中時能正確處理 index
+try:
+    default_index = user_list.index(st.session_state.current_user)
+except ValueError:
+    default_index = 1 # 預設指向「老闆娘」
+
+st.session_state.current_user = st.sidebar.selectbox(
+    "操作人員", 
+    options=user_list, 
+    index=default_index
+)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ 快速微調安全庫存線")
