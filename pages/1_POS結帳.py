@@ -16,6 +16,10 @@ from database.db_core import (
     cached_fetch_all_materials_raw
 )
 
+# 確保快取計數器已存在
+if 'db_update_trigger' not in st.session_state:
+    st.session_state.db_update_trigger = 0
+
 show_pending_toast()
 
 st.subheader("🛒 收銀結帳與出餐管理系統")
@@ -27,8 +31,8 @@ current_user = st.session_state.get('current_user', '老 闆')
 if 'pos_shopping_cart' not in st.session_state:
     st.session_state.pos_shopping_cart = []
 
-existing_dishes = cached_fetch_active_dishes()
-all_raw_df = cached_fetch_active_materials()
+existing_dishes = cached_fetch_active_dishes(cache_key=st.session_state.db_update_trigger)
+all_raw_df = cached_fetch_active_materials(cache_key=st.session_state.db_update_trigger)
 
 def adjust_qty_callback(state_key, delta):
     current_val = st.session_state.get(state_key, 0)
@@ -323,7 +327,6 @@ with pos_tabs[0]:
                                 })
                                 
                             now_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            # 改善處：只記錄出餐明細與總金額，不將消耗的原物料與成本字串記錄進文字欄位
                             details_log = f"合併前台收銀：出餐明細 {confirm_msg}，總金額 ${total_bill_amount} 元。"
                             
                             structured_payload = {
@@ -355,7 +358,8 @@ with pos_tabs[0]:
                             cursor.close()
                             conn.close()
                             
-                            st.cache_data.clear()
+                            # 替換全域快取清空
+                            st.session_state.db_update_trigger += 1
                             
                             trigger_toast(f"🎉 批量出餐結帳成功！總金額：${total_bill_amount}，實際成本：${actual_total_cost:.2f}", icon="🎉")
                             st.session_state.pos_shopping_cart = []
@@ -379,7 +383,7 @@ with pos_tabs[1]:
     today_start = datetime.now().strftime("%Y-%m-%d 00:00:00")
     today_end = datetime.now().strftime("%Y-%m-%d 23:59:59")
 
-    df_today_orders = cached_fetch_today_orders(today_start, today_end)
+    df_today_orders = cached_fetch_today_orders(today_start, today_end, cache_key=st.session_state.db_update_trigger)
 
     if df_today_orders.empty:
         st.info("💡 今天目前尚無收銀出餐紀錄可供修改。")
@@ -476,7 +480,8 @@ with pos_tabs[1]:
                     cursor.close()
                     conn.close()
                     
-                    st.cache_data.clear()
+                    # 替換全域快取清空
+                    st.session_state.db_update_trigger += 1
                     
                     orig_brief = order_details_text.split("||STRUCT_DATA||")[0]
                     log_history(current_user, "訂單作廢成功", f"操作人員執行整單作廢。被作廢單號: {target_hist_id} ｜ 原始交易時間: {orig_order_timestamp} ｜ 退回營業額: ${parsed_total_revenue} 元 ｜ 庫存原物料已完整回補。 原始單據內容為: [{orig_brief}]")
@@ -593,7 +598,7 @@ with pos_tabs[1]:
                         log_mats_summary = []
 
                         for m_id, total_need in total_mats_needed_new.items():
-                            cursor.execute("SELECT prod_name, use_unit FROM products WHERE prod_id = ?", (m_id,))
+                            cursor.execute("SELECT prod_name, use_unit FROM products WHERE prod_name = ?", (m_id,))
                             m_info = cursor.fetchone()
                             m_name, m_unit = m_info[0], m_info[1]
 
@@ -637,7 +642,6 @@ with pos_tabs[1]:
                             cursor.execute("UPDATE history SET action = '多品項收銀結帳-已微調更正' WHERE id = ?", (target_hist_id,))
                             cursor.execute("UPDATE orders SET status = 2 WHERE history_id = ?", (target_hist_id,))
 
-                            # 改善處：只記錄更正後的餐點明細與新總金額，移除原物料消耗字串
                             details_text_part = f"數量更正紀錄（對應原單號 {target_hist_id}）：出餐明細 {new_confirm_msg}，新總金額 ${new_total_bill:.0f} 元。"
                             new_payload_struct = {
                                 "dishes": new_cart_payload, 
@@ -660,7 +664,8 @@ with pos_tabs[1]:
                             cursor.close()
                             conn.close()
                             
-                            st.cache_data.clear()
+                            # 替換全域快取清空
+                            st.session_state.db_update_trigger += 1
                             
                             if add_pool_key in st.session_state:
                                 del st.session_state[add_pool_key]
@@ -678,7 +683,6 @@ with pos_tabs[2]:
     
     creation_mode = st.radio("🛠️ 請選擇餐點建立模式：", ["A模式：單份餐點", "B模式：整鍋"], horizontal=True)
 
-    # 包含所有需要做重量換算的定義單位列表
     WEIGHT_UNITS = ['kg', '公斤', 'g', '公克', '臺斤', '台斤', '斤', 'Kg', 'KG']
 
     if creation_mode == "A模式：單份餐點":
@@ -691,7 +695,6 @@ with pos_tabs[2]:
                 
             st.markdown("###### ➕ 食材用量：")
             
-            # 【功能新增】A模式：追加食材的大類篩選器
             mat_filter_a = st.radio("🔍 篩選原物料類別", ["顯示全部", "僅看食材 (R)", "僅看用品 (S)"], horizontal=True, key="mat_filter_a")
             if mat_filter_a == "僅看食材 (R)":
                 filtered_df_a = all_raw_df[all_raw_df['prod_id'].str.startswith('R')]
@@ -700,7 +703,6 @@ with pos_tabs[2]:
             else:
                 filtered_df_a = all_raw_df
 
-            # 分割為 4 欄，動態顯示單位換算下拉選單
             col_cus_mat1, col_cus_mat2, col_cus_convert, col_cus_mat3 = st.columns([2, 1, 1.5, 1])
             with col_cus_mat1:
                 dish_select_list = ["--- 請選擇食材 ---"] + filtered_df_a['prod_name'].tolist()
@@ -719,7 +721,7 @@ with pos_tabs[2]:
             if db_unit_a:
                 unit_lower = db_unit_a.lower()
                 with col_cus_convert:
-                    if unit_lower in ['kg', '公斤', 'g', '公克']:
+                    if unit_lower in ['kg', '公斤', 'g', '公刻']:
                         cus_conversion_mode = st.selectbox(
                             "輸入數值的單位類型",
                             ["直接依進貨定義單位輸入", "公斤轉公克"],
@@ -793,7 +795,7 @@ with pos_tabs[2]:
                     matched_raw = all_raw_df[all_raw_df['prod_id'] == p_item['食材編號']]
                     r_cost = float(matched_raw.iloc[0]['cost']) if not matched_raw.empty else 0.0
                     custom_custom_dish_calc_cost += p_item['單位用量'] * r_cost
-                    
+                
                 custom_profit = float(pos_custom_price) - custom_custom_dish_calc_cost
                 custom_margin = (custom_profit / pos_custom_price * 100) if pos_custom_price > 0 else 0.0
                 
@@ -828,7 +830,8 @@ with pos_tabs[2]:
                             cursor.close()
                             conn.close()
                             
-                            st.cache_data.clear()
+                            # 替換全域快取清空
+                            st.session_state.db_update_trigger += 1
                             
                             log_history(
                                 current_user, 
@@ -858,7 +861,6 @@ with pos_tabs[2]:
 
             st.markdown("###### ➕ 食材用量：")
             
-            # 【功能新增】B模式：追加食材的大類篩選器
             mat_filter_b = st.radio("🔍 篩選原物料類別", ["顯示全部", "僅看食材 (R)", "僅看用品 (S)"], horizontal=True, key="mat_filter_b")
             if mat_filter_b == "僅看食材 (R)":
                 filtered_df_b = all_raw_df[all_raw_df['prod_id'].str.startswith('R')]
@@ -867,7 +869,6 @@ with pos_tabs[2]:
             else:
                 filtered_df_b = all_raw_df
 
-            # 分割為 4 欄，動態顯示單位換算下拉選單
             col_b_mat1, col_b_mat2, col_b_convert, col_b_mat3 = st.columns([2, 1, 1.5, 1])
             with col_b_mat1:
                 b_dish_select_list = ["--- 請選擇食材 ---"] + filtered_df_b['prod_name'].tolist()
@@ -1031,7 +1032,8 @@ with pos_tabs[2]:
                         cursor.close()
                         conn.close()
                         
-                        st.cache_data.clear()
+                        # 替換全域快取清空
+                        st.session_state.db_update_trigger += 1
                         
                         log_history(
                             current_user, 
@@ -1058,13 +1060,12 @@ with pos_tabs[2]:
             old_price = int(float(matched_dish['price']))
             
             if 'editing_recipe_dish_id' not in st.session_state or st.session_state.editing_recipe_dish_id != td_id:
-                db_recipe = cached_fetch_dish_bom_recipe(td_id)
+                db_recipe = cached_fetch_dish_bom_recipe(td_id, cache_key=st.session_state.db_update_trigger)
                 st.session_state.editing_recipe_list = db_recipe.to_dict(orient='records')
                 st.session_state.editing_recipe_dish_id = td_id
 
             st.markdown("###### ➕ 追加食材至此餐點中：")
             
-            # 【功能新增】修改配方：追加食材的大類篩選器
             mat_filter_edit = st.radio("🔍 篩選原物料類別", ["顯示全部", "僅看食材 (R)", "僅看用品 (S)"], horizontal=True, key="mat_filter_edit")
             if mat_filter_edit == "僅看食材 (R)":
                 filtered_df_edit = all_raw_df[all_raw_df['prod_id'].str.startswith('R')]
@@ -1224,7 +1225,8 @@ with pos_tabs[2]:
                     cursor.close()
                     conn.close()
                     
-                    st.cache_data.clear()
+                    # 替換全域快取清空
+                    st.session_state.db_update_trigger += 1
                     
                     log_history(current_user, f"修正餐點參數-{target_dish_name}", change_details + f" * 同步重算標準原物料配方成本為: ${updated_dish_base_cost:.2f}")
                     trigger_toast(f"餐點【{target_dish_name}】售價與合併配方已成功覆蓋更新！", icon="⚙️")
@@ -1237,7 +1239,7 @@ with pos_tabs[2]:
 with pos_tabs[3]:
     st.markdown("##### ❌ 菜單餐點下架控制面板")
     
-    all_dishes_raw = cached_fetch_all_dishes_raw()
+    all_dishes_raw = cached_fetch_all_dishes_raw(cache_key=st.session_state.db_update_trigger)
     
     if all_dishes_raw.empty:
         st.info("開出系統中尚無餐點。")
@@ -1264,7 +1266,8 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
-                        st.cache_data.clear()
+                        # 替換全域快取清空
+                        st.session_state.db_update_trigger += 1
                         
                         log_history(current_user, "修正餐點參數-餐點重新上架", f"上架餐點菜單品項：{matched_del_dish['prod_name']} ({del_dish_id})")
                         trigger_toast(f"餐點【{matched_del_dish['prod_name']}】已重新上架！", icon="🚀")
@@ -1278,7 +1281,8 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
-                        st.cache_data.clear()
+                        # 替換全域快取清空
+                        st.session_state.db_update_trigger += 1
                         
                         log_history(current_user, "修正餐點參數-餐點下架隱藏", f"下架隱藏餐點菜單品項：{matched_del_dish['prod_name']} ({del_dish_id})")
                         trigger_toast(f"餐點【{matched_del_dish['prod_name']}】已成功下架！", icon="🗑️")
@@ -1287,7 +1291,7 @@ with pos_tabs[3]:
     st.markdown("---")
     st.markdown("##### ❌ 食材與用品庫存品項下架面板")
     
-    all_mats_raw = cached_fetch_all_materials_raw()
+    all_mats_raw = cached_fetch_all_materials_raw(cache_key=st.session_state.db_update_trigger)
     
     if all_mats_raw.empty:
         st.info("系統中尚無食材或用品.")
@@ -1314,7 +1318,8 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
-                        st.cache_data.clear()
+                        # 替換全域快取清空
+                        st.session_state.db_update_trigger += 1
                         
                         log_history(current_user, "修正餐點參數-物料恢復使用", f"重新啟用後台物料/用品：{matched_del_mat['prod_name']} ({del_mat_id})")
                         trigger_toast(f"品項【{matched_del_mat['prod_name']}】已重新啟用！", icon="✅")
@@ -1328,7 +1333,8 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
-                        st.cache_data.clear()
+                        # 替換全域快取清空
+                        st.session_state.db_update_trigger += 1
                         
                         log_history(current_user, "修正餐點參數-物料停用下架", f"停用並下架後台物料/用品：{matched_del_mat['prod_name']} ({del_mat_id})")
                         trigger_toast(f"品項【{matched_del_mat['prod_name']}】已成功停用！", icon="🗑️")

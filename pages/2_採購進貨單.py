@@ -8,6 +8,9 @@ from database.db_core import log_history, get_next_raw_id, get_next_supply_id, g
 # 從 db_core 載入所需的快取函式
 from database.db_core import cached_fetch_existing_items_for_po, cached_fetch_history_batches
 
+if 'db_update_trigger' not in st.session_state:
+    st.session_state.db_update_trigger = 0
+
 show_pending_toast()
 
 st.subheader("📝 採購進貨與費用登記單")
@@ -23,7 +26,7 @@ with po_tabs[0]:
     elif "用品" in item_type: prefix = 'S'
     else: prefix = 'C'
 
-    existing_items_df = cached_fetch_existing_items_for_po(prefix)
+    existing_items_df = cached_fetch_existing_items_for_po(prefix, cache_key=st.session_state.db_update_trigger)
 
     st.markdown("##### 🔍 1. 品項選取：")
     reg_mode = st.radio("請選擇登記模式：", ["既有品項【重複登記】", "填寫新名稱【首次登記】"], horizontal=True)
@@ -165,7 +168,8 @@ with po_tabs[0]:
                 conn.commit()
                 conn.close()
                 
-                st.cache_data.clear()
+                # 替換全域快取清空
+                st.session_state.db_update_trigger += 1
                 
                 if prefix == 'C':
                     month_digits = int(selected_month_str.replace("月", ""))
@@ -236,7 +240,7 @@ with po_tabs[1]:
         
     where_clause = " WHERE " + " AND ".join(query_conditions) if query_conditions else ""
 
-    df_all_batches = cached_fetch_history_batches(where_clause, tuple(query_params))
+    df_all_batches = cached_fetch_history_batches(where_clause, tuple(query_params), cache_key=st.session_state.db_update_trigger)
     
     st.divider()
     
@@ -396,7 +400,8 @@ with po_tabs[1]:
                 conn.commit()
                 conn.close()
 
-                st.cache_data.clear()
+                # 替換全域快取清空
+                st.session_state.db_update_trigger += 1
                 
                 log_history(current_user, "採購單更正", audit_trail)
                 

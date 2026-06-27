@@ -7,6 +7,9 @@ from database.db_core import log_history, trigger_toast, show_pending_toast, get
 # 從 db_core 載入所需的快取函式
 from database.db_core import cached_fetch_unique_items_to_adjust, cached_fetch_batches_by_prod
 
+if 'db_update_trigger' not in st.session_state:
+    st.session_state.db_update_trigger = 0
+
 show_pending_toast()
 
 st.subheader("🔧 庫存管理面板")
@@ -22,14 +25,14 @@ if "食材" in stock_adj_cate:
 else: 
     prefix_filter = "S%"
 
-df_unique_items = cached_fetch_unique_items_to_adjust(prefix_filter)
+df_unique_items = cached_fetch_unique_items_to_adjust(prefix_filter, cache_key=st.session_state.db_update_trigger)
 
 if not df_unique_items.empty:
     item_options = df_unique_items.apply(lambda r: f"{r['prod_id']} - {r['prod_name']}", axis=1).tolist()
     selected_item_str = st.selectbox("🔍 1. 請先選取欲調整的項目名稱：", item_options)
     target_prod_id = selected_item_str.split(" - ")[0]
     
-    df_batches = cached_fetch_batches_by_prod(target_prod_id)
+    df_batches = cached_fetch_batches_by_prod(target_prod_id, cache_key=st.session_state.db_update_trigger)
     
     if not df_batches.empty:
         if use_mobile_view:
@@ -114,7 +117,8 @@ if not df_unique_items.empty:
                             conn.commit()
                             conn.close()
                             
-                            st.cache_data.clear()
+                            # 替換全域快取清空
+                            st.session_state.db_update_trigger += 1
                             
                             month_digits = int(adj_month_str.replace("月", ""))
                             formatted_target_month = f"{selected_adj_year}-{month_digits:02d}"
@@ -127,6 +131,7 @@ if not df_unique_items.empty:
                             log_history(current_user, f"手動調整庫存-品項:{target_prod_id}", log_details)
                             
                             trigger_toast(f"🛠️ 批次庫存微調完畢！品項：{item_name}，變動量：{final_qty_change:+,.1f}", icon="🔧")
+                            st.sidebar.markdown(f"**累加觸發器為: {st.session_state.db_update_trigger}**") # 背景測試
                             st.success(f"🎉 批次庫存調整成功！已成功紀錄於歷史動作審計軌跡，並歸帳至 {formatted_target_month}。")
                             st.rerun()
         else:

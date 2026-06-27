@@ -43,6 +43,10 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# 初始化全域快取控制計數器
+if 'db_update_trigger' not in st.session_state:
+    st.session_state.db_update_trigger = 0
+
 show_pending_toast()
 
 st.title("🍳 赤山堡砂鍋 後台管理")
@@ -69,7 +73,7 @@ st.sidebar.selectbox(
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ 快速微調安全庫存線")
 
-all_items_for_safety = cached_fetch_safety_items()
+all_items_for_safety = cached_fetch_safety_items(cache_key=st.session_state.db_update_trigger)
 
 if not all_items_for_safety.empty:
     selected_safety_item = st.sidebar.selectbox("選擇調整品項", all_items_for_safety['prod_id'] + " - " + all_items_for_safety['prod_name'], key="sb_safety_item_box")
@@ -91,7 +95,8 @@ if not all_items_for_safety.empty:
         conn.commit()
         conn.close()
         
-        st.cache_data.clear()
+        # 替換全域清空快取，精準累加控制鍵
+        st.session_state.db_update_trigger += 1
         
         log_history(
             st.session_state.current_user, 
@@ -103,7 +108,7 @@ if not all_items_for_safety.empty:
         trigger_toast(f"已將 【{matched_safety_row['prod_name']}】 的安全線更新為 {new_safety_value}", icon="⚙️")
         st.rerun()
 
-df_alert_check = cached_fetch_low_stock_alerts()
+df_alert_check = cached_fetch_low_stock_alerts(cache_key=st.session_state.db_update_trigger)
 
 if not df_alert_check.empty:
     alert_messages = []
@@ -117,7 +122,7 @@ use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=Fal
 
 stock_filter = st.selectbox("🔍 篩選庫存類別", ["顯示全部明細", "僅看食材 (R)", "僅看用品 (S)"], key="home_stock_filter")
 
-df_merged_stock = cached_fetch_merged_stock(stock_filter)
+df_merged_stock = cached_fetch_merged_stock(stock_filter, cache_key=st.session_state.db_update_trigger)
 
 if not df_merged_stock.empty:
     if use_mobile_view:
@@ -183,7 +188,7 @@ if not df_merged_stock.empty:
         )
         
         target_prod_id = selected_stock_item.split(" - ")[0]
-        df_batch_details = cached_fetch_batch_details(target_prod_id)
+        df_batch_details = cached_fetch_batch_details(target_prod_id, cache_key=st.session_state.db_update_trigger)
         
         matched_item_row = df_merged_stock[df_merged_stock['編號'] == target_prod_id].iloc[0]
         base_cost = matched_item_row['移動平均單位成本']
@@ -211,7 +216,7 @@ if not df_merged_stock.empty:
         else:
             st.info("該品項目前無有效批次庫存。")
             
-    df_unique_disabled_items = cached_fetch_disabled_items_with_stock()
+    df_unique_disabled_items = cached_fetch_disabled_items_with_stock(cache_key=st.session_state.db_update_trigger)
     
     if not df_unique_disabled_items.empty:
         st.markdown("---")
@@ -221,7 +226,7 @@ if not df_merged_stock.empty:
         selected_disabled_item_str = st.selectbox("🔍 1. 選取欲清理的下架商品/食材：", disabled_item_options, key="clean_disabled_item_box")
         target_disabled_prod_id = selected_disabled_item_str.split(" - ")[0]
         
-        df_disabled_batches = cached_fetch_disabled_batches(target_disabled_prod_id)
+        df_disabled_batches = cached_fetch_disabled_batches(target_disabled_prod_id, cache_key=st.session_state.db_update_trigger)
         
         if not df_disabled_batches.empty:
             def format_batch_label(r):
@@ -243,7 +248,8 @@ if not df_merged_stock.empty:
                 conn.commit()
                 conn.close()
                 
-                st.cache_data.clear()
+                # 替換全域清空快取
+                st.session_state.db_update_trigger += 1
                 
                 log_history(
                     st.session_state.current_user, 
