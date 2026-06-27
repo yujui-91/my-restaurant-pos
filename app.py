@@ -49,19 +49,17 @@ st.title("🍳 赤山堡砂鍋 後台管理")
 
 init_db()
 
-# ⭐ 初始化精準快取控制變數
-for key in ['products_key', 'stock_key', 'orders_key', 'history_key']:
-    if key not in st.session_state:
-        st.session_state[key] = 0
-
-# --- 設定預設操作人員為「老闆娘」 ---
+# --- 修改處：設定預設操作人員為「老闆娘」 ---
 if 'current_user' not in st.session_state:
     st.session_state.current_user = "老闆娘"
 
 st.sidebar.markdown("### 👤 操作人員設定")
 
+# 透過明確的清單提供選擇
 user_list = ["老闆", "老闆娘", "堃原", "育睿", "芹媖"]
 
+# 直接使用 key="current_user" 讓 Streamlit 自動雙向綁定狀態
+# 移除原本手動計算 default_index 與手動覆蓋變數的邏輯，完美解決跳回舊值的 Bug
 st.sidebar.selectbox(
     "操作人員", 
     options=user_list, 
@@ -71,8 +69,7 @@ st.sidebar.selectbox(
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ 快速微調安全庫存線")
 
-# 傳入精準快取引數
-all_items_for_safety = cached_fetch_safety_items(st.session_state.products_key)
+all_items_for_safety = cached_fetch_safety_items()
 
 if not all_items_for_safety.empty:
     selected_safety_item = st.sidebar.selectbox("選擇調整品項", all_items_for_safety['prod_id'] + " - " + all_items_for_safety['prod_name'], key="sb_safety_item_box")
@@ -94,10 +91,7 @@ if not all_items_for_safety.empty:
         conn.commit()
         conn.close()
         
-        # ⭐ 精準變更對應快取鍵，不再全部大清除
-        st.session_state.products_key += 1
-        st.session_state.stock_key += 1
-        st.session_state.history_key += 1
+        st.cache_data.clear()
         
         log_history(
             st.session_state.current_user, 
@@ -109,8 +103,7 @@ if not all_items_for_safety.empty:
         trigger_toast(f"已將 【{matched_safety_row['prod_name']}】 的安全線更新為 {new_safety_value}", icon="⚙️")
         st.rerun()
 
-# 傳入精準快取引數
-df_alert_check = cached_fetch_low_stock_alerts(st.session_state.stock_key)
+df_alert_check = cached_fetch_low_stock_alerts()
 
 if not df_alert_check.empty:
     alert_messages = []
@@ -121,10 +114,10 @@ if not df_alert_check.empty:
 st.subheader("📊 目前庫存明細")
 
 use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=False, key="home_mobile_toggle")
+
 stock_filter = st.selectbox("🔍 篩選庫存類別", ["顯示全部明細", "僅看食材 (R)", "僅看用品 (S)"], key="home_stock_filter")
 
-# 傳入精準快取引數
-df_merged_stock = cached_fetch_merged_stock(stock_filter, st.session_state.stock_key)
+df_merged_stock = cached_fetch_merged_stock(stock_filter)
 
 if not df_merged_stock.empty:
     if use_mobile_view:
@@ -190,8 +183,7 @@ if not df_merged_stock.empty:
         )
         
         target_prod_id = selected_stock_item.split(" - ")[0]
-        # 傳入精準快取引數
-        df_batch_details = cached_fetch_batch_details(target_prod_id, st.session_state.stock_key)
+        df_batch_details = cached_fetch_batch_details(target_prod_id)
         
         matched_item_row = df_merged_stock[df_merged_stock['編號'] == target_prod_id].iloc[0]
         base_cost = matched_item_row['移動平均單位成本']
@@ -219,8 +211,7 @@ if not df_merged_stock.empty:
         else:
             st.info("該品項目前無有效批次庫存。")
             
-    # 傳入精準快取引數
-    df_unique_disabled_items = cached_fetch_disabled_items_with_stock(st.session_state.stock_key)
+    df_unique_disabled_items = cached_fetch_disabled_items_with_stock()
     
     if not df_unique_disabled_items.empty:
         st.markdown("---")
@@ -230,8 +221,7 @@ if not df_merged_stock.empty:
         selected_disabled_item_str = st.selectbox("🔍 1. 選取欲清理的下架商品/食材：", disabled_item_options, key="clean_disabled_item_box")
         target_disabled_prod_id = selected_disabled_item_str.split(" - ")[0]
         
-        # 傳入精準快取引數
-        df_disabled_batches = cached_fetch_disabled_batches(target_disabled_prod_id, st.session_state.stock_key)
+        df_disabled_batches = cached_fetch_disabled_batches(target_disabled_prod_id)
         
         if not df_disabled_batches.empty:
             def format_batch_label(r):
@@ -253,9 +243,7 @@ if not df_merged_stock.empty:
                 conn.commit()
                 conn.close()
                 
-                # ⭐ 精準變更對應快取鍵
-                st.session_state.stock_key += 1
-                st.session_state.history_key += 1
+                st.cache_data.clear()
                 
                 log_history(
                     st.session_state.current_user, 
