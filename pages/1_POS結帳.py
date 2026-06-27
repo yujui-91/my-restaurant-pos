@@ -323,7 +323,8 @@ with pos_tabs[0]:
                                 })
                                 
                             now_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            details_log = f"合併前台收銀：出餐明細 {confirm_msg}，總金額 ${total_bill_amount}，精準食材成本 ${actual_total_cost:.2f}。 消耗食材: " + ", ".join(log_mats_summary)
+                            # 改善處：只記錄出餐明細與總金額，不將消耗的原物料與成本字串記錄進文字欄位
+                            details_log = f"合併前台收銀：出餐明細 {confirm_msg}，總金額 ${total_bill_amount} 元。"
                             
                             structured_payload = {
                                 "dishes": st.session_state.pos_shopping_cart,
@@ -636,7 +637,8 @@ with pos_tabs[1]:
                             cursor.execute("UPDATE history SET action = '多品項收銀結帳-已微調更正' WHERE id = ?", (target_hist_id,))
                             cursor.execute("UPDATE orders SET status = 2 WHERE history_id = ?", (target_hist_id,))
 
-                            details_text_part = f"數量更正紀錄（對應原單號 {target_hist_id}）：出餐明細 {new_confirm_msg}，新總金額 ${new_total_bill:.0f}，更正後精準食材成本 ${final_new_cost:.2f}。 消耗食材: " + ", ".join(log_mats_summary)
+                            # 改善處：只記錄更正後的餐點明細與新總金額，移除原物料消耗字串
+                            details_text_part = f"數量更正紀錄（對應原單號 {target_hist_id}）：出餐明細 {new_confirm_msg}，新總金額 ${new_total_bill:.0f} 元。"
                             new_payload_struct = {
                                 "dishes": new_cart_payload, 
                                 "materials": new_mats_payload, 
