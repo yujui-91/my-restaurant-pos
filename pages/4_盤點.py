@@ -7,21 +7,18 @@ from database.db_core import log_history, trigger_toast, show_pending_toast, get
 # 從 db_core 載入所需的快取函式
 from database.db_core import cached_fetch_products_in_stock_for_audit, cached_fetch_batch_details_for_audit
 
-if 'db_update_trigger' not in st.session_state:
-    st.session_state.db_update_trigger = 0
-
 show_pending_toast()
 
 st.subheader("📋 存貨盤點核實")
 
 use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=False, key="audit_mobile_toggle")
 
-current_user = st.session_state.get('current_user', '老 鎖')
+current_user = st.session_state.get('current_user', '老 闆')
 
 audit_cate_filter = st.radio("🗂️ 請選擇盤點項目類別：", ["食材 (R)", "用品 (S)"], horizontal=True)
 prefix_char = "R%" if "食材" in audit_cate_filter else "S%"
 
-df_products_in_stock = cached_fetch_products_in_stock_for_audit(prefix_char, cache_key=st.session_state.db_update_trigger)
+df_products_in_stock = cached_fetch_products_in_stock_for_audit(prefix_char)
 
 if not df_products_in_stock.empty:
     selected_product_str = st.selectbox(
@@ -30,7 +27,7 @@ if not df_products_in_stock.empty:
     )
     target_prod_id = selected_product_str.split(" - ")[0]
     
-    df_batches = cached_fetch_batch_details_for_audit(target_prod_id, cache_key=st.session_state.db_update_trigger)
+    df_batches = cached_fetch_batch_details_for_audit(target_prod_id)
     
     if not df_batches.empty:
         if use_mobile_view:
@@ -117,8 +114,7 @@ if not df_products_in_stock.empty:
                         conn.commit()
                         conn.close()
                         
-                        # 替換全域快取清空
-                        st.session_state.db_update_trigger += 1
+                        st.cache_data.clear()
                         
                         log_details = (
                             f"盤點核實覆蓋。品項：【{item_name}({target_prod_id})】的[批次 {target_batch_id}]。習得歷史進貨日: {orig_inbound}，原登記供應商: {orig_vendor if orig_vendor else '無'}。"
