@@ -53,18 +53,17 @@ init_db()
 if 'current_user' not in st.session_state:
     st.session_state.current_user = "老闆娘"
 
-# --- 修改處：將手動輸入改為五位特定名單的下拉式選單 ---
-user_list = ["老闆", "老闆娘", "堃原", "育睿", "芹媖"]
-# 確保若 session_state 的值不在名單中時能正確處理 index
-try:
-    default_index = user_list.index(st.session_state.current_user)
-except ValueError:
-    default_index = 1 # 預設指向「老闆娘」
+st.sidebar.markdown("### 👤 操作人員設定")
 
-st.session_state.current_user = st.sidebar.selectbox(
+# 透過明確的清單提供選擇
+user_list = ["老闆", "老闆娘", "堃原", "育睿", "芹媖"]
+
+# 直接使用 key="current_user" 讓 Streamlit 自動雙向綁定狀態
+# 移除原本手動計算 default_index 與手動覆蓋變數的邏輯，完美解決跳回舊值的 Bug
+st.sidebar.selectbox(
     "操作人員", 
     options=user_list, 
-    index=default_index
+    key="current_user"
 )
 
 st.sidebar.markdown("---")
