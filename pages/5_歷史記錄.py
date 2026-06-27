@@ -60,7 +60,14 @@ st.caption(f"目前查看審計區間：{start_dt.strftime('%Y-%m-%d %H:%M:%S')}
 df_hist = cached_fetch_audit_history(start_str, end_str, selected_main_action)
 
 if not df_hist.empty:
-    df_hist['詳細說明'] = df_hist['詳細說明'].apply(lambda x: str(x).split("||STRUCT_DATA||")[0] if "||STRUCT_DATA||" in str(x) else x)
+    # 改善處：除了切除後台結構 JSON 之外，若遇到包含消耗原物料資訊的舊單據，自動將其切除只保留到金額為止，讓前台畫面清爽
+    def clean_log_text(x):
+        text = str(x).split("||STRUCT_DATA||")[0]
+        if "。 消耗食材:" in text:
+            text = text.split("。 消耗食材:")[0] + " 元。"
+        return text
+    
+    df_hist['詳細說明'] = df_hist['詳細說明'].apply(clean_log_text)
 
 if not df_hist.empty:
     st.metric("符合條件紀錄數", len(df_hist))
