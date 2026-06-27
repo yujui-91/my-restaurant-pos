@@ -270,9 +270,9 @@ def cached_fetch_safety_items(cache_key=0):
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM products WHERE status = 1 AND (prod_id LIKE 'R%' OR prod_id LIKE 'S%')")
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_fetch_low_stock_alerts(cache_key=0):
@@ -289,9 +289,9 @@ def cached_fetch_low_stock_alerts(cache_key=0):
         HAVING total_qty < p.safety_stock
     ''')
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_fetch_merged_stock(stock_filter, cache_key=0):
@@ -325,9 +325,9 @@ def cached_fetch_merged_stock(stock_filter, cache_key=0):
         ORDER BY p.status DESC, p.prod_id
     ''')
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_fetch_batch_details(target_prod_id, cache_key=0):
@@ -347,9 +347,9 @@ def cached_fetch_batch_details(target_prod_id, cache_key=0):
         ORDER BY s.inbound_date ASC, s.batch_id ASC
     ''', (target_prod_id,))
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_fetch_disabled_items_with_stock(cache_key=0):
@@ -364,9 +364,9 @@ def cached_fetch_disabled_items_with_stock(cache_key=0):
         ORDER BY p.prod_id
     ''')
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_fetch_disabled_batches(target_disabled_prod_id, cache_key=0):
@@ -381,9 +381,9 @@ def cached_fetch_disabled_batches(target_disabled_prod_id, cache_key=0):
         ORDER BY s.inbound_date ASC, s.batch_id ASC
     ''', (target_disabled_prod_id,))
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_fetch_active_dishes(cache_key=0):
@@ -391,9 +391,9 @@ def cached_fetch_active_dishes(cache_key=0):
     cursor = conn.cursor()
     cursor.execute("SELECT prod_id, prod_name, price FROM products WHERE status = 1 AND prod_id LIKE 'P%'")
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_fetch_active_materials(cache_key=0):
@@ -401,9 +401,9 @@ def cached_fetch_active_materials(cache_key=0):
     cursor = conn.cursor()
     cursor.execute("SELECT prod_id, prod_name, use_unit, cost FROM products WHERE status = 1 AND (prod_id LIKE 'R%' OR prod_id LIKE 'S%')")
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=cols if cols else None)
 
 @st.cache_data(ttl=30)
 def cached_fetch_today_orders(start_str, end_str, cache_key=0):
@@ -415,9 +415,9 @@ def cached_fetch_today_orders(start_str, end_str, cache_key=0):
         ORDER BY id DESC
     ''', (start_str, end_str))
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_fetch_dish_bom_recipe(target_dish_id, cache_key=0):
@@ -428,9 +428,9 @@ def cached_fetch_dish_bom_recipe(target_dish_id, cache_key=0):
         FROM bom b JOIN products p ON b.child_id = p.prod_id WHERE b.parent_id = ?
     ''', (target_dish_id,))
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_fetch_all_dishes_raw(cache_key=0):
@@ -438,9 +438,9 @@ def cached_fetch_all_dishes_raw(cache_key=0):
     cursor = conn.cursor()
     cursor.execute("SELECT prod_id, prod_name,cost, price, status FROM products WHERE prod_id LIKE 'P%'")
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_fetch_all_materials_raw(cache_key=0):
@@ -448,9 +448,9 @@ def cached_fetch_all_materials_raw(cache_key=0):
     cursor = conn.cursor()
     cursor.execute("SELECT prod_id, prod_name, use_unit, cost, status FROM products WHERE prod_id LIKE 'R%' OR prod_id LIKE 'S%'")
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_fetch_existing_items_for_po(prefix, cache_key=0):
@@ -461,9 +461,9 @@ def cached_fetch_existing_items_for_po(prefix, cache_key=0):
         (f"{prefix}%",)
     )
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_fetch_history_batches(where_clause, params_tuple, cache_key=0):
@@ -481,9 +481,9 @@ def cached_fetch_history_batches(where_clause, params_tuple, cache_key=0):
         ORDER BY s.batch_id DESC
     ''', list(params_tuple))
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_fetch_unique_items_to_adjust(prefix, cache_key=0):
@@ -497,9 +497,9 @@ def cached_fetch_unique_items_to_adjust(prefix, cache_key=0):
         ORDER BY p.prod_id
     ''', (prefix,))
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_fetch_batches_by_prod(target_prod_id, cache_key=0):
@@ -513,9 +513,9 @@ def cached_fetch_batches_by_prod(target_prod_id, cache_key=0):
         ORDER BY s.expiry_date ASC, s.inbound_date ASC
     ''', (target_prod_id,))
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_fetch_products_in_stock_for_audit(prefix, cache_key=0):
@@ -528,9 +528,9 @@ def cached_fetch_products_in_stock_for_audit(prefix, cache_key=0):
         WHERE s.prod_id LIKE ? AND s.qty > 0
     ''', (prefix,))
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_fetch_batch_details_for_audit(target_prod_id, cache_key=0):
@@ -544,9 +544,9 @@ def cached_fetch_batch_details_for_audit(target_prod_id, cache_key=0):
         ORDER BY s.inbound_date ASC, s.batch_id ASC
     ''', (target_prod_id,))
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_fetch_audit_history(start_str, end_str, selected_main_action, cache_key=0):
@@ -564,9 +564,9 @@ def cached_fetch_audit_history(start_str, end_str, selected_main_action, cache_k
 
     cursor.execute(sql_query, sql_params)
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_get_sales_summary(start_str, end_str, cache_key=0):
@@ -578,9 +578,9 @@ def cached_get_sales_summary(start_str, end_str, cache_key=0):
         WHERE status = 1 AND timestamp BETWEEN ? AND ?
     ''', (start_str, end_str))
     r = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(r, columns=cols)
+    return pd.DataFrame(r, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_get_dish_rank(start_str, end_str, cache_key=0):
@@ -595,9 +595,9 @@ def cached_get_dish_rank(start_str, end_str, cache_key=0):
         ORDER BY 銷售份數 DESC
     ''', (start_str, end_str))
     r = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(r, columns=cols)
+    return pd.DataFrame(r, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_get_material_usage(start_str, end_str, cache_key=0):
@@ -612,9 +612,9 @@ def cached_get_material_usage(start_str, end_str, cache_key=0):
         ORDER BY 消耗總數量 DESC
     ''', (start_str, end_str))
     r = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(r, columns=cols)
+    return pd.DataFrame(r, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_get_expenses_raw(cache_key=0):
@@ -622,9 +622,9 @@ def cached_get_expenses_raw(cache_key=0):
     cursor = conn.cursor()
     cursor.execute("SELECT action, details, timestamp FROM history WHERE action LIKE '手動調整庫存-%'")
     r = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(r, columns=cols)
+    return pd.DataFrame(r, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_get_actual_purchase_details(start_date_str, end_date_str, cache_key=0):
@@ -639,9 +639,9 @@ def cached_get_actual_purchase_details(start_date_str, end_date_str, cache_key=0
         ORDER BY s.inbound_date DESC, s.batch_id DESC
     ''', (start_date_str, end_date_str))
     r = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    cols = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(r, columns=cols)
+    return pd.DataFrame(r, columns=cols if cols else None)
 
 @st.cache_data(ttl=60)
 def cached_get_operational_expenses_base(cache_key=0):
@@ -649,10 +649,10 @@ def cached_get_operational_expenses_base(cache_key=0):
     cursor = conn.cursor()
     cursor.execute("SELECT s.batch_id, s.prod_id, p.prod_name, s.qty, s.cost, s.inbound_date FROM stock_batches s JOIN products p ON s.prod_id = p.prod_id WHERE s.prod_id LIKE 'C%'")
     r_cb = cursor.fetchall()
-    cols_cb = [desc[0] for desc in cursor.description]
+    cols_cb = [desc[0] for desc in cursor.description] if cursor.description else []
     
     cursor.execute("SELECT id, action, details, timestamp FROM history WHERE details LIKE '%目標歸帳月份:%' ORDER BY id ASC")
     r_ch = cursor.fetchall()
-    cols_ch = [desc[0] for desc in cursor.description]
+    cols_ch = [desc[0] for desc in cursor.description] if cursor.description else []
     conn.close()
-    return pd.DataFrame(r_cb, columns=cols_cb), pd.DataFrame(r_ch, columns=cols_ch)
+    return pd.DataFrame(r_cb, columns=cols_cb if cols_cb else None), pd.DataFrame(r_ch, columns=cols_ch if cols_ch else None)
