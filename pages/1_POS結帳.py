@@ -90,9 +90,12 @@ def calculate_cart_estimated_cost(cart_items):
     return cart_total_cost, mats_status
 
 
-# --- 局部刷新區塊 A-1：品項點購區 ---
+# --- 【核心修正】將 A-1 與 A-2 合併在同一個 Fragment 中 ---
 @st.fragment
-def render_order_input_zone():
+def render_pos_checkout_zone():
+    # ==========================================
+    # 區塊 A-1：品項點購區
+    # ==========================================
     st.markdown("##### 🔍 1. 品項點購區：")
     col_cart1, col_cart2, col_cart3 = st.columns([2, 1, 1])
     with col_cart1:
@@ -122,14 +125,12 @@ def render_order_input_zone():
                 st.session_state.cart_editor_version += 1
                 trigger_toast(f"已將 {matched_dish['prod_name']} x {cart_dish_qty} 份加入餐點！", icon="🛒")
                 
-                # 【優化改善點】改回普通的 st.rerun()。因為此函數在頁籤內有 fragment 包裹，
-                # 這裡的重刷只會連動刷新下方的明細單，而不會造成整個系統或隔壁頁籤跟著重刷。
+                # 這裡呼叫 st.rerun()，因為在同一個 Fragment 內，只會重刷此 Fragment，不會影響其他 Tabs
                 st.rerun() 
 
-
-# --- 局部刷新區塊 A-2：當前點餐單明細與面板 ---
-@st.fragment
-def render_cart_details_zone():
+    # ==========================================
+    # 區塊 A-2：當前點餐單明細與面板
+    # ==========================================
     st.markdown("---")
     st.markdown("##### 📋 當前點餐單明細：")
     
@@ -690,9 +691,8 @@ def render_modify_orders_tab():
 pos_tabs = st.tabs(["💰 前台收銀結帳", "✏️ 修改當日出餐數量", "✏️ 餐點細項修改", "❌ 品項下架與管理區"])
 
 with pos_tabs[0]:
-    # 這裡呼叫這兩個獨立的 fragment 區塊
-    render_order_input_zone()
-    render_cart_details_zone()
+    # 這裡呼叫全新合併過後的單一 fragment 區塊，點餐與購物車能完美做到局部聯動
+    render_pos_checkout_zone()
 
 with pos_tabs[1]:
     render_modify_orders_tab()
@@ -838,7 +838,7 @@ with pos_tabs[2]:
                         cursor = conn.cursor()
                         cursor.execute("SELECT prod_id FROM products WHERE prod_name = ? AND status = 1", (pos_custom_name,))
                         if cursor.fetchone():
-                            st.error(f"❌ 錯誤：【{pos_custom_name}】ed已存在於正式菜單中，請直接至下方區塊修正參數")
+                            st.error(f"❌ 錯誤：【{pos_custom_name}】已存在於正式菜單中，請直接至下方區塊修正參數")
                             cursor.close()
                             conn.close()
                         else:
