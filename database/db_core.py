@@ -263,7 +263,7 @@ def show_pending_toast():
 # 集中快取定義區（以下為新移入之快取函式，皆清楚備註對應分頁）
 # ============================================================================
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=60)
 def cached_fetch_safety_items():
     """快取獲取供安全庫存設定的品項列表 (R和S)"""
     conn = get_db_conn()
@@ -274,7 +274,7 @@ def cached_fetch_safety_items():
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=60)
 def cached_fetch_low_stock_alerts():
     """快取檢測低庫存補貨預警"""
     conn = get_db_conn()
