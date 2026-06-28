@@ -225,8 +225,6 @@ def render_pos_checkout_zone():
         st.markdown(f"""
         > 💰 **本單即時面板：**
         > * 本單【**總銷售金額**】： **${total_bill_amount:,.0f} 元**
-        > * 本單【**預估即時原物料成本**】： **${estimated_cart_cost:,.2f} 元**
-        > * 本單【**預估純利潤**】： **${estimated_profit:,.2f} 元** ｜ 毛利率: **{estimated_margin:.1f}%**
         """)
         
         if st.button("🗑️ 重新點餐"):
