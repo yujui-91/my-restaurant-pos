@@ -31,9 +31,6 @@ if 'pos_shopping_cart' not in st.session_state:
 if 'cart_editor_version' not in st.session_state:
     st.session_state.cart_editor_version = 0
 
-existing_dishes = cached_fetch_active_dishes()
-all_raw_df = cached_fetch_active_materials()
-
 def adjust_qty_callback(state_key, delta):
     current_val = st.session_state.get(state_key, 0)
     st.session_state[state_key] = max(0, current_val + delta)
@@ -90,9 +87,12 @@ def calculate_cart_estimated_cost(cart_items):
     return cart_total_cost, mats_status
 
 
-# --- 【核心修正】將 A-1 與 A-2 合併在同一個 Fragment 中 ---
+# --- 【核心修正】將前台結帳所有相關元件與邏輯封裝在獨立的 Fragment 中 ---
 @st.fragment
 def render_pos_checkout_zone():
+    # 移入 Fragment 內部獲取，確保切換品項時不觸發外層重新計算
+    existing_dishes = cached_fetch_active_dishes()
+    
     # ==========================================
     # 區塊 A-1：品項點購區
     # ==========================================
@@ -124,8 +124,6 @@ def render_pos_checkout_zone():
                     st.session_state.show_checkout_confirm = False 
                 st.session_state.cart_editor_version += 1
                 trigger_toast(f"已將 {matched_dish['prod_name']} x {cart_dish_qty} 份加入餐點！", icon="🛒")
-                
-                # 這裡呼叫 st.rerun()，因為在同一個 Fragment 內，只會重刷此 Fragment，不會影響其他 Tabs
                 st.rerun() 
 
     # ==========================================
@@ -228,8 +226,6 @@ def render_pos_checkout_zone():
                 st.rerun()
                 
         estimated_cart_cost, mats_check_dict = calculate_cart_estimated_cost(st.session_state.pos_shopping_cart)
-        estimated_profit = float(total_bill_amount) - estimated_cart_cost
-        estimated_margin = (estimated_profit / total_bill_amount * 100) if total_bill_amount > 0 else 0.0
         
         st.markdown(f"""
         > 💰 **本單即時面板：**
@@ -386,9 +382,10 @@ def render_pos_checkout_zone():
         st.info("💡 目前點餐購物車為空，請從上方選取餐點並加入點餐單.")
 
 
-# --- 局部刷新區塊 B：修改當日出餐數量 ---
+# --- 局部刷新區塊 B：修改當日出餐數量封裝為單獨 Fragment ---
 @st.fragment
 def render_modify_orders_tab():
+    existing_dishes = cached_fetch_active_dishes()
     st.markdown("##### 📝 當日出餐紀錄面版")
     
     today_start = datetime.now().strftime("%Y-%m-%d 00:00:00")
@@ -615,7 +612,7 @@ def render_modify_orders_tab():
                             avail = cursor.fetchone()[0] or 0.0
                             if avail < total_need:
                                 insufficient_flag = True
-                                insufficient_msg += f"❌ 儲存失敗：微調後共需要物料【{m_name}】{total_need:.1f}，回補後全庫僅剩 {avail:.1f}！\n"
+                                insufficient_msg += f"❌ 儲存失敗：微調後共需要物料【m_name】{total_need:.1f}，回補後全庫僅剩 {avail:.1f}！\n"
                             else:
                                 success, deducted_cost_val, batch_list = deduct_stock_fifo(m_id, total_need, cursor)
                                 if not success:
@@ -691,13 +688,14 @@ def render_modify_orders_tab():
 pos_tabs = st.tabs(["💰 前台收銀結帳", "✏️ 修改當日出餐數量", "✏️ 餐點細項修改", "❌ 品項下架與管理區"])
 
 with pos_tabs[0]:
-    # 這裡呼叫全新合併過後的單一 fragment 區塊，點餐與購物車能完美做到局部聯動
     render_pos_checkout_zone()
 
 with pos_tabs[1]:
     render_modify_orders_tab()
 
 with pos_tabs[2]:
+    existing_dishes = cached_fetch_active_dishes()
+    all_raw_df = cached_fetch_active_materials()
     st.markdown("##### 🆕 1. 新餐點創立區")
     
     creation_mode = st.radio("🛠️ 請選擇餐點建立模式：", ["A模式：單份餐點", "B模式：整鍋"], horizontal=True)
@@ -1258,9 +1256,9 @@ with pos_tabs[2]:
             st.error("❌ 找不到該餐點資料，可能剛已被下架！")
 
 with pos_tabs[3]:
-    st.markdown("##### ❌ 菜單餐點下架控制面板")
-    
     all_dishes_raw = cached_fetch_all_dishes_raw()
+    all_raw_df = cached_fetch_active_materials()
+    st.markdown("##### ❌ 菜單餐點下架控制面板")
     
     if all_dishes_raw.empty:
         st.info("開出系統中尚無餐點。")
