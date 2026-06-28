@@ -180,12 +180,17 @@ with po_tabs[0]:
                 else:
                     log_action = "採購進貨"
                     vendor_info = f" (供應商: {v_name})" if v_name else ""
-                    
+
                     is_auto_enabled = not existing_items_df.empty and chosen_name in existing_items_df['prod_name'].values and existing_items_df[existing_items_df['prod_name'] == chosen_name].iloc[0]['status'] == 0
                     auto_enabled_log = " (偵測到下架食材，系統已在進貨時自動將其重新啟用上架！)" if is_auto_enabled else ""
-                    
-                    log_history(current_user, log_action, f"新單登記：{chosen_name}，數量：{po_qty}{p_unit}，總金額：${total_invoice_amount}{vendor_info}{auto_enabled_log} (賬單批次: {new_batch_id})")
-                    trigger_toast(f"採購登記完成！【{chosen_name}】庫存已增加{auto_enabled_log}", icon="📥")
+
+                    # --- 修改處：將總進貨量(大包裝x轉換率)與小單位直接算好存入歷史詳細說明中 ---
+                    log_history(
+                    current_user, 
+                    log_action, 
+                    f"新單登記：{chosen_name}，進貨量：{po_qty}{p_unit} (等同於內含總量: {total_use_units:,.1f} {u_unit}，轉換率: {c_factor})，總金額：${total_invoice_amount}{vendor_info}{auto_enabled_log} (賬單批次: {new_batch_id})"
+                    )
+                    trigger_toast(f"採購登記完成！【{chosen_name}】庫存已增加 {total_use_units:,.1f} {u_unit}{auto_enabled_log}", icon="📥")
                 
                 st.rerun()
 
