@@ -27,10 +27,6 @@ current_user = st.session_state.get('current_user', '老 闆')
 if 'pos_shopping_cart' not in st.session_state:
     st.session_state.pos_shopping_cart = []
 
-# 固定 Data Editor 的 key 基礎，避免選取下拉選單時元件被誤判銷毀而重洗畫面
-if 'cart_editor_key' not in st.session_state:
-    st.session_state.cart_editor_key = "stable_cart_data_editor_v1"
-
 existing_dishes = cached_fetch_active_dishes()
 all_raw_df = cached_fetch_active_materials()
 
@@ -87,12 +83,12 @@ def calculate_cart_estimated_cost(cart_items):
 
 
 # ============================================================================
-# 正確的 Fragment 定義：必須獨立寫在主流程最外層，不嵌套在 with tabs 內！
+# 正確的 Fragment 隔離區：全部獨立寫在最外層（全域），確保 rerun 時不會影響其他頁籤
 # ============================================================================
 
 @st.fragment
 def render_pos_checkout_zone():
-    """ 頁籤 1：前台收銀結帳 獨立局部刷新區 """
+    """ 【功能分頁 1】 前台收銀結帳 獨立局部重新渲染區 """
     st.markdown("##### 🔍 1. 品項點購區：")
     
     col_cart1, col_cart2, col_cart3 = st.columns([2, 1, 1])
@@ -100,7 +96,6 @@ def render_pos_checkout_zone():
         dish_select_options = ["--- 請選擇餐點 ---"] + existing_dishes['prod_name'].tolist()
         selected_cart_dish = st.selectbox("請選取欲加入餐點的品項", dish_select_options, key="cart_dish_selector")
     with col_cart2:
-        # 讓店家直接手動輸入/微調點購數量
         cart_dish_qty = st.number_input("點購數量 (份)", min_value=1, value=1, step=1, key="cart_qty_input")
     with col_cart3:
         st.markdown("<br>", unsafe_allow_html=True)
@@ -122,7 +117,8 @@ def render_pos_checkout_zone():
                 if 'show_checkout_confirm' in st.session_state:
                     st.session_state.show_checkout_confirm = False 
                 trigger_toast(f"已將 {matched_dish['prod_name']} x {cart_dish_qty} 份加入餐點！", icon="🛒")
-                st.rerun()
+                # 使用 scope="fragment" 精準只刷新此點餐區，絕不連累其他三個分頁
+                st.rerun(scope="fragment")
 
     st.markdown("---")
     st.markdown("##### 📋 當前點餐單明細：")
@@ -146,13 +142,13 @@ def render_pos_checkout_zone():
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    btn_col1, btn_col2 = st.columns([1, 1])
+                    # 🛠️ 改善：移除購物車內所有的 ➕ 增加 與 ➖ 減少 按鈕，直接換成手動輸入數值的輸入框，免除點擊按鈕引發的卡頓
+                    btn_col1, btn_col2 = st.columns([1.5, 1])
                     with btn_col1:
-                        # 移除原本的 +- 按鈕，僅保留大按鈕排版中的手動數量微調或刪除
-                        new_mobile_qty = st.number_input(f"修改數量", min_value=1, value=int(item['qty']), step=1, key=f"mob_qty_edit_{idx}")
+                        new_mobile_qty = st.number_input(f"手動變更數量", min_value=1, value=int(item['qty']), step=1, key=f"mob_qty_edit_input_{idx}")
                         if new_mobile_qty != item['qty']:
                             st.session_state.pos_shopping_cart[idx]['qty'] = new_mobile_qty
-                            st.rerun()
+                            st.rerun(scope="fragment")
                     with btn_col2:
                         st.markdown("<br>", unsafe_allow_html=True)
                         if st.button("🗑️ 刪除品項", key=f"cart_del_{idx}", type="secondary", use_container_width=True):
@@ -164,13 +160,14 @@ def render_pos_checkout_zone():
                 if action_type == "delete":
                     st.session_state.pos_shopping_cart.pop(target_idx)
                     trigger_toast("已將商品移出點餐單！", icon="🗑️")
-                st.rerun()
+                st.rerun(scope="fragment")
                 
         else:
             df_cart = pd.DataFrame(st.session_state.pos_shopping_cart)
             df_cart['小計'] = df_cart['price'] * df_cart['qty']
             df_cart['刪除'] = False
             
+            # 固定表格的 key 為常數，不再拼接隨機版號，徹底解決變更下拉選單導致表格重繪刷新的問題
             edited_cart_df = st.data_editor(
                 df_cart,
                 column_config={
@@ -183,7 +180,7 @@ def render_pos_checkout_zone():
                 },
                 use_container_width=True,
                 hide_index=True,
-                key=st.session_state.cart_editor_key
+                key="stable_checkout_shopping_cart_grid"
             )
             
             cart_changed = False
@@ -207,7 +204,7 @@ def render_pos_checkout_zone():
             if cart_changed:
                 st.session_state.pos_shopping_cart = updated_cart
                 trigger_toast("點餐單數量已保留更新！", icon="📝")
-                st.rerun()
+                st.rerun(scope="fragment")
                 
         estimated_cart_cost, mats_check_dict = calculate_cart_estimated_cost(st.session_state.pos_shopping_cart)
         estimated_profit = float(total_bill_amount) - estimated_cart_cost
@@ -225,7 +222,7 @@ def render_pos_checkout_zone():
             if 'show_checkout_confirm' in st.session_state:
                 st.session_state.show_checkout_confirm = False
             trigger_toast("已清空當前點餐單！", icon="🗑️")
-            st.rerun()
+            st.rerun(scope="fragment")
             
         st.markdown("---")
         if st.button("🔥 確定完畢，出餐結帳", type="primary", use_container_width=True):
@@ -351,12 +348,13 @@ def render_pos_checkout_zone():
                             cursor.close()
                             conn.close()
                             
-                            # ✨ 改善：精準只清除當日單據報告快取，前台餐點品項不重查資料庫
+                            # 精準清除今日訂單快取，因為寫入新訂單，需要讓報表分頁同步
                             cached_fetch_today_orders.clear()
                             
                             trigger_toast(f"🎉 批量出餐結帳成功！總金額：${total_bill_amount}，實際成本：${actual_total_cost:.2f}", icon="🎉")
                             st.session_state.pos_shopping_cart = []
                             st.session_state.show_checkout_confirm = False
+                            # 正式送出資料庫交易後才執行全頁重跑，確保其他分頁同步
                             st.rerun() 
                         except Exception as e:
                             conn.rollback()
@@ -366,14 +364,14 @@ def render_pos_checkout_zone():
             with col_conf2:
                 if st.button("❌ 修改餐點", use_container_width=True):
                     st.session_state.show_checkout_confirm = False
-                    st.rerun()
+                    st.rerun(scope="fragment")
     else:
         st.info("💡 目前點餐購物車為空，請從上方選取餐點並加入點餐單.")
 
 
 @st.fragment
 def render_modify_orders_tab():
-    """ 頁籤 2：修改當日出餐數量 獨立局部刷新區 """
+    """ 【功能分頁 2】 修改當日出餐數量 獨立局部重新渲染區 """
     st.markdown("##### 📝 當日出餐紀錄面版")
     
     today_start = datetime.now().strftime("%Y-%m-%d 00:00:00")
@@ -475,7 +473,6 @@ def render_modify_orders_tab():
                     cursor.close()
                     conn.close()
                     
-                    # ✨ 改善：精準重置今日訂單快取，維持系統獨立運作
                     cached_fetch_today_orders.clear()
                     
                     orig_brief = order_details_text.split("||STRUCT_DATA||")[0]
@@ -514,7 +511,7 @@ def render_modify_orders_tab():
                         if not any(x[0] == matched_append['prod_name'] for x in st.session_state[add_pool_key]):
                             st.session_state[add_pool_key].append((matched_append['prod_name'], 1, matched_append['prod_id']))
                             trigger_toast(f"已將漏點的 【{matched_append['prod_name']}】 補配至修改畫面上！", icon="➕")
-                            st.rerun()
+                            st.rerun(scope="fragment")
                             
             for app_item in st.session_state[add_pool_key]:
                 if not any(x[0] == app_item[0] for x in parsed_dishes):
@@ -532,7 +529,7 @@ def render_modify_orders_tab():
                 if session_qty_key not in st.session_state:
                     st.session_state[session_qty_key] = int(d_qty)
                 
-                # 這裡一併移除了原本的 +- 按鈕，全面改為讓店家直接輸入純數字微調
+                # 🛠️ 改善：完全移除手動微調畫面的 ➕1 與 ➖1 實體按鈕，一律改由 number_input 點擊手動輸入，徹底封鎖按鈕引發的畫面刷新
                 st.number_input(label_txt, min_value=0, step=1, key=session_qty_key)
                 
                 new_q = st.session_state[session_qty_key]
@@ -648,7 +645,6 @@ def render_modify_orders_tab():
                             cursor.close()
                             conn.close()
                             
-                            # ✨ 改善：精準重置今日訂單快取
                             cached_fetch_today_orders.clear()
                             
                             if add_pool_key in st.session_state:
@@ -665,7 +661,7 @@ def render_modify_orders_tab():
 
 @st.fragment
 def render_dish_recipe_modification_zone():
-    """ 頁籤 3：餐點細項修改 獨立局部刷新區 """
+    """ 【功能分頁 3】 餐點細項修改 獨立局部重新渲染區 """
     st.markdown("##### 🆕 1. 新餐點創立區")
     
     creation_mode = st.radio("🛠️ 請選擇餐點建立模式：", ["A模式：單份餐點", "B模式：整鍋"], horizontal=True)
@@ -749,7 +745,7 @@ def render_dish_recipe_modification_zone():
                         st.session_state.custom_recipe_pool[ex_idx] = new_pool_dict
                     else:
                         st.session_state.custom_recipe_pool.append(new_pool_dict)
-                    st.rerun()
+                    st.rerun(scope="fragment")
                     
             if st.session_state.custom_recipe_pool:
                 df_pool = pd.DataFrame(st.session_state.custom_recipe_pool)
@@ -773,7 +769,7 @@ def render_dish_recipe_modification_zone():
                     new_pool.append({"食材名稱": r['食材名稱'], "食材編號": r['食材編號'], "單位用量": float(r['單位用量']), "單位": r['單位']})
                 if pool_changed:
                     st.session_state.custom_recipe_pool = new_pool
-                    st.rerun()
+                    st.rerun(scope="fragment")
                 
                 custom_custom_dish_calc_cost = 0.0
                 for p_item in st.session_state.custom_recipe_pool:
@@ -815,7 +811,6 @@ def render_dish_recipe_modification_zone():
                             cursor.close()
                             conn.close()
                             
-                            # ✨ 精準清除餐點清單快取
                             cached_fetch_active_dishes.clear()
                             cached_fetch_all_dishes_raw.clear()
                             
@@ -867,7 +862,7 @@ def render_dish_recipe_modification_zone():
 
             with col_b_mat2:
                 st.markdown("<br>", unsafe_allow_html=True)
-                st.markdown(f"**進貨定義單位：** `{db_unit_b if db_unit_b else '未選擇'}`")
+                st.markdown(f"**進貨進義單位：** `{db_unit_b if db_unit_b else '未選擇'}`")
                 
             b_conversion_mode = "不換算"
             if db_unit_b:
@@ -915,7 +910,7 @@ def render_dish_recipe_modification_zone():
                         st.session_state.pot_recipe_pool[ex_idx] = new_pool_dict
                     else:
                         st.session_state.pot_recipe_pool.append(new_pool_dict)
-                    st.rerun()
+                    st.rerun(scope="fragment")
 
             if st.session_state.pot_recipe_pool:
                 df_pot_pool = pd.DataFrame(st.session_state.pot_recipe_pool)
@@ -939,7 +934,7 @@ def render_dish_recipe_modification_zone():
                     new_pot_pool.append({"食材名稱": r['食材名稱'], "食材編號": r['食材編號'], "單位用量": float(r['單位用量']), "單位": r['單位']})
                 if pot_pool_changed:
                     st.session_state.pot_recipe_pool = new_pot_pool
-                    st.rerun()
+                    st.rerun(scope="fragment")
 
                 single_large_cost = 0.0
                 single_small_cost = 0.0
@@ -1018,7 +1013,6 @@ def render_dish_recipe_modification_zone():
                         cursor.close()
                         conn.close()
                         
-                        # ✨ 精準重置特定的快取
                         cached_fetch_active_dishes.clear()
                         cached_fetch_all_dishes_raw.clear()
                         
@@ -1119,7 +1113,7 @@ def render_dish_recipe_modification_zone():
                         else:
                             st.session_state.editing_recipe_list.append(new_item_dict)
                         trigger_toast(f"已將 {mat_info['prod_name']} 整合至配方暫存單！", icon="➕")
-                        st.rerun()
+                        st.rerun(scope="fragment")
 
             st.markdown("###### 📋 該餐點目前的配方清單：")
             if st.session_state.editing_recipe_list:
@@ -1154,7 +1148,7 @@ def render_dish_recipe_modification_zone():
                 if has_changes:
                     st.session_state.editing_recipe_list = updated_recipe_list
                     trigger_toast("✏️ 暫存配方變更已保留！", icon="📝")
-                    st.rerun()
+                    st.rerun(scope="fragment")
             else:
                 st.info("此餐點目前沒有任何配方物料，請利用上方追加。")
 
@@ -1212,7 +1206,6 @@ def render_dish_recipe_modification_zone():
                     cursor.close()
                     conn.close()
                     
-                    # ✨ 精準清除特定修改過的快取
                     cached_fetch_active_dishes.clear()
                     cached_fetch_dish_bom_recipe.clear(td_id)
                     cached_fetch_all_dishes_raw.clear()
@@ -1228,7 +1221,7 @@ def render_dish_recipe_modification_zone():
 
 @st.fragment
 def render_item_management_and_disable_zone():
-    """ 頁籤 4：品項下架與管理區 獨立局部刷新區 """
+    """ 【功能分頁 4】 品項下架與管理區 獨立局部重新渲染區 """
     st.markdown("##### ❌ 菜單餐點下架控制面板")
     
     all_dishes_raw = cached_fetch_all_dishes_raw()
@@ -1258,7 +1251,6 @@ def render_item_management_and_disable_zone():
                         cursor.close()
                         conn.close()
                         
-                        # ✨ 精準更新餐點管理狀態快取
                         cached_fetch_active_dishes.clear()
                         cached_fetch_all_dishes_raw.clear()
                         
@@ -1274,7 +1266,6 @@ def render_item_management_and_disable_zone():
                         cursor.close()
                         conn.close()
                         
-                        # ✨ 精準更新餐點管理狀態快取
                         cached_fetch_active_dishes.clear()
                         cached_fetch_all_dishes_raw.clear()
                         
@@ -1312,7 +1303,6 @@ def render_item_management_and_disable_zone():
                         cursor.close()
                         conn.close()
                         
-                        # ✨ 精準更新原物料清單快取
                         cached_fetch_active_materials.clear()
                         cached_fetch_all_materials_raw.clear()
                         
@@ -1328,7 +1318,6 @@ def render_item_management_and_disable_zone():
                         cursor.close()
                         conn.close()
                         
-                        # ✨ 精準更新原物料清單快取
                         cached_fetch_active_materials.clear()
                         cached_fetch_all_materials_raw.clear()
                         
@@ -1338,7 +1327,7 @@ def render_item_management_and_disable_zone():
 
 
 # ============================================================================
-# 最終 Tabs 分流：渲染處此時只進行單純的 Fragment 呼叫，性能達到最高
+# 最下層：純粹進行分頁分流與呼叫
 # ============================================================================
 
 pos_tabs = st.tabs(["💰 前台收銀結帳", "✏️ 修改當日出餐數量", "✏️ 餐點細項修改", "❌ 品項下架與管理區"])
