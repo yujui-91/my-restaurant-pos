@@ -90,11 +90,10 @@ def calculate_cart_estimated_cost(cart_items):
     return cart_total_cost, mats_status
 
 
-# --- 局部刷新區塊 A：前台收銀結帳（整合 st.fragment 避免全網頁刷新） ---
+# --- 局部刷新區塊 A-1：品項點購區 (單獨封裝成小 fragment) ---
 @st.fragment
-def render_checkout_tab():
+def render_order_input_zone():
     st.markdown("##### 🔍 1. 品項點購區：")
-    
     col_cart1, col_cart2, col_cart3 = st.columns([2, 1, 1])
     with col_cart1:
         dish_select_options = ["--- 請選擇餐點 ---"] + existing_dishes['prod_name'].tolist()
@@ -119,10 +118,17 @@ def render_checkout_tab():
                         "qty": cart_dish_qty
                     })
                 if 'show_checkout_confirm' in st.session_state:
-                    st.session_state.show_checkout_confirm = False # 加入新品項時重設確認狀態
-                st.session_state.cart_editor_version += 1       # 向上堆疊版號，通知編輯器重繪更新
+                    st.session_state.show_checkout_confirm = False 
+                st.session_state.cart_editor_version += 1       # 遞增版本號
                 trigger_toast(f"已將 {matched_dish['prod_name']} x {cart_dish_qty} 份加入餐點！", icon="🛒")
+                
+                # 【關鍵優化】點擊加入後，只強制要求對下方的明細區 fragment 進行同步重繪，不刷新本輸入區
+                st.rerun(scope="fragment") 
 
+
+# --- 局部刷新區塊 A-2：當前點餐單明細與面板 (單獨封裝成另一個 fragment) ---
+@st.fragment
+def render_cart_details_zone():
     st.markdown("---")
     st.markdown("##### 📋 當前點餐單明細：")
     
@@ -181,7 +187,6 @@ def render_checkout_tab():
             df_cart['小計'] = df_cart['price'] * df_cart['qty']
             df_cart['刪除'] = False
             
-            # 使用動態關聯 Key 徹底切斷資料快取滯留問題
             edited_cart_df = st.data_editor(
                 df_cart,
                 column_config={
@@ -361,7 +366,6 @@ def render_checkout_tab():
                             cursor.close()
                             conn.close()
                             
-                            # 【改善】拒絕清除整站快取，改為精準清除當日訂單與財報有關之快取
                             cached_fetch_today_orders.clear()
                             
                             trigger_toast(f"🎉 批量出餐結帳成功！總金額：${total_bill_amount}，實際成本：${actual_total_cost:.2f}", icon="🎉")
@@ -486,7 +490,6 @@ def render_modify_orders_tab():
                     cursor.close()
                     conn.close()
                     
-                    # 【優化】精準清除
                     cached_fetch_today_orders.clear()
                     
                     orig_brief = order_details_text.split("||STRUCT_DATA||")[0]
@@ -670,7 +673,6 @@ def render_modify_orders_tab():
                             cursor.close()
                             conn.close()
                             
-                            # 精準清除快取
                             cached_fetch_today_orders.clear()
                             
                             if add_pool_key in st.session_state:
@@ -689,10 +691,12 @@ def render_modify_orders_tab():
 pos_tabs = st.tabs(["💰 前台收銀結帳", "✏️ 修改當日出餐數量", "✏️ 餐點細項修改", "❌ 品項下架與管理區"])
 
 with pos_tabs[0]:
-    render_checkout_tab()  # 使用局部重新整理區塊封裝
+    # 【關鍵改變】在這裡將前台收銀切分為兩個完全獨立運作的 fragment 區塊
+    render_order_input_zone()
+    render_cart_details_zone()
 
 with pos_tabs[1]:
-    render_modify_orders_tab()  # 使用局部重新整理區塊封裝
+    render_modify_orders_tab()
 
 with pos_tabs[2]:
     st.markdown("##### 🆕 1. 新餐點創立區")
@@ -847,7 +851,6 @@ with pos_tabs[2]:
                             cursor.close()
                             conn.close()
                             
-                            # 【精準刷新快取】不使用全清除，提升載入效能
                             cached_fetch_active_dishes.clear()
                             cached_fetch_all_dishes_raw.clear()
                             
@@ -1050,7 +1053,6 @@ with pos_tabs[2]:
                         cursor.close()
                         conn.close()
                         
-                        # 精準清理
                         cached_fetch_active_dishes.clear()
                         cached_fetch_all_dishes_raw.clear()
                         
@@ -1244,7 +1246,6 @@ with pos_tabs[2]:
                     cursor.close()
                     conn.close()
                     
-                    # 精準清理
                     cached_fetch_active_dishes.clear()
                     cached_fetch_dish_bom_recipe.clear(td_id)
                     cached_fetch_all_dishes_raw.clear()
@@ -1287,7 +1288,6 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
-                        # 精準清理
                         cached_fetch_active_dishes.clear()
                         cached_fetch_all_dishes_raw.clear()
                         
@@ -1303,7 +1303,6 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
-                        # 精準清理
                         cached_fetch_active_dishes.clear()
                         cached_fetch_all_dishes_raw.clear()
                         
@@ -1341,7 +1340,6 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
-                        # 精準清理
                         cached_fetch_active_materials.clear()
                         cached_fetch_all_materials_raw.clear()
                         
@@ -1357,7 +1355,6 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
-                        # 精準清理
                         cached_fetch_active_materials.clear()
                         cached_fetch_all_materials_raw.clear()
                         
