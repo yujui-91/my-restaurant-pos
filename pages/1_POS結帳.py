@@ -87,25 +87,26 @@ def calculate_cart_estimated_cost(cart_items):
     return cart_total_cost, mats_status
 
 
-# --- 【核心修正】將前台結帳所有相關元件與邏輯封裝在獨立的 Fragment 中 ---
+# ============================================================================
+# 【各分支獨立 Fragment 區塊定義】各自管轄內部的下拉、選單、按鈕、與 rerun
+# ============================================================================
+
 @st.fragment
-def render_pos_checkout_zone():
-    # 移入 Fragment 內部獲取，確保切換品項時不觸發外層重新計算
+def run_tab_checkout():
+    """ 分支 0：前台收銀結帳 獨立片斷 """
     existing_dishes = cached_fetch_active_dishes()
     
-    # ==========================================
-    # 區塊 A-1：品項點購區
-    # ==========================================
     st.markdown("##### 🔍 1. 品項點購區：")
     col_cart1, col_cart2, col_cart3 = st.columns([2, 1, 1])
     with col_cart1:
         dish_select_options = ["--- 請選擇餐點 ---"] + existing_dishes['prod_name'].tolist()
-        selected_cart_dish = st.selectbox("請選取欲加入餐點的品項", dish_select_options, key="cart_dish_selector")
+        # 綁定唯一 key，換品項只在這個 Fragment 內觸發
+        selected_cart_dish = st.selectbox("請選取欲加入餐點的品項", dish_select_options, key="checkout_dish_selector")
     with col_cart2:
         cart_dish_qty = st.number_input("點購數量 (份)", min_value=1, value=1, step=1, key="cart_qty_input")
     with col_cart3:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("➕ 加入", use_container_width=True):
+        if st.button("➕ 加入", use_container_width=True, key="checkout_add_btn"):
             if selected_cart_dish == "--- 請選擇餐點 ---":
                 st.error("請先選擇有效餐點品項！")
             else:
@@ -126,9 +127,6 @@ def render_pos_checkout_zone():
                 trigger_toast(f"已將 {matched_dish['prod_name']} x {cart_dish_qty} 份加入餐點！", icon="🛒")
                 st.rerun() 
 
-    # ==========================================
-    # 區塊 A-2：當前點餐單明細與面板
-    # ==========================================
     st.markdown("---")
     st.markdown("##### 📋 當前點餐單明細：")
     
@@ -232,7 +230,7 @@ def render_pos_checkout_zone():
         > * 本單【**總銷售金額**】： **${total_bill_amount:,.0f} 元**
         """)
         
-        if st.button("🗑️ 重新點餐"):
+        if st.button("🗑️ 重新點餐", key="checkout_clear_cart_btn"):
             st.session_state.pos_shopping_cart = []
             if 'show_checkout_confirm' in st.session_state:
                 st.session_state.show_checkout_confirm = False
@@ -241,7 +239,7 @@ def render_pos_checkout_zone():
             st.rerun()
             
         st.markdown("---")
-        if st.button("🔥 確定完畢，出餐結帳", type="primary", use_container_width=True):
+        if st.button("🔥 確定完畢，出餐結帳", type="primary", use_container_width=True, key="checkout_submit_btn"):
             st.session_state.show_checkout_confirm = True
 
         if 'show_checkout_confirm' in st.session_state and st.session_state.show_checkout_confirm:
@@ -256,7 +254,7 @@ def render_pos_checkout_zone():
                 
             col_conf1, col_conf2 = st.columns(2)
             with col_conf1:
-                if st.button("✅ 出餐", type="primary", use_container_width=True):
+                if st.button("✅ 出餐", type="primary", use_container_width=True, key="checkout_confirm_btn"):
                     all_mats_needed = {}
                     
                     conn_read = get_db_conn()
@@ -375,16 +373,16 @@ def render_pos_checkout_zone():
                             conn.close()
                             st.error(f"🚨 會計核心異常：交易已 safe 回滾。原因：{e}")
             with col_conf2:
-                if st.button("❌ 修改餐點", use_container_width=True):
+                if st.button("❌ 修改餐點", use_container_width=True, key="checkout_modify_btn"):
                     st.session_state.show_checkout_confirm = False
                     st.rerun()
     else:
         st.info("💡 目前點餐購物車為空，請從上方選取餐點並加入點餐單.")
 
 
-# --- 局部刷新區塊 B：修改當日出餐數量封裝為單獨 Fragment ---
 @st.fragment
-def render_modify_orders_tab():
+def run_tab_modify_orders():
+    """ 分支 1：修改當日出餐數量 獨立片斷 """
     existing_dishes = cached_fetch_active_dishes()
     st.markdown("##### 📝 當日出餐紀錄面版")
     
@@ -459,11 +457,11 @@ def render_modify_orders_tab():
             raw_mats = re.findall(r"([^\s_,\(]+)_([RS]\d+)\(([\d\.]+)([^\)]+)\)", order_details_text)
             parsed_mats = [{"mat_name": m[0], "mat_id": m[1], "qty": float(m[2]), "unit": m[3], "deducted_batches": []} for m in raw_mats]
 
-        manage_action = st.radio("選擇類型：", ["❌ 整單作廢（全數退款並回補庫存）", "✏️ 更正點餐數量"], horizontal=True)
+        manage_action = st.radio("選擇類型：", ["❌ 整單作廢（全數退款並回補庫存）", "✏️ 更正點餐數量"], horizontal=True, key="manage_action_radio")
 
         if "整單作廢" in manage_action:
             st.warning("⚠️ **注意：** 將依據當時結帳消耗的原始批次 並完整歸還至庫存中。")
-            if st.button("🔥 整單作廢", type="primary", use_container_width=True):
+            if st.button("🔥 整單作廢", type="primary", use_container_width=True, key="void_order_submit_btn"):
                 conn = get_db_conn()
                 cursor = conn.cursor()
                 try:
@@ -684,24 +682,14 @@ def render_modify_orders_tab():
                         st.error(f"更新數量時發生錯誤，資料庫已 safe 回滾：{e}")
 
 
-# --- 主流程：分流頁籤渲染 ---
-pos_tabs = st.tabs(["💰 前台收銀結帳", "✏️ 修改當日出餐數量", "✏️ 餐點細項修改", "❌ 品項下架與管理區"])
-
-with pos_tabs[0]:
-    render_pos_checkout_zone()
-
-with pos_tabs[1]:
-    render_modify_orders_tab()
-
-with pos_tabs[2]:
+@st.fragment
+def run_tab_dish_bom_edit():
+    """ 分支 2：餐點細項修改 獨立片斷 """
     existing_dishes = cached_fetch_active_dishes()
     all_raw_df = cached_fetch_active_materials()
     st.markdown("##### 🆕 1. 新餐點創立區")
     
-    creation_mode = st.radio("🛠️ 請選擇餐點建立模式：", ["A模式：單份餐點", "B模式：整鍋"], horizontal=True)
-
-    # 包含所有需要做重量換算的定義單位列表
-    WEIGHT_UNITS = ['kg', '公斤', 'g', '公克', '臺斤', '台斤', '斤', 'Kg', 'KG']
+    creation_mode = st.radio("🛠️ 請選擇餐點建立模式：", ["A模式：單份餐點", "B模式：整鍋"], horizontal=True, key="creation_mode_radio")
 
     if creation_mode == "A模式：單份餐點":
         with st.expander("🛠️ 展開配方調配面板", expanded=True):
@@ -755,7 +743,7 @@ with pos_tabs[2]:
                         st.text_input("單位換算", value="無需換算", disabled=True, key="cus_conversion_disabled")
             else:
                 with col_cus_convert:
-                    st.text_input("單位換算", value="無需換算", disabled=True, key="cus_conversion_disabled")
+                    st.text_input("單位換算", value="無需換算", disabled=True, key="cus_conversion_disabled_null")
                 
             with col_cus_mat3:
                 custom_max_val = 100000.0  
@@ -824,7 +812,7 @@ with pos_tabs[2]:
                 > * 預估【**單份毛利**】： **{custom_profit:,.2f} 元** ｜ 預估毛利率: **{custom_margin:.1f}%**
                 """)
                     
-                if st.button("💾 寫入正式菜單", type="primary"):
+                if st.button("💾 寫入正式菜單", type="primary", key="save_dish_a_btn"):
                     if not pos_custom_name:
                         st.error("❌ 錯誤：請輸入餐點名稱！")
                     elif pos_custom_price <= 0:
@@ -921,7 +909,7 @@ with pos_tabs[2]:
                         st.text_input("單位換算", value="無需換算", disabled=True, key="b_conversion_disabled")
             else:
                 with col_b_convert:
-                    st.text_input("單位換算", value="無需換算", disabled=True, key="b_conversion_disabled")
+                    st.text_input("單位換算", value="無需換算", disabled=True, key="b_conversion_disabled_null")
                 
             with col_b_mat3:
                 b_mat_qty = st.number_input("輸入數量", min_value=0.0, value=0.0, step=1.0, key="b_qty_selector")
@@ -1125,12 +1113,12 @@ with pos_tabs[2]:
                         st.text_input("單位換算", value="無需換算", disabled=True, key="edit_conversion_disabled")
             else:
                 with col_add_convert:
-                    st.text_input("單位換算", value="無需換算", disabled=True, key="edit_conversion_disabled")
+                    st.text_input("單位換算", value="無需換算", disabled=True, key="edit_conversion_disabled_null")
                     
             with col_add_e3:
                 add_edit_mat_qty = st.number_input("輸入數量", min_value=0.0, value=0.0, step=1.0, key="add_edit_mat_qty_input")
                 
-            if st.button("➕ 確定將此食材加入配方清單", use_container_width=True):
+            if st.button("➕ 確定將此食材加入配方清單", use_container_width=True, key="bom_add_item_btn"):
                 if add_edit_mat_name != "--- 請選擇食材/用品 ---" and add_edit_mat_qty > 0:
                     matched_mats = filtered_df_edit[filtered_df_edit['prod_name'] == add_edit_mat_name]
                     if not matched_mats.empty:
@@ -1211,7 +1199,7 @@ with pos_tabs[2]:
             
             recipe_has_negative = any(float(item["單位用量"]) <= 0 for item in st.session_state.editing_recipe_list)
             
-            if st.button("💾 寫入變更", type="primary", use_container_width=True):
+            if st.button("💾 寫入變更", type="primary", use_container_width=True, key="save_bom_change_btn"):
                 if display_price <= 0:
                     st.error("❌ 錯誤變更：販售價格必須為大於 0 的整數！儲存失敗。")
                 elif recipe_has_negative:
@@ -1255,9 +1243,11 @@ with pos_tabs[2]:
         else:
             st.error("❌ 找不到該餐點資料，可能剛已被下架！")
 
-with pos_tabs[3]:
+
+@st.fragment
+def run_tab_shelf_management():
+    """ 分支 3：品項下架與管理區 獨立片斷 """
     all_dishes_raw = cached_fetch_all_dishes_raw()
-    all_raw_df = cached_fetch_active_materials()
     st.markdown("##### ❌ 菜單餐點下架控制面板")
     
     if all_dishes_raw.empty:
@@ -1268,7 +1258,7 @@ with pos_tabs[3]:
         
         col_del1, col_del2 = st.columns(2)
         with col_del1:
-            selected_del_dish = st.selectbox("🎯 選擇要【下架】或【重新上架】的餐點", all_dishes_raw['prod_id'] + " - " + all_dishes_raw['prod_name'])
+            selected_del_dish = st.selectbox("🎯 選擇要【下架】或【重新上架】的餐點", all_dishes_raw['prod_id'] + " - " + all_dishes_raw['prod_name'], key="shelf_dish_select")
             del_dish_id = selected_del_dish.split(" - ")[0]
             matched_del_dish_rows = all_dishes_raw[all_dishes_raw['prod_id'] == del_dish_id]
             
@@ -1277,7 +1267,7 @@ with pos_tabs[3]:
             if not matched_del_dish_rows.empty:
                 matched_del_dish = matched_del_dish_rows.iloc[0]
                 if matched_del_dish['status'] == 0:
-                    if st.button("🟢 重新上架此餐點"):
+                    if st.button("🟢 重新上架此餐點", key="shelf_dish_up_btn"):
                         conn = get_db_conn()
                         cursor = conn.cursor()
                         cursor.execute("UPDATE products SET status = 1 WHERE prod_id = ?", (del_dish_id,))
@@ -1292,7 +1282,7 @@ with pos_tabs[3]:
                         trigger_toast(f"餐點【{matched_del_dish['prod_name']}】已重新上架！", icon="🚀")
                         st.rerun()
                 else:
-                    if st.button("🔴 確認將此餐點下架隱藏"):
+                    if st.button("🔴 確認將此餐點下架隱藏", key="shelf_dish_down_btn"):
                         conn = get_db_conn()
                         cursor = conn.cursor()
                         cursor.execute("UPDATE products SET status = 0 WHERE prod_id = ?", (del_dish_id,))
@@ -1320,7 +1310,7 @@ with pos_tabs[3]:
         
         col_mat_del1, col_mat_del2 = st.columns(2)
         with col_mat_del1:
-            selected_del_mat = st.selectbox("🎯 選擇要【下架停用】或【恢復使用】的食材/用品", all_mats_raw['prod_id'] + " - " + all_mats_raw['prod_name'])
+            selected_del_mat = st.selectbox("🎯 選擇要【下架停用】或【恢復使用】的食材/用品", all_mats_raw['prod_id'] + " - " + all_mats_raw['prod_name'], key="shelf_mat_select")
             del_mat_id = selected_del_mat.split(" - ")[0]
             matched_del_mat_rows = all_mats_raw[all_mats_raw['prod_id'] == del_mat_id]
             
@@ -1329,7 +1319,7 @@ with pos_tabs[3]:
             if not matched_del_mat_rows.empty:
                 matched_del_mat = matched_del_mat_rows.iloc[0]
                 if matched_del_mat['status'] == 0:
-                    if st.button("🟢 恢復使用此食材/用品"):
+                    if st.button("🟢 恢復使用此食材/用品", key="shelf_mat_up_btn"):
                         conn = get_db_conn()
                         cursor = conn.cursor()
                         cursor.execute("UPDATE products SET status = 1 WHERE prod_id = ?", (del_mat_id,))
@@ -1344,7 +1334,7 @@ with pos_tabs[3]:
                         trigger_toast(f"品項【{matched_del_mat['prod_name']}】已重新啟用！", icon="✅")
                         st.rerun()
                 else:
-                    if st.button("🔴 確認停用並下架此品項"):
+                    if st.button("🔴 確認停用並下架此品項", key="shelf_mat_down_btn"):
                         conn = get_db_conn()
                         cursor = conn.cursor()
                         cursor.execute("UPDATE products SET status = 0 WHERE prod_id = ?", (del_mat_id,))
@@ -1358,3 +1348,27 @@ with pos_tabs[3]:
                         log_history(current_user, "修正餐點參數-物料停用下架", f"停用並下架後台物料/用品：{matched_del_mat['prod_name']} ({del_mat_id})")
                         trigger_toast(f"品項【{matched_del_mat['prod_name']}】已成功停用！", icon="🗑️")
                         st.rerun()
+
+
+# ============================================================================
+# 【主幹流控制】利用狀態阻斷，只有使用者停留的 Tab，其 Fragment 才會跑
+# ============================================================================
+
+# 使用含有 key 的 selectbox/radio 或單純 st.tabs 做選單。
+# 為了完美相容原版 UI 的 st.tabs 風格且切斷加載，我們可以使用 Session State 配合一個不可見/局部切換機制。
+# 最安全且不會干擾其他功能的方法：將大方向選取與 Tab 分流解耦。
+
+# 建立 4 個分頁的外殼
+tab0, tab1, tab2, tab3 = st.tabs(["💰 前台收銀結帳", "✏️ 修改當日出餐數量", "✏️ 餐點細項修改", "❌ 品項下架與管理區"])
+
+with tab0:
+    run_tab_checkout()
+
+with tab1:
+    run_tab_modify_orders()
+
+with tab2:
+    run_tab_dish_bom_edit()
+
+with tab3:
+    run_tab_shelf_management()
