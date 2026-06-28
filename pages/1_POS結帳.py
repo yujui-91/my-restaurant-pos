@@ -114,8 +114,9 @@ def render_checkout_tab():
                         "price": int(matched_dish['price']),
                         "qty": cart_dish_qty
                     })
+                    st.session_state.show_checkout_confirm = False # 點新商品時重設確認區狀態
                 trigger_toast(f"已將 {matched_dish['prod_name']} x {cart_dish_qty} 份加入餐點！", icon="🛒")
-                st.rerun()
+                # 移除此處的 st.rerun()，Fragment 會藉由 Session State 改變自然局部重新渲染
 
     st.markdown("---")
     st.markdown("##### 📋 當前點餐單明細：")
@@ -168,7 +169,7 @@ def render_checkout_tab():
                 elif action_type == "delete":
                     st.session_state.pos_shopping_cart.pop(target_idx)
                     trigger_toast("已將商品移出點餐單！", icon="🗑️")
-                st.rerun()
+                # 藉由改變 Fragment 內元件狀態直接驅動渲染，不使用強制 rerun
                 
         else:
             df_cart = pd.DataFrame(st.session_state.pos_shopping_cart)
@@ -211,8 +212,10 @@ def render_checkout_tab():
             if cart_changed:
                 st.session_state.pos_shopping_cart = updated_cart
                 trigger_toast("點餐單數量已保留更新！", icon="📝")
-                st.rerun()
+                # 藉由改變 Fragment 內元件狀態直接驅動渲染，不使用強制 rerun
                 
+        # 重新計算總額以供畫面繪製
+        total_bill_amount = sum(item['price'] * item['qty'] for item in st.session_state.pos_shopping_cart)
         estimated_cart_cost, mats_check_dict = calculate_cart_estimated_cost(st.session_state.pos_shopping_cart)
         estimated_profit = float(total_bill_amount) - estimated_cart_cost
         estimated_margin = (estimated_profit / total_bill_amount * 100) if total_bill_amount > 0 else 0.0
@@ -226,16 +229,15 @@ def render_checkout_tab():
         
         if st.button("🗑️ 重新點餐"):
             st.session_state.pos_shopping_cart = []
-            if 'show_checkout_confirm' in st.session_state:
-                st.session_state.show_checkout_confirm = False
+            st.session_state.show_checkout_confirm = False
             trigger_toast("已清空當前點餐單！", icon="🗑️")
-            st.rerun()
             
         st.markdown("---")
+        # 直接動態切換顯示狀態，不使用 st.rerun
         if st.button("🔥 確定完畢，出餐結帳", type="primary", use_container_width=True):
             st.session_state.show_checkout_confirm = True
 
-        if 'show_checkout_confirm' in st.session_state and st.session_state.show_checkout_confirm:
+        if st.session_state.get('show_checkout_confirm', False):
             st.warning("🔔 **【出餐前通知】** 請再次核對下方餐點：")
             
             confirm_msg = ""
@@ -290,13 +292,11 @@ def render_checkout_tab():
                         st.error(disabled_msg)
                         cursor.close()
                         conn.close()
-                        st.button("🔄 重新載入畫面以調整數量", on_click=st.rerun) 
                     elif insufficient_flag:
                         st.session_state.show_checkout_confirm = False  
                         st.error(insufficient_msg)
                         cursor.close()
                         conn.close()
-                        st.button("🔄 重新載入畫面以調整數量", on_click=st.rerun) 
                     else:
                         try:
                             actual_total_cost = 0.0
@@ -360,16 +360,15 @@ def render_checkout_tab():
                             trigger_toast(f"🎉 批量出餐結帳成功！總金額：${total_bill_amount}，實際成本：${actual_total_cost:.2f}", icon="🎉")
                             st.session_state.pos_shopping_cart = []
                             st.session_state.show_checkout_confirm = False
-                            st.rerun()
+                            st.rerun() # 寫入資料庫成功，使用大刷新以重置整個後台系統與快取
                         except Exception as e:
                             conn.rollback()
                             cursor.close()
                             conn.close()
-                            st.error(f"🚨 會計核心異常：交易已安全回滾。原因：{e}")
+                            st.error(f"🚨 會計核心異常：交易已 safe 回滾。原因：{e}")
             with col_conf2:
                 if st.button("❌ 修改餐點", use_container_width=True):
                     st.session_state.show_checkout_confirm = False
-                    st.rerun()
     else:
         st.info("💡 目前點餐購物車為空，請從上方選取餐點並加入點餐單.")
 
@@ -484,7 +483,7 @@ def render_modify_orders_tab():
                     log_history(current_user, "訂單作廢成功", f"操作人員執行整單作廢。被作廢單號: {target_hist_id} ｜ 原始交易時間: {orig_order_timestamp} ｜ 退回營業額: ${parsed_total_revenue} 元 ｜ 庫存原物料已完整回補。 原始單據內容為: [{orig_brief}]")
                     
                     trigger_toast(f"已成功作廢單號 {target_hist_id} 的點餐紀錄，庫存已同步回補！", icon="🗑️")
-                    st.rerun()
+                    st.rerun() # 資料庫寫入成功，執行大刷新以同步狀態
                 except Exception as e:
                     conn.rollback()
                     cursor.close()
@@ -516,7 +515,7 @@ def render_modify_orders_tab():
                         if not any(x[0] == matched_append['prod_name'] for x in st.session_state[add_pool_key]):
                             st.session_state[add_pool_key].append((matched_append['prod_name'], 1, matched_append['prod_id']))
                             trigger_toast(f"已將漏點的 【{matched_append['prod_name']}】 補配至修改畫面上！", icon="➕")
-                            st.rerun()
+                            # 移除 rerun，讓 Fragment 自動更新
                             
             for app_item in st.session_state[add_pool_key]:
                 if not any(x[0] == app_item[0] for x in parsed_dishes):
@@ -667,7 +666,7 @@ def render_modify_orders_tab():
                                 del st.session_state[add_pool_key]
                                 
                             trigger_toast(f"🎉 單號 {target_hist_id} 的數量更正單已獨立成立（包含補加漏點餐點），庫存與成本完美同步！", icon="✏️")
-                            st.rerun()
+                            st.rerun() # 更正成功，執行大刷新同步資料庫
                     except Exception as e:
                         conn.rollback()
                         cursor.close()
