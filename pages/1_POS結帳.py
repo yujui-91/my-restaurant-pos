@@ -27,6 +27,10 @@ current_user = st.session_state.get('current_user', '老 闆')
 if 'pos_shopping_cart' not in st.session_state:
     st.session_state.pos_shopping_cart = []
 
+# 新增：用於強制刷洗 st.data_editor 狀態的隨機變數鍵值
+if 'cart_editor_version' not in st.session_state:
+    st.session_state.cart_editor_version = 0
+
 existing_dishes = cached_fetch_active_dishes()
 all_raw_df = cached_fetch_active_materials()
 
@@ -114,9 +118,9 @@ def render_checkout_tab():
                         "price": int(matched_dish['price']),
                         "qty": cart_dish_qty
                     })
-                    st.session_state.show_checkout_confirm = False # 點新商品時重設確認區狀態
+                st.session_state.show_checkout_confirm = False # 重設確認區狀態
+                st.session_state.cart_editor_version += 1       # 關鍵：加入新品項時，立刻改變 version 更新表格組件狀態
                 trigger_toast(f"已將 {matched_dish['prod_name']} x {cart_dish_qty} 份加入餐點！", icon="🛒")
-                # 移除此處的 st.rerun()，Fragment 會藉由 Session State 改變自然局部重新渲染
 
     st.markdown("---")
     st.markdown("##### 📋 當前點餐單明細：")
@@ -169,13 +173,13 @@ def render_checkout_tab():
                 elif action_type == "delete":
                     st.session_state.pos_shopping_cart.pop(target_idx)
                     trigger_toast("已將商品移出點餐單！", icon="🗑️")
-                # 藉由改變 Fragment 內元件狀態直接驅動渲染，不使用強制 rerun
                 
         else:
             df_cart = pd.DataFrame(st.session_state.pos_shopping_cart)
             df_cart['小計'] = df_cart['price'] * df_cart['qty']
             df_cart['刪除'] = False
             
+            # 關鍵處：將 key 綁定隨機變數 cart_editor_version。只要變數一變動，編輯器快取就會徹底清空重繪
             edited_cart_df = st.data_editor(
                 df_cart,
                 column_config={
@@ -188,7 +192,7 @@ def render_checkout_tab():
                 },
                 use_container_width=True,
                 hide_index=True,
-                key="cart_data_editor"
+                key=f"cart_data_editor_v_{st.session_state.cart_editor_version}"
             )
             
             cart_changed = False
@@ -207,12 +211,10 @@ def render_checkout_tab():
                     "price": int(row['price']),
                     "qty": int(row['qty'])
                 })
-                total_bill_amount += int(row['price']) * int(row['qty'])
                 
             if cart_changed:
                 st.session_state.pos_shopping_cart = updated_cart
                 trigger_toast("點餐單數量已保留更新！", icon="📝")
-                # 藉由改變 Fragment 內元件狀態直接驅動渲染，不使用強制 rerun
                 
         # 重新計算總額以供畫面繪製
         total_bill_amount = sum(item['price'] * item['qty'] for item in st.session_state.pos_shopping_cart)
@@ -230,10 +232,10 @@ def render_checkout_tab():
         if st.button("🗑️ 重新點餐"):
             st.session_state.pos_shopping_cart = []
             st.session_state.show_checkout_confirm = False
+            st.session_state.cart_editor_version += 1 # 關鍵處：點選清除時，立刻將表格 key 的版號向上堆疊，強迫清除舊緩存
             trigger_toast("已清空當前點餐單！", icon="🗑️")
             
         st.markdown("---")
-        # 直接動態切換顯示狀態，不使用 st.rerun
         if st.button("🔥 確定完畢，出餐結帳", type="primary", use_container_width=True):
             st.session_state.show_checkout_confirm = True
 
@@ -360,7 +362,8 @@ def render_checkout_tab():
                             trigger_toast(f"🎉 批量出餐結帳成功！總金額：${total_bill_amount}，實際成本：${actual_total_cost:.2f}", icon="🎉")
                             st.session_state.pos_shopping_cart = []
                             st.session_state.show_checkout_confirm = False
-                            st.rerun() # 寫入資料庫成功，使用大刷新以重置整個後台系統與快取
+                            st.session_state.cart_editor_version += 1
+                            st.rerun() 
                         except Exception as e:
                             conn.rollback()
                             cursor.close()
@@ -483,7 +486,7 @@ def render_modify_orders_tab():
                     log_history(current_user, "訂單作廢成功", f"操作人員執行整單作廢。被作廢單號: {target_hist_id} ｜ 原始交易時間: {orig_order_timestamp} ｜ 退回營業額: ${parsed_total_revenue} 元 ｜ 庫存原物料已完整回補。 原始單據內容為: [{orig_brief}]")
                     
                     trigger_toast(f"已成功作廢單號 {target_hist_id} 的點餐紀錄，庫存已同步回補！", icon="🗑️")
-                    st.rerun() # 資料庫寫入成功，執行大刷新以同步狀態
+                    st.rerun() 
                 except Exception as e:
                     conn.rollback()
                     cursor.close()
@@ -515,7 +518,6 @@ def render_modify_orders_tab():
                         if not any(x[0] == matched_append['prod_name'] for x in st.session_state[add_pool_key]):
                             st.session_state[add_pool_key].append((matched_append['prod_name'], 1, matched_append['prod_id']))
                             trigger_toast(f"已將漏點的 【{matched_append['prod_name']}】 補配至修改畫面上！", icon="➕")
-                            # 移除 rerun，讓 Fragment 自動更新
                             
             for app_item in st.session_state[add_pool_key]:
                 if not any(x[0] == app_item[0] for x in parsed_dishes):
@@ -666,12 +668,12 @@ def render_modify_orders_tab():
                                 del st.session_state[add_pool_key]
                                 
                             trigger_toast(f"🎉 單號 {target_hist_id} 的數量更正單已獨立成立（包含補加漏點餐點），庫存與成本完美同步！", icon="✏️")
-                            st.rerun() # 更正成功，執行大刷新同步資料庫
+                            st.rerun() 
                     except Exception as e:
                         conn.rollback()
                         cursor.close()
                         conn.close()
-                        st.error(f"更新數量時發生錯誤，資料庫已安全復原：{e}")
+                        st.error(f"更新數量時發生錯誤，資料庫已 safe 回滾：{e}")
 
 
 # --- 主流程：分流頁籤渲染 ---
@@ -1002,7 +1004,7 @@ with pos_tabs[2]:
                             l_name = f"{pot_base_name}(大碗)"
                             cursor.execute("SELECT prod_id FROM products WHERE prod_name = ? AND status = 1", (l_name,))
                             if cursor.fetchone():
-                                st.error(f"❌ 錯誤：【{l_name}】已存在於菜單中，請更換名稱或刪除舊品項！")
+                                st.error(f"❌ 錯誤：【{l_name}】已架於菜單中，請更換名稱或刪除舊品項！")
                                 cursor.close()
                                 conn.close()
                                 st.stop()
