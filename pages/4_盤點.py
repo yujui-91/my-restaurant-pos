@@ -114,7 +114,9 @@ if not df_products_in_stock.empty:
                         conn.commit()
                         conn.close()
                         
-                        st.cache_data.clear()
+                        # 【優化】精準清除此頁面相關的盤點快取，保障前台點餐零卡頓
+                        cached_fetch_products_in_stock_for_audit.clear()
+                        cached_fetch_batch_details_for_audit.clear()
                         
                         log_details = (
                             f"盤點核實覆蓋。品項：【{item_name}({target_prod_id})】的[批次 {target_batch_id}]。習得歷史進貨日: {orig_inbound}，原登記供應商: {orig_vendor if orig_vendor else '無'}。"
