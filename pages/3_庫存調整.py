@@ -12,8 +12,9 @@ show_pending_toast()
 st.subheader("🔧 庫存管理面板")
 
 use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=False, key="adj_mobile_toggle")
-
-current_user = st.session_state.get('current_user', '老 闆')
+if 'current_user' not in st.session_state:
+    st.session_state.current_user = "老闆娘"
+current_user = st.session_state.current_user
 
 stock_adj_cate = st.radio("🗂️ 請選擇要調整的項目類別：", [" 食材 (R)", " 用品 (S)"], horizontal=True)
 
