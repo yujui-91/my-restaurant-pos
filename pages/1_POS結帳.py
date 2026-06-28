@@ -101,7 +101,7 @@ def render_pos_checkout_zone():
         selected_cart_dish = st.selectbox("請選取欲加入餐點的品項", dish_select_options, key="cart_dish_selector")
     with col_cart2:
         # 讓店家直接手動輸入/微調點購數量
-        cart_dish_qty = st.number_input("點購數量 (份)", min_value=1, value=1, step=1, key="cart_qty_input")
+        cart_dish_qty = st.number_input("點購數量 (份)", min_value=1, value=1, key="cart_qty_input")
     with col_cart3:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("➕ 加入", use_container_width=True):
