@@ -165,7 +165,9 @@ with po_tabs[0]:
                 conn.commit()
                 conn.close()
                 
-                st.cache_data.clear()
+                # 【優化】精準清除此頁面相關的快取，不再影響前台點餐
+                cached_fetch_existing_items_for_po.clear()
+                cached_fetch_history_batches.clear()
                 
                 if prefix == 'C':
                     month_digits = int(selected_month_str.replace("月", ""))
@@ -396,7 +398,9 @@ with po_tabs[1]:
                 conn.commit()
                 conn.close()
 
-                st.cache_data.clear()
+                # 【優化】精準清除此頁面相關的快取，不再影響前台點餐
+                cached_fetch_existing_items_for_po.clear()
+                cached_fetch_history_batches.clear()
                 
                 log_history(current_user, "採購單更正", audit_trail)
                 
