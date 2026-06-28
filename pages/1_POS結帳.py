@@ -114,7 +114,7 @@ with pos_tabs[0]:
                         "qty": cart_dish_qty
                     })
                 trigger_toast(f"已將 {matched_dish['prod_name']} x {cart_dish_qty} 份加入餐點！", icon="🛒")
-                # 已移除多餘的 st.rerun()
+                st.rerun()
 
     st.markdown("---")
     st.markdown("##### 📋 當前點餐單明細：")
@@ -167,7 +167,7 @@ with pos_tabs[0]:
                 elif action_type == "delete":
                     st.session_state.pos_shopping_cart.pop(target_idx)
                     trigger_toast("已將商品移出點餐單！", icon="🗑️")
-                # 行動版按鈕自帶狀態改變觸發整頁刷新，此處 st.rerun() 保持保留（若有需要，目前由外部邏輯視作需要，但這裡也移除了，因 Streamlit click 就會重整）
+                st.rerun()
                 
         else:
             df_cart = pd.DataFrame(st.session_state.pos_shopping_cart)
@@ -210,7 +210,7 @@ with pos_tabs[0]:
             if cart_changed:
                 st.session_state.pos_shopping_cart = updated_cart
                 trigger_toast("點餐單數量已保留更新！", icon="📝")
-                # 已移除多餘的 st.rerun()
+                st.rerun()
                 
         estimated_cart_cost, mats_check_dict = calculate_cart_estimated_cost(st.session_state.pos_shopping_cart)
         estimated_profit = float(total_bill_amount) - estimated_cart_cost
@@ -228,6 +228,7 @@ with pos_tabs[0]:
             if 'show_checkout_confirm' in st.session_state:
                 st.session_state.show_checkout_confirm = False
             trigger_toast("已清空當前點餐單！", icon="🗑️")
+            st.rerun()
             
         st.markdown("---")
         if st.button("🔥 確定完畢，出餐結帳", type="primary", use_container_width=True):
@@ -353,12 +354,12 @@ with pos_tabs[0]:
                             cursor.close()
                             conn.close()
                             
+                            # 收銀結帳：只會影響今日營收紀錄，無須清空主選單或其他無關快取
                             cached_fetch_today_orders.clear()
                             
                             trigger_toast(f"🎉 批量出餐結帳成功！總金額：${total_bill_amount}，實際成本：${actual_total_cost:.2f}", icon="🎉")
                             st.session_state.pos_shopping_cart = []
                             st.session_state.show_checkout_confirm = False
-                            # 此處結帳成功流程需要整頁更新清除狀態
                             st.rerun()
                         except Exception as e:
                             conn.rollback()
@@ -475,6 +476,7 @@ with pos_tabs[1]:
                     cursor.close()
                     conn.close()
                     
+                    # 作廢訂單：更新今日訂單數據
                     cached_fetch_today_orders.clear()
                     
                     orig_brief = order_details_text.split("||STRUCT_DATA||")[0]
@@ -513,7 +515,6 @@ with pos_tabs[1]:
                         if not any(x[0] == matched_append['prod_name'] for x in st.session_state[add_pool_key]):
                             st.session_state[add_pool_key].append((matched_append['prod_name'], 1, matched_append['prod_id']))
                             trigger_toast(f"已將漏點的 【{matched_append['prod_name']}】 補配至修改畫面上！", icon="➕")
-                            # 補加按鈕需要立即重整畫面渲染新增項目
                             st.rerun()
                             
             for app_item in st.session_state[add_pool_key]:
@@ -659,6 +660,7 @@ with pos_tabs[1]:
                             cursor.close()
                             conn.close()
                             
+                            # 更正點餐數量：更新營收紀錄快取
                             cached_fetch_today_orders.clear()
                             
                             if add_pool_key in st.session_state:
@@ -677,6 +679,7 @@ with pos_tabs[2]:
     
     creation_mode = st.radio("🛠️ 請選擇餐點建立模式：", ["A模式：單份餐點", "B模式：整鍋"], horizontal=True)
 
+    # 包含所有需要做重量換算的定義單位列表
     WEIGHT_UNITS = ['kg', '公斤', 'g', '公克', '臺斤', '台斤', '斤', 'Kg', 'KG']
 
     if creation_mode == "A模式：單份餐點":
@@ -758,7 +761,6 @@ with pos_tabs[2]:
                         st.session_state.custom_recipe_pool[ex_idx] = new_pool_dict
                     else:
                         st.session_state.custom_recipe_pool.append(new_pool_dict)
-                    # 點擊加入食材後需要立即使 data_editor 重新渲染清單
                     st.rerun()
                     
             if st.session_state.custom_recipe_pool:
@@ -783,7 +785,6 @@ with pos_tabs[2]:
                     new_pool.append({"食材名稱": r['食材名稱'], "食材編號": r['食材編號'], "單位用量": float(r['單位用量']), "單位": r['單位']})
                 if pool_changed:
                     st.session_state.custom_recipe_pool = new_pool
-                    # 變更暫存單配方用量，需要同步重算下方動態成本試算面板
                     st.rerun()
                 
                 custom_custom_dish_calc_cost = 0.0
@@ -791,7 +792,7 @@ with pos_tabs[2]:
                     matched_raw = all_raw_df[all_raw_df['prod_id'] == p_item['食材編號']]
                     r_cost = float(matched_raw.iloc[0]['cost']) if not matched_raw.empty else 0.0
                     custom_custom_dish_calc_cost += p_item['單位用量'] * r_cost
-                
+                    
                 custom_profit = float(pos_custom_price) - custom_custom_dish_calc_cost
                 custom_margin = (custom_profit / pos_custom_price * 100) if pos_custom_price > 0 else 0.0
                 
@@ -826,6 +827,7 @@ with pos_tabs[2]:
                             cursor.close()
                             conn.close()
                             
+                            # A模式新創自訂餐點：精準清空餐點菜單相關快取
                             cached_fetch_active_dishes.clear()
                             cached_fetch_all_dishes_raw.clear()
                             
@@ -1028,13 +1030,14 @@ with pos_tabs[2]:
                         cursor.close()
                         conn.close()
                         
+                        # B模式建立整鍋餐點：精準清空菜單相關快取
                         cached_fetch_active_dishes.clear()
                         cached_fetch_all_dishes_raw.clear()
                         
                         log_history(
                             current_user, 
-                             f"修正餐點參數-整鍋拆分配方-{pot_base_name}", 
-                             f"透過 B模式 創立整鍋基底餐點：{pot_base_name}。整鍋物料總成本 ${total_pot_cost:.2f}。成功獨立產出大碗成本 ${single_large_cost:.2f}/小碗成本 ${single_small_cost:.2f}."
+                            f"修正餐點參數-整鍋拆分配方-{pot_base_name}", 
+                            f"透過 B模式 創立整鍋基底餐點：{pot_base_name}。整鍋物料總成本 ${total_pot_cost:.2f}。成功獨立產出大碗成本 ${single_large_cost:.2f}/小碗成本 ${single_small_cost:.2f}."
                         )
                         trigger_toast(f"🎉 成功建立 【{pot_base_name}】 大/小碗成品餐點並加入菜單！", icon="🥣")
                         st.session_state.pot_recipe_pool = []
@@ -1221,6 +1224,7 @@ with pos_tabs[2]:
                     cursor.close()
                     conn.close()
                     
+                    # 修改既有餐點配方：精準清空配方與菜單快取
                     cached_fetch_active_dishes.clear()
                     cached_fetch_dish_bom_recipe.clear(td_id)
                     cached_fetch_all_dishes_raw.clear()
@@ -1263,6 +1267,7 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
+                        # 餐點重新上架：精準清空菜單快取
                         cached_fetch_active_dishes.clear()
                         cached_fetch_all_dishes_raw.clear()
                         
@@ -1278,6 +1283,7 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
+                        # 餐點下架：精準清空菜單快取
                         cached_fetch_active_dishes.clear()
                         cached_fetch_all_dishes_raw.clear()
                         
@@ -1315,6 +1321,7 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
+                        # 恢復使用食材/用品：精準清空原物料快取
                         cached_fetch_active_materials.clear()
                         cached_fetch_all_materials_raw.clear()
                         
@@ -1330,6 +1337,7 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
+                        # 停用食材/用品：精準清空原物料快取
                         cached_fetch_active_materials.clear()
                         cached_fetch_all_materials_raw.clear()
                         
