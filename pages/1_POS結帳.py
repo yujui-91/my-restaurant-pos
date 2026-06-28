@@ -93,19 +93,15 @@ def render_pos_checkout_zone():
     
     col_cart1, col_cart2, col_cart3 = st.columns([2, 1, 1])
     
-    # 💡 修正處：將以下區塊全部正確縮進 4 個空格，放入 Fragment 函式內
     with col_cart1:
         dish_select_options = ["--- 請選擇餐點 ---"] + existing_dishes['prod_name'].tolist()
         selected_cart_dish = st.selectbox("請選取欲加入餐點的品項", dish_select_options, key="cart_dish_selector")
 
     with col_cart2:
-        # 💡 改用 st.text_input，無按鈕、直接鍵盤輸入數量
         cart_dish_qty_raw = st.text_input("點購數量 (份)", value="1", key="cart_qty_input")
-        
-        # 💡 安全防呆機制：確保輸入的是有效數字
         try:
             cart_dish_qty = int(cart_dish_qty_raw)
-            if cart_dish_qty < 1:  # 限制至少為 1 份
+            if cart_dish_qty < 1:
                 cart_dish_qty = 1
         except ValueError:
             cart_dish_qty = 1
@@ -154,7 +150,6 @@ def render_pos_checkout_zone():
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # 🛠️ 改善：移除購物車內所有的 ➕ 增加 與 ➖ 減少 按鈕，直接換成手動輸入數值的輸入框，免除點擊按鈕引發的卡頓
                     btn_col1, btn_col2 = st.columns([1.5, 1])
                     with btn_col1:
                         new_mobile_qty = st.number_input(f"手動變更數量", min_value=1, value=int(item['qty']), step=1, key=f"mob_qty_edit_input_{idx}")
@@ -179,7 +174,6 @@ def render_pos_checkout_zone():
             df_cart['小計'] = df_cart['price'] * df_cart['qty']
             df_cart['刪除'] = False
             
-            # 固定表格的 key 為常數，不再拼接隨機版號，徹底解決變更下拉選單導致表格重繪刷新的問題
             edited_cart_df = st.data_editor(
                 df_cart,
                 column_config={
@@ -217,11 +211,8 @@ def render_pos_checkout_zone():
                 st.session_state.pos_shopping_cart = updated_cart
                 trigger_toast("點餐單數量已保留更新！", icon="📝")
                 st.rerun(scope="fragment")
-                
-        estimated_cart_cost, mats_check_dict = calculate_cart_estimated_cost(st.session_state.pos_shopping_cart)
-        estimated_profit = float(total_bill_amount) - estimated_cart_cost
-        estimated_margin = (estimated_profit / total_bill_amount * 100) if total_bill_amount > 0 else 0.0
         
+        # --- 🚀 效能優化關鍵點：主明細畫面不再執行大計算，直接顯示總金額 ---
         st.markdown(f"""
         > 💰 **本單即時面板：**
         > * 本單【**總銷售金額**】： **${total_bill_amount:,.0f} 元**
@@ -238,7 +229,10 @@ def render_pos_checkout_zone():
         if st.button("🔥 確定完畢，出餐結帳", type="primary", use_container_width=True):
             st.session_state.show_checkout_confirm = True
 
+        # --- 🚀 只有點擊確認結帳後，才觸發重度資料庫成本與物料計算（Lazy Load） ---
         if 'show_checkout_confirm' in st.session_state and st.session_state.show_checkout_confirm:
+            estimated_cart_cost, mats_check_dict = calculate_cart_estimated_cost(st.session_state.pos_shopping_cart)
+            
             st.warning("🔔 **【出餐前通知】** 請再次核對下方餐點：")
             
             confirm_msg = ""
@@ -358,19 +352,17 @@ def render_pos_checkout_zone():
                             cursor.close()
                             conn.close()
                             
-                            # 精準清除今日訂單快取，因為寫入新訂單，需要讓報表分頁同步
                             cached_fetch_today_orders.clear()
                             
                             trigger_toast(f"🎉 批量出餐結帳成功！總金額：${total_bill_amount}，實際成本：${actual_total_cost:.2f}", icon="🎉")
                             st.session_state.pos_shopping_cart = []
                             st.session_state.show_checkout_confirm = False
-                            # 正式送出資料庫交易後才執行全頁重跑，確保其他分頁同步
                             st.rerun() 
                         except Exception as e:
                             conn.rollback()
                             cursor.close()
                             conn.close()
-                            st.error(f"🚨 會計核心異常：交易已安全回滾。原因：{e}")
+                            st.error(f"🚨 會計核心異常：交易已安全回融。原因：{e}")
             with col_conf2:
                 if st.button("❌ 修改餐點", use_container_width=True):
                     st.session_state.show_checkout_confirm = False
@@ -539,7 +531,6 @@ def render_modify_orders_tab():
                 if session_qty_key not in st.session_state:
                     st.session_state[session_qty_key] = int(d_qty)
                 
-                # 🛠️ 改善：完全移除手動微調畫面的 ➕1 與 ➖1 實體按鈕，一律改由 number_input 點擊手動輸入，徹底封鎖按鈕引發的畫面刷新
                 st.number_input(label_txt, min_value=0, step=1, key=session_qty_key)
                 
                 new_q = st.session_state[session_qty_key]
@@ -710,15 +701,15 @@ def render_dish_recipe_modification_zone():
                 
             cus_conversion_mode = "不換算"
             if db_unit_a:
-                unit_lower = db_unit_a.lower()
+                unit_lower_a = db_unit_a.lower()
                 with col_cus_convert:
-                    if unit_lower in ['kg', '公斤', 'g', '公克']:
+                    if unit_lower_a in ['kg', '公斤', 'g', '公克']:
                         cus_conversion_mode = st.selectbox(
                             "輸入數值的單位類型",
                             ["直接依進貨定義單位輸入", "公斤轉公克"],
                             key="cus_conversion_mode_select_weight_kg"
                         )
-                    elif unit_lower in ['臺斤', '台斤', '斤']:
+                    elif unit_lower_a in ['臺斤', '台斤', '斤']:
                         cus_conversion_mode = st.selectbox(
                             "輸入數值的單位類型",
                             ["直接依進貨定義單位輸入", "台斤轉公克"],
