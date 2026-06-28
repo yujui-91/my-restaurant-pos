@@ -90,7 +90,7 @@ def calculate_cart_estimated_cost(cart_items):
     return cart_total_cost, mats_status
 
 
-# --- 局部刷新區塊 A-1：品項點購區 (單獨封裝成小 fragment) ---
+# --- 局部刷新區塊 A-1：品項點購區 ---
 @st.fragment
 def render_order_input_zone():
     st.markdown("##### 🔍 1. 品項點購區：")
@@ -119,14 +119,15 @@ def render_order_input_zone():
                     })
                 if 'show_checkout_confirm' in st.session_state:
                     st.session_state.show_checkout_confirm = False 
-                st.session_state.cart_editor_version += 1       # 遞增版本號
+                st.session_state.cart_editor_version += 1
                 trigger_toast(f"已將 {matched_dish['prod_name']} x {cart_dish_qty} 份加入餐點！", icon="🛒")
                 
-                # 【關鍵優化】點擊加入後，只強制要求對下方的明細區 fragment 進行同步重繪，不刷新本輸入區
-                st.rerun(scope="fragment") 
+                # 【優化改善點】改回普通的 st.rerun()。因為此函數在頁籤內有 fragment 包裹，
+                # 這裡的重刷只會連動刷新下方的明細單，而不會造成整個系統或隔壁頁籤跟著重刷。
+                st.rerun() 
 
 
-# --- 局部刷新區塊 A-2：當前點餐單明細與面板 (單獨封裝成另一個 fragment) ---
+# --- 局部刷新區塊 A-2：當前點餐單明細與面板 ---
 @st.fragment
 def render_cart_details_zone():
     st.markdown("---")
@@ -691,7 +692,7 @@ def render_modify_orders_tab():
 pos_tabs = st.tabs(["💰 前台收銀結帳", "✏️ 修改當日出餐數量", "✏️ 餐點細項修改", "❌ 品項下架與管理區"])
 
 with pos_tabs[0]:
-    # 【關鍵改變】在這裡將前台收銀切分為兩個完全獨立運作的 fragment 區塊
+    # 這裡呼叫這兩個獨立的 fragment 區塊
     render_order_input_zone()
     render_cart_details_zone()
 
@@ -839,7 +840,7 @@ with pos_tabs[2]:
                         cursor = conn.cursor()
                         cursor.execute("SELECT prod_id FROM products WHERE prod_name = ? AND status = 1", (pos_custom_name,))
                         if cursor.fetchone():
-                            st.error(f"❌ 錯誤：【{pos_custom_name}】已存在於正式菜單中，請直接至下方區塊修正參數")
+                            st.error(f"❌ 錯誤：【{pos_custom_name}】ed已存在於正式菜單中，請直接至下方區塊修正參數")
                             cursor.close()
                             conn.close()
                         else:
@@ -1017,7 +1018,7 @@ with pos_tabs[2]:
                             l_name = f"{pot_base_name}(大碗)"
                             cursor.execute("SELECT prod_id FROM products WHERE prod_name = ? AND status = 1", (l_name,))
                             if cursor.fetchone():
-                                st.error(f"❌ 錯誤：【{l_name}】已架於菜單中，請更換名稱或刪除舊品項！")
+                                st.error(f"❌ 錯誤：【{l_name}】已存在於菜單中，請更換名稱或刪除舊品項！")
                                 cursor.close()
                                 conn.close()
                                 st.stop()
@@ -1316,7 +1317,7 @@ with pos_tabs[3]:
     all_mats_raw = cached_fetch_all_materials_raw()
     
     if all_mats_raw.empty:
-        st.info("系統中尚無食材或用品.")
+        st.info("系統中尚無食材 or 用品.")
     else:
         all_mats_raw['狀態'] = all_mats_raw['status'].apply(lambda s: "🔴 已停用下架" if s == 0 else "🟢 正常進貨使用中")
         st.dataframe(all_mats_raw[['prod_id', 'prod_name', 'use_unit', '狀態']], use_container_width=True, hide_index=True)
