@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 from datetime import datetime, timedelta
-from database.db_core import get_db_conn,get_taiwan_now
+from database.db_core import get_db_conn, get_taiwan_now
 # 從 db_core 載入所需的快取函式
 from database.db_core import cached_fetch_audit_history
 
@@ -96,3 +96,9 @@ if not df_hist.empty:
                 st.info(row['詳細說明'])
 else:
     st.info("💡 目前此大方向篩選條件與時間區間內，沒有任何歷史操作紀錄。")
+
+# 【優化項目】新增精準重新整理按鈕，只刷新本頁紀錄快取，絕不影響前台點餐
+st.markdown("---")
+if st.button("🔄 重新整理歷史紀錄", use_container_width=True):
+    cached_fetch_audit_history.clear()
+    st.rerun()
