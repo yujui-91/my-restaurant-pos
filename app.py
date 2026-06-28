@@ -59,7 +59,6 @@ st.sidebar.markdown("### 👤 操作人員設定")
 user_list = ["老闆", "老闆娘", "堃原", "育睿", "芹媖"]
 
 # 直接使用 key="current_user" 讓 Streamlit 自動雙向綁定狀態
-# 移除原本手動計算 default_index 與手動覆蓋變數的邏輯，完美解決跳回舊值的 Bug
 st.sidebar.selectbox(
     "操作人員", 
     options=user_list, 
@@ -91,7 +90,10 @@ if not all_items_for_safety.empty:
         conn.commit()
         conn.close()
         
-        st.cache_data.clear()
+        # 精準清除受影響的快取，避免影響其他無關頁面的讀取效能
+        cached_fetch_safety_items.clear()
+        cached_fetch_low_stock_alerts.clear()
+        cached_fetch_merged_stock.clear()
         
         log_history(
             st.session_state.current_user, 
@@ -243,7 +245,12 @@ if not df_merged_stock.empty:
                 conn.commit()
                 conn.close()
                 
-                st.cache_data.clear()
+                # 精準清除清理殘留庫存所影響的快取函式
+                cached_fetch_merged_stock.clear()
+                cached_fetch_batch_details.clear()
+                cached_fetch_disabled_items_with_stock.clear()
+                cached_fetch_disabled_batches.clear()
+                cached_fetch_low_stock_alerts.clear()
                 
                 log_history(
                     st.session_state.current_user, 
