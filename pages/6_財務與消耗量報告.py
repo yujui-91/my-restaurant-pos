@@ -263,3 +263,14 @@ else:
             use_container_width=True,
             hide_index=True
         )
+
+# 【優化項目】新增精準重新整理按鈕，只刷新本財務頁面的快取數據，完全不卡前台
+st.markdown("---")
+if st.button("🔄 重新計算財務報表數據", use_container_width=True):
+    cached_get_sales_summary.clear()
+    cached_get_dish_rank.clear()
+    cached_get_material_usage.clear()
+    cached_get_expenses_raw.clear()
+    cached_get_actual_purchase_details.clear()
+    cached_get_operational_expenses_base.clear()
+    st.rerun()
