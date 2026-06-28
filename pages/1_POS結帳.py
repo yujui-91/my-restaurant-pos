@@ -92,33 +92,43 @@ def render_pos_checkout_zone():
     st.markdown("##### 🔍 1. 品項點購區：")
     
     col_cart1, col_cart2, col_cart3 = st.columns([2, 1, 1])
-    with col_cart1:
-        dish_select_options = ["--- 請選擇餐點 ---"] + existing_dishes['prod_name'].tolist()
-        selected_cart_dish = st.selectbox("請選取欲加入餐點的品項", dish_select_options, key="cart_dish_selector")
-    with col_cart2:
-        cart_dish_qty = st.number_input("點購數量 (份)", min_value=1, value=1, step=1, key="cart_qty_input")
-    with col_cart3:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("➕ 加入", use_container_width=True):
-            if selected_cart_dish == "--- 請選擇餐點 ---":
-                st.error("請先選擇有效餐點品項！")
+with col_cart1:
+    dish_select_options = ["--- 請選擇餐點 ---"] + existing_dishes['prod_name'].tolist()
+    selected_cart_dish = st.selectbox("請選取欲加入餐點的品項", dish_select_options, key="cart_dish_selector")
+
+with col_cart2:
+    # 💡 做法：改用 st.text_input，並預設帶入字串 "1"
+    cart_dish_qty_raw = st.text_input("點購數量 (份)", value="1", key="cart_qty_input")
+    
+    # 💡 安全機制：確保使用者輸入的是數字，如果不是（例如空值或打錯字），就預設為 1
+    try:
+        cart_dish_qty = int(cart_dish_qty_raw)
+        if cart_dish_qty < 1:  # 限制至少為 1 份
+            cart_dish_qty = 1
+    except ValueError:
+        cart_dish_qty = 1
+
+with col_cart3:
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("➕ 加入", use_container_width=True):
+        if selected_cart_dish == "--- 請選擇餐點 ---":
+            st.error("請先選擇有效餐點品項！")
+        else:
+            matched_dish = existing_dishes[existing_dishes['prod_name'] == selected_cart_dish].iloc[0]
+            existing_item_idx = next((i for i, item in enumerate(st.session_state.pos_shopping_cart) if item['prod_id'] == matched_dish['prod_id']), None)
+            if existing_item_idx is not None:
+                st.session_state.pos_shopping_cart[existing_item_idx]['qty'] += cart_dish_qty
             else:
-                matched_dish = existing_dishes[existing_dishes['prod_name'] == selected_cart_dish].iloc[0]
-                existing_item_idx = next((i for i, item in enumerate(st.session_state.pos_shopping_cart) if item['prod_id'] == matched_dish['prod_id']), None)
-                if existing_item_idx is not None:
-                    st.session_state.pos_shopping_cart[existing_item_idx]['qty'] += cart_dish_qty
-                else:
-                    st.session_state.pos_shopping_cart.append({
-                        "prod_id": matched_dish['prod_id'],
-                        "prod_name": matched_dish['prod_name'],
-                        "price": int(matched_dish['price']),
-                        "qty": cart_dish_qty
-                    })
-                if 'show_checkout_confirm' in st.session_state:
-                    st.session_state.show_checkout_confirm = False 
-                trigger_toast(f"已將 {matched_dish['prod_name']} x {cart_dish_qty} 份加入餐點！", icon="🛒")
-                # 使用 scope="fragment" 精準只刷新此點餐區，絕不連累其他三個分頁
-                st.rerun(scope="fragment")
+                st.session_state.pos_shopping_cart.append({
+                    "prod_id": matched_dish['prod_id'],
+                    "prod_name": matched_dish['prod_name'],
+                    "price": int(matched_dish['price']),
+                    "qty": cart_dish_qty
+                })
+            if 'show_checkout_confirm' in st.session_state:
+                st.session_state.show_checkout_confirm = False 
+            trigger_toast(f"已將 {matched_dish['prod_name']} x {cart_dish_qty} 份加入餐點！", icon="🛒")
+            st.rerun(scope="fragment")
 
     st.markdown("---")
     st.markdown("##### 📋 當前點餐單明細：")
