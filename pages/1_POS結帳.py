@@ -85,9 +85,10 @@ def calculate_cart_estimated_cost(cart_items):
     conn.close()
     return cart_total_cost, mats_status
 
-pos_tabs = st.tabs(["💰 前台收銀結帳", "✏️ 修改當日出餐數量", "✏️ 餐點細項修改", "❌ 品項下架與管理區"])
 
-with pos_tabs[0]:
+# --- 局部刷新區塊 A：前台收銀結帳 ---
+@st.fragment
+def render_checkout_tab():
     st.markdown("##### 🔍 1. 品項點購區：")
     
     col_cart1, col_cart2, col_cart3 = st.columns([2, 1, 1])
@@ -354,7 +355,6 @@ with pos_tabs[0]:
                             cursor.close()
                             conn.close()
                             
-                            # 收銀結帳：只會影響今日營收紀錄，無須清空主選單或其他無關快取
                             cached_fetch_today_orders.clear()
                             
                             trigger_toast(f"🎉 批量出餐結帳成功！總金額：${total_bill_amount}，實際成本：${actual_total_cost:.2f}", icon="🎉")
@@ -373,7 +373,10 @@ with pos_tabs[0]:
     else:
         st.info("💡 目前點餐購物車為空，請從上方選取餐點並加入點餐單.")
 
-with pos_tabs[1]:
+
+# --- 局部刷新區塊 B：修改當日出餐數量 ---
+@st.fragment
+def render_modify_orders_tab():
     st.markdown("##### 📝 当日出餐纪录面版")
     
     today_start = datetime.now().strftime("%Y-%m-%d 00:00:00")
@@ -394,7 +397,6 @@ with pos_tabs[1]:
             
             if "||STRUCT_DATA||" in raw_text:
                 parts = raw_text.split("||STRUCT_DATA||")
-                display_part = parts[0]
                 json_part = parts[1]
                 try:
                     payload = json.loads(json_part)
@@ -476,7 +478,6 @@ with pos_tabs[1]:
                     cursor.close()
                     conn.close()
                     
-                    # 作廢訂單：更新今日訂單數據
                     cached_fetch_today_orders.clear()
                     
                     orig_brief = order_details_text.split("||STRUCT_DATA||")[0]
@@ -660,7 +661,6 @@ with pos_tabs[1]:
                             cursor.close()
                             conn.close()
                             
-                            # 更正點餐數量：更新營收紀錄快取
                             cached_fetch_today_orders.clear()
                             
                             if add_pool_key in st.session_state:
@@ -673,6 +673,16 @@ with pos_tabs[1]:
                         cursor.close()
                         conn.close()
                         st.error(f"更新數量時發生錯誤，資料庫已安全復原：{e}")
+
+
+# --- 主流程：分流頁籤渲染 ---
+pos_tabs = st.tabs(["💰 前台收銀結帳", "✏️ 修改當日出餐數量", "✏️ 餐點細項修改", "❌ 品項下架與管理區"])
+
+with pos_tabs[0]:
+    render_checkout_tab()  # 局部重新整理區塊
+
+with pos_tabs[1]:
+    render_modify_orders_tab()  # 局部重新整理區塊
 
 with pos_tabs[2]:
     st.markdown("##### 🆕 1. 新餐點創立區")
@@ -827,7 +837,6 @@ with pos_tabs[2]:
                             cursor.close()
                             conn.close()
                             
-                            # A模式新創自訂餐點：精準清空餐點菜單相關快取
                             cached_fetch_active_dishes.clear()
                             cached_fetch_all_dishes_raw.clear()
                             
@@ -1030,7 +1039,6 @@ with pos_tabs[2]:
                         cursor.close()
                         conn.close()
                         
-                        # B模式建立整鍋餐點：精準清空菜單相關快取
                         cached_fetch_active_dishes.clear()
                         cached_fetch_all_dishes_raw.clear()
                         
@@ -1224,7 +1232,6 @@ with pos_tabs[2]:
                     cursor.close()
                     conn.close()
                     
-                    # 修改既有餐點配方：精準清空配方與菜單快取
                     cached_fetch_active_dishes.clear()
                     cached_fetch_dish_bom_recipe.clear(td_id)
                     cached_fetch_all_dishes_raw.clear()
@@ -1267,7 +1274,6 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
-                        # 餐點重新上架：精準清空菜單快取
                         cached_fetch_active_dishes.clear()
                         cached_fetch_all_dishes_raw.clear()
                         
@@ -1283,7 +1289,6 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
-                        # 餐點下架：精準清空菜單快取
                         cached_fetch_active_dishes.clear()
                         cached_fetch_all_dishes_raw.clear()
                         
@@ -1321,7 +1326,6 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
-                        # 恢復使用食材/用品：精準清空原物料快取
                         cached_fetch_active_materials.clear()
                         cached_fetch_all_materials_raw.clear()
                         
@@ -1337,7 +1341,6 @@ with pos_tabs[3]:
                         cursor.close()
                         conn.close()
                         
-                        # 停用食材/用品：精準清空原物料快取
                         cached_fetch_active_materials.clear()
                         cached_fetch_all_materials_raw.clear()
                         
