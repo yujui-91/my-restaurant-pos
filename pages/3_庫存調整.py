@@ -114,7 +114,9 @@ if not df_unique_items.empty:
                             conn.commit()
                             conn.close()
                             
-                            st.cache_data.clear()
+                            # 【優化】精準清除此頁面相關的快取，不再干擾前台點餐系統
+                            cached_fetch_unique_items_to_adjust.clear()
+                            cached_fetch_batches_by_prod.clear()
                             
                             month_digits = int(adj_month_str.replace("月", ""))
                             formatted_target_month = f"{selected_adj_year}-{month_digits:02d}"
