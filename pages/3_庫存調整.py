@@ -167,7 +167,7 @@ def render_dish_scrap_zone(current_user):
         dish_options = [row[0] for row in cursor.fetchall()]
     except Exception:
         # 備用方案
-        dish_options = ["砂鍋菜(大碗)", "砂鍋菜(小碗)", "浮水魚羹(大碗)", "浮水魚羹(小碗)"]
+        dish_options = ["砂鍋菜(大碗)", "砂鍋菜(小碗)", "浮水魚羹","小菜-滷豆腐","小菜-泡菜","小菜-龍鬚菜","小菜-涼拌小黃瓜","小菜-切片豆干"]
     finally:
         conn.close()
 
