@@ -155,7 +155,7 @@ def render_stock_adjustment_zone(current_user):
 # ==========================================
 @st.fragment
 def render_dish_scrap_zone(current_user):
-    st.markdown("### 🥣 每日整鍋殘餘 / 成品報廢登記")
+    st.markdown("### 🥣 每日餐點報廢登記")
    
     conn = get_db_conn()
     cursor = conn.cursor()
@@ -244,7 +244,7 @@ def render_dish_scrap_zone(current_user):
 # ==========================================
 # 主要頁面佈局：使用功能分頁 (Tabs) 呼叫函式
 # ==========================================
-tab1, tab2 = st.tabs(["📋 一般原物料微調", "🥣 整鍋成品殘餘報廢"])
+tab1, tab2 = st.tabs(["📋 一般原物料微調", "🥣 餐點剩餘報廢"])
 
 with tab1:
     # 呼叫獨立的原料調整 Fragment 函式
