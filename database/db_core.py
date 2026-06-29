@@ -656,3 +656,46 @@ def cached_get_operational_expenses_base():
     cols_ch = [desc[0] for desc in cursor.description]
     conn.close()
     return pd.DataFrame(r_cb, columns=cols_cb), pd.DataFrame(r_ch, columns=cols_ch)
+
+def auto_recovery_monitor():
+    """
+    15秒網頁前端自動計時自救器
+    核心邏輯：如果網頁卡死超過15秒，透過瀏覽器 JavaScript 強制加上清快取參數重整。
+    """
+    # 1. 優先檢查網址參數是否有強制清理訊號
+    query_params = st.query_params
+    if "clear_cache" in query_params:
+        st.cache_data.clear()       # 清除全域快取
+        st.session_state.clear()    # 清除死鎖的 state
+        st.query_params.clear()     # 清空網址參數避免無限循環
+        st.rerun()
+
+    # 2. 嵌入前端 JavaScript 15秒計時自救 html (微調優化版)
+    st.components.v1.html("""
+    <script>
+        // 1. 啟動 15 秒倒數計時器
+        window.streamlitTimeout = setTimeout(function() {
+            var url = new URL(window.location.href);
+            // 防無限循環：只有在網址還沒有 clear_cache 時才加上並跳轉
+            if (!url.searchParams.get('clear_cache')) {
+                url.searchParams.set('clear_cache', 'true');
+                // 強制 Streamlit 最外層的母視窗跳轉網址
+                if (window.parent) {
+                    window.parent.location.href = url.href;
+                } else {
+                    window.location.href = url.href;
+                }
+            }
+        }, 15000); // 15000 毫秒 = 15 秒
+
+        # 2. 安全防護：不論是普通載入還是 Streamlit 內部的渲染完成，只要有反應就立刻取消計時
+        window.addEventListener('load', function() {
+            clearTimeout(window.streamlitTimeout);
+        });
+        window.parent.addEventListener('message', function(e) {
+            if (e.data && e.data.type === 'streamlit:render') {
+                clearTimeout(window.streamlitTimeout);
+            }
+        });
+    </script>
+    """, height=0, width=0) # 設定寬高為 0，完全不影響老闆娘看畫面排版

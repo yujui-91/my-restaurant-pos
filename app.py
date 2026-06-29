@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from database.db_core import init_db, trigger_toast, show_pending_toast, log_history
+from database.db_core import init_db, trigger_toast, show_pending_toast, log_history,auto_recovery_monitor
 from database.db_core import get_db_conn
 # 從 db_core 載入所需的快取函式
 from database.db_core import (
@@ -13,7 +13,7 @@ from database.db_core import (
 )
 
 st.set_page_config(layout="wide")
-
+auto_recovery_monitor()
 st.markdown("""
     <style>
         [data-testid="stDataFrame"] td, [data-testid="stDataFrame"] th {
