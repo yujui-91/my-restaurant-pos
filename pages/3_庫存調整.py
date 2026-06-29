@@ -156,11 +156,7 @@ def render_stock_adjustment_zone(current_user):
 @st.fragment
 def render_dish_scrap_zone(current_user):
     st.markdown("### 🥣 每日整鍋殘餘 / 成品報廢登記")
-    st.caption("此功能會根據料理的配方表（BOM），自動計算並透過 FIFO（先進先出）扣除對應的原物料庫存。適合用於打烊時倒掉的殘餘砂鍋菜底、羹湯。")
-    
-    # 修正處：直接從 db_core 載入或此處查詢 P 開頭的餐點，讓選單跟隨正式菜單動態更新
-    # 如果要包含已下架的餐點報廢，可用 "SELECT prod_name FROM products WHERE prod_id LIKE 'P%' ORDER BY prod_name"
-    # 這裡採用最乾淨的現有正常販售餐點查詢：
+   
     conn = get_db_conn()
     cursor = conn.cursor()
     
