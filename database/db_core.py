@@ -263,7 +263,7 @@ def show_pending_toast():
 # 集中快取定義區（以下為新移入之快取函式，皆清楚備註對應分頁）
 # ============================================================================
 
-@st.cache_data(ttl=60)
+@st.cache_data()
 def cached_fetch_safety_items():
     """快取獲取供安全庫存設定的品項列表 (R和S)"""
     conn = get_db_conn()
@@ -329,7 +329,7 @@ def cached_fetch_merged_stock(stock_filter):
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=120)
 def cached_fetch_batch_details(target_prod_id):
     """快取獲取指定品項的有效進貨批次明細"""
     conn = get_db_conn()
@@ -351,7 +351,7 @@ def cached_fetch_batch_details(target_prod_id):
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-@st.cache_data(ttl=60)
+@st.cache_data()
 def cached_fetch_disabled_items_with_stock():
     """快取獲取包含殘留庫存的已下架商品清單"""
     conn = get_db_conn()
@@ -368,7 +368,7 @@ def cached_fetch_disabled_items_with_stock():
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-@st.cache_data(ttl=60)
+@st.cache_data()
 def cached_fetch_disabled_batches(target_disabled_prod_id):
     """快取獲取特定下架品項的殘留批次明細"""
     conn = get_db_conn()
@@ -385,7 +385,7 @@ def cached_fetch_disabled_batches(target_disabled_prod_id):
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-@st.cache_data(ttl=60)
+@st.cache_data()
 def cached_fetch_active_dishes():
     conn = get_db_conn()
     cursor = conn.cursor()
@@ -395,7 +395,7 @@ def cached_fetch_active_dishes():
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)
 def cached_fetch_active_materials():
     conn = get_db_conn()
     cursor = conn.cursor()
@@ -419,7 +419,7 @@ def cached_fetch_today_orders(start_str, end_str):
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-@st.cache_data(ttl=60)
+@st.cache_data()
 def cached_fetch_dish_bom_recipe(target_dish_id):
     conn = get_db_conn()
     cursor = conn.cursor()
@@ -432,7 +432,7 @@ def cached_fetch_dish_bom_recipe(target_dish_id):
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-@st.cache_data(ttl=60)
+@st.cache_data()
 def cached_fetch_all_dishes_raw():
     conn = get_db_conn()
     cursor = conn.cursor()
@@ -442,7 +442,7 @@ def cached_fetch_all_dishes_raw():
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-@st.cache_data(ttl=60)
+@st.cache_data()
 def cached_fetch_all_materials_raw():
     conn = get_db_conn()
     cursor = conn.cursor()
@@ -452,7 +452,7 @@ def cached_fetch_all_materials_raw():
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-@st.cache_data(ttl=60)
+@st.cache_data()
 def cached_fetch_existing_items_for_po(prefix):
     conn = get_db_conn()
     cursor = conn.cursor()
@@ -465,7 +465,7 @@ def cached_fetch_existing_items_for_po(prefix):
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-@st.cache_data(ttl=60)
+@st.cache_data()
 def cached_fetch_history_batches(where_clause, params_tuple):
     conn = get_db_conn()
     cursor = conn.cursor()
@@ -517,7 +517,7 @@ def cached_fetch_batches_by_prod(target_prod_id):
     conn.close()
     return pd.DataFrame(rows, columns=cols)
 
-@st.cache_data(ttl=60)
+@st.cache_data()
 def cached_fetch_products_in_stock_for_audit(prefix):
     conn = get_db_conn()
     cursor = conn.cursor()
