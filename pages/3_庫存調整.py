@@ -205,26 +205,22 @@ def render_dish_scrap_zone(current_user):
                 st.warning(f"⚠️ 警告：『{selected_scrap_dish}』尚未設定 BOM 配方表，無法自動扣減原物料！請先至產品設定確認。")
                 return
             
-            log_details = f"【打烊殘餘報廢】{selected_scrap_dish} x {scrap_qty}份。自動扣減："
+            # --- ✨ 修改處：調整歷史訊息的初始格式 ---
+            log_details = f"【打烊殘餘報廢】{selected_scrap_dish} x {scrap_qty}份。"
             success_count = 0
             
-            # 3. 逐一透過 FIFO 扣除原物料庫存
+            # 3. 逐一透過 FIFO 扣除原物料庫存（背景扣除，不寫入 log_details）
             for child_id, qty_needed in bom_rows:
                 total_need = qty_needed * scrap_qty
-                
-                # 撈取原料名稱
-                cursor.execute("SELECT prod_name FROM products WHERE prod_id = ?", (child_id,))
-                p_name_row = cursor.fetchone()
-                p_name = p_name_row[0] if p_name_row else f"未知原料(ID:{child_id})"
                 
                 # 呼叫系統內建的核心 FIFO 扣減函式
                 success, deducted_cost_val, batch_list = deduct_stock_fifo(child_id, total_need, cursor)
                 if success:
-                    log_details += f" {p_name}(扣{total_need:.1f}),"
+                    # --- ✨ 修改處：移除原本會把原物料名稱加進文字的程式碼，只累加成功計數 ---
                     success_count += 1
             
             if success_count > 0:
-                # 4. 寫入歷史審計軌跡
+                # 4. 寫入歷史審計軌跡（只包含餐點份數與備註原因）
                 log_history(current_user, "手動調整庫存-成品報廢", log_details + f" 原因：{scrap_reason}")
                 conn.commit()
                 
