@@ -181,7 +181,7 @@ def render_dish_scrap_zone(current_user):
     with col2:
         scrap_qty = st.number_input("報廢數量 (份/碗)", min_value=1, value=1, step=1, key="scrap_qty_input")
         
-    scrap_reason = st.text_input("報廢備註說明", value="打烊未售完廚餘", key="scrap_reason_input")
+    scrap_reason = st.text_input("報廢備註說明", value="打烊未售完", key="scrap_reason_input")
 
     if st.button("❌ 確認報廢並扣除對應原物料", type="primary", use_container_width=True, key="scrap_submit_btn"):
         conn = get_db_conn()
