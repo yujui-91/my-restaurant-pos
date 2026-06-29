@@ -158,21 +158,25 @@ def render_dish_scrap_zone(current_user):
     st.markdown("### 🥣 每日整鍋殘餘 / 成品報廢登記")
     st.caption("此功能會根據料理的配方表（BOM），自動計算並透過 FIFO（先進先出）扣除對應的原物料庫存。適合用於打烊時倒掉的殘餘砂鍋菜底、羹湯。")
     
+    # 修正處：直接從 db_core 載入或此處查詢 P 開頭的餐點，讓選單跟隨正式菜單動態更新
+    # 如果要包含已下架的餐點報廢，可用 "SELECT prod_name FROM products WHERE prod_id LIKE 'P%' ORDER BY prod_name"
+    # 這裡採用最乾淨的現有正常販售餐點查詢：
     conn = get_db_conn()
     cursor = conn.cursor()
     
     try:
-        # 動態抓取所有商品（排除原物料），讓選單保持乾淨
-        cursor.execute("SELECT prod_name FROM products WHERE is_ingredient = 0 OR is_ingredient IS NULL ORDER BY prod_name")
+        # 篩選編號 P 開頭且正常上架(status=1)的成品餐點
+        cursor.execute("SELECT prod_name FROM products WHERE status = 1 AND prod_id LIKE 'P%' ORDER BY prod_name")
         dish_options = [row[0] for row in cursor.fetchall()]
-    except Exception:
-        # 備用方案
-        dish_options = ["砂鍋菜(大碗)", "砂鍋菜(小碗)", "浮水魚羹","小菜-滷豆腐","小菜-泡菜","小菜-龍鬚菜","小菜-涼拌小黃瓜","小菜-切片豆干"]
+    except Exception as e:
+        # 真正的防錯備用方案
+        dish_options = []
+        st.error(f"載入菜單失敗，請檢查資料庫。錯誤原因: {e}")
     finally:
         conn.close()
 
     if not dish_options:
-        st.warning("目前系統中無可選擇的成品品項。")
+        st.warning("目前系統中無可選擇的成品品項，請先至前台POS建立菜單配方。")
         return
 
     col1, col2 = st.columns(2)
@@ -234,6 +238,7 @@ def render_dish_scrap_zone(current_user):
                 
                 st.toast(f"🗑️ 報廢成功！『{selected_scrap_dish}』x {scrap_qty} 份，相關原物料已從庫存扣除！", icon="✅")
                 st.success(f"🎉 成功登記報廢！已自動透過 FIFO 扣除對應原物料，並寫入審計軌跡。")
+                st.rerun()
             else:
                 st.error("未能成功扣除任何原物料庫存，請檢查原料庫存量是否不足。")
                 
