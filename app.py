@@ -47,7 +47,7 @@ show_pending_toast()
 
 st.title("🍳 赤山堡砂鍋 後台管理")
 
-setup_sidebar()
+setup_sidebar(is_home=True)
 init_db()
 
 st.sidebar.markdown("### 👤 操作人員設定")

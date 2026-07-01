@@ -701,20 +701,38 @@ def auto_recovery_monitor():
     """, height=0, width=0) # 設定寬高為 0，完全不影響老闆娘看畫面排版
 
 
-def setup_sidebar():
-    """全站共用的側邊欄設定，包含操作人員選單"""
+def setup_sidebar(is_home=False):
+    """全站共用的側邊欄設定"""
+    # 1. 確保全域變數 current_user 隨時都有初始預設值
     if 'current_user' not in st.session_state:
         st.session_state.current_user = "老闆娘"
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("👤 當前操作人員")
+    st.sidebar.subheader("👤 操作人員資訊")
     
-    user_list = ["老闆娘", "老闆", "育睿", "堃原", "芹媖"]
-    
-    # 這裡的 key="current_user" 依然會自動綁定到 st.session_state.current_user
-    st.sidebar.selectbox(
-        "請選擇人員：", 
-        options=user_list, 
-        key="current_user"
-    )
-    st.sidebar.markdown("---")    
+    if is_home:
+        # 🌟 如果是首頁：顯示下拉選單讓老闆娘切換人員
+        user_list = ["老闆娘", "老闆", "育睿", "堃原", "芹媖"]
+        
+        # 為了防止切換頁面時丟失選擇，先計算當前使用者在選單中的位置（Index）
+        try:
+            default_idx = user_list.index(st.session_state.current_user)
+        except ValueError:
+            default_idx = 0
+            
+        # 關鍵：這裡的 key 改用 "user_select_widget"，不要直接用 "current_user"
+        selected_user = st.sidebar.selectbox(
+            "請選擇目前操作人員：", 
+            options=user_list, 
+            index=default_idx,
+            key="user_select_widget"
+        )
+        
+        # 手動將選單結果同步到全域持久的變數中
+        st.session_state.current_user = selected_user
+    else:
+        # 🌟 如果是其他功能分頁：不顯示選單（防止丟失狀態），只用純文字漂亮地秀出是誰
+        st.sidebar.markdown(f"當前操作人員：**{st.session_state.current_user}**")
+        st.sidebar.caption("💡 如需更換人員，請返回「首頁」調整")
+        
+    st.sidebar.markdown("---")  
