@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from database.db_core import init_db, trigger_toast, show_pending_toast, log_history,auto_recovery_monitor
-from database.db_core import get_db_conn
+from database.db_core import get_db_conn,setup_sidebar
 # 從 db_core 載入所需的快取函式
 from database.db_core import (
     cached_fetch_safety_items,
@@ -50,19 +50,12 @@ st.title("🍳 赤山堡砂鍋 後台管理")
 # --- 修改處：設定預設操作人員為「老闆娘」 ---
 if 'current_user' not in st.session_state:
     st.session_state.current_user = "老闆娘"
+
+setup_sidebar()
 init_db()
 
 st.sidebar.markdown("### 👤 操作人員設定")
 
-# 透過明確的清單提供選擇
-user_list = ["老闆", "老闆娘", "堃原", "育睿", "芹媖"]
-
-# 直接使用 key="current_user" 讓 Streamlit 自動雙向綁定狀態
-st.sidebar.selectbox(
-    "操作人員", 
-    options=user_list, 
-    key="current_user"
-)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ 快速微調安全庫存線")

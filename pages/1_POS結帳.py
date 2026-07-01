@@ -5,7 +5,7 @@ import re
 import json
 from datetime import datetime
 from database.db_core import log_history, deduct_stock_fifo, get_next_dish_id, update_dish_and_bom, trigger_toast, show_pending_toast
-from database.db_core import get_db_conn
+from database.db_core import get_db_conn,setup_sidebar
 # 從 db_core 載入所需的快取函式
 from database.db_core import (
     cached_fetch_active_dishes,
@@ -15,7 +15,7 @@ from database.db_core import (
     cached_fetch_all_dishes_raw,
     cached_fetch_all_materials_raw
 )
-
+setup_sidebar()
 show_pending_toast()
 
 st.subheader("🛒 收銀結帳與出餐管理系統")

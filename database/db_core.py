@@ -699,3 +699,19 @@ def auto_recovery_monitor():
         });
     </script>
     """, height=0, width=0) # 設定寬高為 0，完全不影響老闆娘看畫面排版
+
+
+def setup_sidebar():
+    """全站共用的側邊欄設定，包含操作人員選單"""
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("👤 當前操作人員")
+    
+    user_list = ["老闆娘", "老闆", "育睿", "堃原", "芹媖"]
+    
+    # 這裡的 key="current_user" 依然會自動綁定到 st.session_state.current_user
+    st.sidebar.selectbox(
+        "請選擇人員：", 
+        options=user_list, 
+        key="current_user"
+    )
+    st.sidebar.markdown("---")    
