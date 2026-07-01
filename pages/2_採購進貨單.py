@@ -12,7 +12,7 @@ show_pending_toast()
 
 st.subheader("📝 採購進貨與費用登記單")
 
-current_user = st.session_state.current_user
+# 改善處：已完全移除 current_user = st.session_state.current_user 區域變數，防止狀態干擾
 
 po_tabs = st.tabs(["📥 新進貨單登記", "✏️ 歷史採購單修正"])
 
@@ -174,7 +174,8 @@ with po_tabs[0]:
                     formatted_target_month = f"{selected_year}-{month_digits:02d}"
                     
                     log_action = "帳單支出登記"
-                    log_history(current_user, log_action, f"新單登記：{chosen_name}，費用月份：{selected_year}年{selected_month_str}，總金額：${total_invoice_amount}。 目標歸帳月份: {formatted_target_month} (賬單批次: {new_batch_id})")
+                    # 改善處：直接將操作人參數改為 st.session_state.current_user
+                    log_history(st.session_state.current_user, log_action, f"新單登記：{chosen_name}，費用月份：{selected_year}年{selected_month_str}，總金額：${total_invoice_amount}。 目標歸帳月份: {formatted_target_month} (賬單批次: {new_batch_id})")
                     trigger_toast(f"帳單費用登記完成！【{chosen_name} ({selected_year}年{selected_month_str}費用)】總金額：${total_invoice_amount}", icon="📥")
                 else:
                     log_action = "採購進貨"
@@ -183,11 +184,11 @@ with po_tabs[0]:
                     is_auto_enabled = not existing_items_df.empty and chosen_name in existing_items_df['prod_name'].values and existing_items_df[existing_items_df['prod_name'] == chosen_name].iloc[0]['status'] == 0
                     auto_enabled_log = " (偵測到下架食材，系統已在進貨時自動將其重新啟用上架！)" if is_auto_enabled else ""
 
-                    # --- 修改處：將總進貨量(大包裝x轉換率)與小單位直接算好存入歷史詳細說明中 ---
+                    # 改善處：直接將操作人參數改為 st.session_state.current_user
                     log_history(
-                    current_user, 
-                    log_action, 
-                    f"新單登記：{chosen_name}，進貨量：{po_qty}{p_unit} (等同於內含總量: {total_use_units:,.1f} {u_unit}，轉換率: {c_factor})，總金額：${total_invoice_amount}{vendor_info}{auto_enabled_log} (賬單批次: {new_batch_id})"
+                        st.session_state.current_user, 
+                        log_action, 
+                        f"新單登記：{chosen_name}，進貨量：{po_qty}{p_unit} (等同於內含總量: {total_use_units:,.1f} {u_unit}，轉換率: {c_factor})，總金額：${total_invoice_amount}{vendor_info}{auto_enabled_log} (賬單批次: {new_batch_id})"
                     )
                     trigger_toast(f"採購登記完成！【{chosen_name}】庫存已增加 {total_use_units:,.1f} {u_unit}{auto_enabled_log}", icon="📥")
                 
@@ -381,7 +382,7 @@ with po_tabs[1]:
                 else:
                     audit_trail = f"採購歷史修正【批次 {target_batch_id} - {matched_batch_row['商品名稱']}】 (賬單批次: {target_batch_id}):\n"
                     if str(matched_batch_row['商品名稱']) != new_prod_name:
-                        audit_trail += f" * 商品名稱：自【{matched_batch_row['商品名稱']}】變更為【{new_prod_name}】\n"
+                        audit_trail += f" *商品名稱：自【{matched_batch_row['商品名稱']}】變更為【{new_prod_name}】\n"
                     if float(matched_batch_row['進貨大包裝數']) != new_po_qty:
                         audit_trail += f" * 進貨數量：自 {matched_batch_row['進貨大包裝數']} 修改為 {new_po_qty}\n"
                     if float(matched_batch_row['推估總金額']) != new_total_amount:
@@ -407,7 +408,8 @@ with po_tabs[1]:
                 cached_fetch_existing_items_for_po.clear()
                 cached_fetch_history_batches.clear()
                 
-                log_history(current_user, "採購單更正", audit_trail)
+                # 改善處：直接將操作人參數改為 st.session_state.current_user
+                log_history(st.session_state.current_user, "採購單更正", audit_trail)
                 
                 trigger_toast(f"💾 資料覆蓋成功！名稱與規格完美修正！", icon="✏️")
                 st.rerun()

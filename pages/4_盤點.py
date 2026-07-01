@@ -13,7 +13,7 @@ st.subheader("📋 存貨盤點核實")
 
 use_mobile_view = st.toggle("📱 切換為手機/平板專用排版", value=False, key="audit_mobile_toggle")
 
-current_user = st.session_state.current_user
+# 改善處：已完全移除 current_user = st.session_state.current_user 區域變數，防止狀態干擾
 
 audit_cate_filter = st.radio("🗂️ 請選擇盤點項目類別：", ["食材 (R)", "用品 (S)"], horizontal=True)
 prefix_char = "R%" if "食材" in audit_cate_filter else "S%"
@@ -122,7 +122,8 @@ if not df_products_in_stock.empty:
                             f"盤點核實覆蓋。品項：【{item_name}({target_prod_id})】的[批次 {target_batch_id}]。習得歷史進貨日: {orig_inbound}，原登記供應商: {orig_vendor if orig_vendor else '無'}。"
                             f"該批次系統理論數: {theoretical_qty:,.2f} {unit_label} -> 現場實盤數: {actual_qty_val:,.2f} {unit_label}。盤點結果：{audit_status}，持續繼承單價基準: ${current_base_cost:.4f}/{unit_label}。"
                         )
-                        log_history(current_user, f"存貨盤點-{item_name}", log_details)
+                        # 改善處：直接將操作人參數優化為 st.session_state.current_user
+                        log_history(st.session_state.current_user, f"存貨盤點-{item_name}", log_details)
                         
                         trigger_toast(f"📋 批次 {target_batch_id} 盤點修正完成！結果：{audit_status}", icon="🔍")
                         st.success(f"🎉 [批次 {target_batch_id}] 數據更新成功！盤點結果：{audit_status}")

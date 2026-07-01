@@ -11,15 +11,15 @@ show_pending_toast()
 
 st.subheader("🔧 庫存管理面板")
 
-
-current_user = st.session_state.current_user
+# 改善處：已完全移除頂層的 current_user 區域變數，防止狀態干擾
 
 
 # ==========================================
 # 區塊一：【原物料微調】Fragment 區域
 # ==========================================
 @st.fragment
-def render_stock_adjustment_zone(current_user):
+def render_stock_adjustment_zone():
+    # 改善處：不再透過參數傳遞，函式內部直接讀取 st.session_state.current_user
     st.markdown("### 📋 一般原物料庫存微調")
     st.caption("此區用於原料過期、損壞、打翻或盤點微調時，直接對『單一原料的特定進貨批次』進行數量加減。")
     
@@ -136,7 +136,8 @@ def render_stock_adjustment_zone(current_user):
                                     f"動作：{adj_type}，數量變動：{final_qty_change} {unit_label}，異動後現存：{new_total_qty} {unit_label}，"
                                     f"總值變動: ${total_value_change:.2f}。原因：{final_reason}。 目標歸帳月份: {formatted_target_month}"
                                 )
-                                log_history(current_user, f"手動調整庫存-品項:{target_prod_id}", log_details)
+                                # 改善處：直接內部呼叫 st.session_state.current_user
+                                log_history(st.session_state.current_user, f"手動調整庫存-品項:{target_prod_id}", log_details)
                                 
                                 trigger_toast(f"🛠️ 批次庫存微調完畢！品項：{item_name}，變動量：{final_qty_change:+,.1f}", icon="🔧")
                                 st.success(f"🎉 批次庫存調整成功！已成功紀錄於歷史動作審計軌跡，並歸帳至 {formatted_target_month}。")
@@ -153,7 +154,8 @@ def render_stock_adjustment_zone(current_user):
 # 區塊二：【成品殘餘報廢】Fragment 區域
 # ==========================================
 @st.fragment
-def render_dish_scrap_zone(current_user):
+def render_dish_scrap_zone():
+    # 改善處：不再透過參數傳遞，函式內部直接讀取 st.session_state.current_user
     st.markdown("### 🥣 每日餐點報廢登記")
    
     conn = get_db_conn()
@@ -219,8 +221,8 @@ def render_dish_scrap_zone(current_user):
                     success_count += 1
             
             if success_count > 0:
-                # 4. 寫入歷史審計軌跡（只包含餐點份數與備註原因）
-                log_history(current_user, "手動調整庫存-成品報廢", log_details + f" 原因：{scrap_reason}")
+                # 4. 寫入歷史審計軌跡（改善處：直接呼叫 st.session_state.current_user）
+                log_history(st.session_state.current_user, "手動調整庫存-成品報廢", log_details + f" 原因：{scrap_reason}")
                 conn.commit()
                 
                 # 強制刷新快取，確保調整完後即時在系統生效
@@ -247,8 +249,8 @@ tab1, tab2 = st.tabs(["📋 一般原物料微調", "🥣 餐點剩餘報廢"])
 
 with tab1:
     # 呼叫獨立的原料調整 Fragment 函式
-    render_stock_adjustment_zone(current_user)
+    render_stock_adjustment_zone()
 
 with tab2:
     # 呼叫獨立的成品報廢 Fragment 函式
-    render_dish_scrap_zone(current_user)
+    render_dish_scrap_zone()

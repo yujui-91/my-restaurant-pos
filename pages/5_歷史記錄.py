@@ -9,7 +9,8 @@ from database.db_core import cached_fetch_audit_history
 
 st.subheader("📜 歷史動作審計軌跡")
 
-current_user = st.session_state.current_user
+# 改善處：已完全移除 current_user = st.session_state.current_user 區域變數，防止狀態干擾
+
 col_f1, col_f2 = st.columns(2)
 
 with col_f1:

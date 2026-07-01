@@ -94,6 +94,7 @@ if not all_items_for_safety.empty:
         cached_fetch_low_stock_alerts.clear()
         cached_fetch_merged_stock.clear()
         
+        # 改善處：直接將 st.session_state.current_user 作為參數傳入
         log_history(
             st.session_state.current_user, 
             f"修正餐點參數-安全庫存變更", 

@@ -22,7 +22,7 @@ st.subheader("🛒 收銀結帳與出餐管理系統")
 
 use_mobile_view = st.toggle("📱 切換為手機/平板大按鈕專用排版", value=False, key="pos_mobile_toggle")
 
-current_user = st.session_state.current_user
+# 改善處：已完全移除 current_user = st.session_state.current_user 區域變數，防止狀態干擾
 
 if 'pos_shopping_cart' not in st.session_state:
     st.session_state.pos_shopping_cart = []
@@ -331,6 +331,7 @@ def render_pos_checkout_zone():
                             }
                             final_log_entry = details_log + " ||STRUCT_DATA||" + json.dumps(structured_payload, ensure_ascii=False)
                             
+                            # 改善處：將操作人參數直接改為呼叫 st.session_state.current_user
                             hist_id = log_history(st.session_state.current_user, "多品項收銀結帳", final_log_entry, shared_cursor=cursor)
                             
                             cursor.execute('''INSERT INTO orders (timestamp, user, total_revenue, total_cost, status, history_id)
@@ -362,7 +363,7 @@ def render_pos_checkout_zone():
                             conn.rollback()
                             cursor.close()
                             conn.close()
-                            st.error(f"🚨 會計核心異常：交易已安全回融。原因：{e}")
+                            st.error(f"🚨 會計核心異常：交易已退回。原因：{e}")
             with col_conf2:
                 if st.button("❌ 修改餐點", use_container_width=True):
                     st.session_state.show_checkout_confirm = False
@@ -478,6 +479,7 @@ def render_modify_orders_tab():
                     cached_fetch_today_orders.clear()
                     
                     orig_brief = order_details_text.split("||STRUCT_DATA||")[0]
+                    # 改善處：將操作人參數直接改為呼叫 st.session_state.current_user
                     log_history(st.session_state.current_user, "訂單作廢成功", f"操作人員執行整單作廢。被作廢單號: {target_hist_id} ｜ 原始交易時間: {orig_order_timestamp} ｜ 退回營業額: ${parsed_total_revenue} 元 ｜ 庫存原物料已完整回補。 原始單據內容為: [{orig_brief}]")
                     
                     trigger_toast(f"已成功作廢單號 {target_hist_id} 的點餐紀錄，庫存已同步回補！", icon="🗑️")
@@ -636,6 +638,7 @@ def render_modify_orders_tab():
                             }
                             updated_full_log = details_text_part + " ||STRUCT_DATA||" + json.dumps(new_payload_struct, ensure_ascii=False)
                             
+                            # 改善處：將操作人參數直接改為呼召 st.session_state.current_user
                             new_hist_id = log_history(st.session_state.current_user, "更正點餐數量", updated_full_log, shared_cursor=cursor)
                             
                             cursor.execute('''INSERT INTO orders (timestamp, user, total_revenue, total_cost, status, history_id)
@@ -777,7 +780,7 @@ def render_dish_recipe_modification_zone():
                     matched_raw = all_raw_df[all_raw_df['prod_id'] == p_item['食材編號']]
                     r_cost = float(matched_raw.iloc[0]['cost']) if not matched_raw.empty else 0.0
                     custom_custom_dish_calc_cost += p_item['單位用量'] * r_cost
-                    
+                
                 custom_profit = float(pos_custom_price) - custom_custom_dish_calc_cost
                 custom_margin = (custom_profit / pos_custom_price * 100) if pos_custom_price > 0 else 0.0
                 
@@ -815,8 +818,9 @@ def render_dish_recipe_modification_zone():
                             cached_fetch_active_dishes.clear()
                             cached_fetch_all_dishes_raw.clear()
                             
+                            # 改善處：將操作人參數直接改為呼叫 st.session_state.current_user
                             log_history(
-                                current_user, 
+                                st.session_state.current_user, 
                                 f"修正餐點參數-新創自訂餐點-{pos_custom_name}", 
                                 f"創立了全新的新菜色：{pos_custom_name}({new_d_id})，定價 ${pos_custom_price}，設定基本單位配方成本 ${custom_custom_dish_calc_cost:.2f}。"
                             )
@@ -1017,8 +1021,9 @@ def render_dish_recipe_modification_zone():
                         cached_fetch_active_dishes.clear()
                         cached_fetch_all_dishes_raw.clear()
                         
+                        # 改善處：將操作人參數直接改為呼叫 st.session_state.current_user
                         log_history(
-                            current_user, 
+                            st.session_state.current_user, 
                             f"修正餐點參數-整鍋拆分配方-{pot_base_name}", 
                             f"透過 B模式 創立整鍋基底餐點：{pot_base_name}。整鍋物料總成本 ${total_pot_cost:.2f}。成功獨立產出大碗成本 ${single_large_cost:.2f}/小碗成本 ${single_small_cost:.2f}."
                         )
@@ -1211,7 +1216,8 @@ def render_dish_recipe_modification_zone():
                     cached_fetch_dish_bom_recipe.clear(td_id)
                     cached_fetch_all_dishes_raw.clear()
                     
-                    log_history(current_user, f"修正餐點參數-{target_dish_name}", change_details + f" * 同步重算標準原物料配方成本為: ${updated_dish_base_cost:.2f}")
+                    # 改善處：將操作人參數直接改為呼叫 st.session_state.current_user
+                    log_history(st.session_state.current_user, f"修正餐點參數-{target_dish_name}", change_details + f" * 同步重算標準原物料配方成本為: ${updated_dish_base_cost:.2f}")
                     trigger_toast(f"餐點【{target_dish_name}】售價與合併配方已成功覆蓋更新！", icon="⚙️")
                     del st.session_state.editing_recipe_list
                     del st.session_state.editing_recipe_dish_id
@@ -1255,7 +1261,8 @@ def render_item_management_and_disable_zone():
                         cached_fetch_active_dishes.clear()
                         cached_fetch_all_dishes_raw.clear()
                         
-                        log_history(current_user, "修正餐點參數-餐點重新上架", f"上架餐點菜單品項：{matched_del_dish['prod_name']} ({del_dish_id})")
+                        # 改善處：將操作人參數直接改為呼叫 st.session_state.current_user
+                        log_history(st.session_state.current_user, "修正餐點參數-餐點重新上架", f"上架餐點菜單品項：{matched_del_dish['prod_name']} ({del_dish_id})")
                         trigger_toast(f"餐點【{matched_del_dish['prod_name']}】已重新上架！", icon="🚀")
                         st.rerun()
                 else:
@@ -1270,7 +1277,8 @@ def render_item_management_and_disable_zone():
                         cached_fetch_active_dishes.clear()
                         cached_fetch_all_dishes_raw.clear()
                         
-                        log_history(current_user, "修正餐點參數-餐點下架隱藏", f"下架隱藏餐點菜單品項：{matched_del_dish['prod_name']} ({del_dish_id})")
+                        # 改善處：將操作人參數直接改為呼叫 st.session_state.current_user
+                        log_history(st.session_state.current_user, "修正餐點參數-餐點下架隱藏", f"下架隱藏餐點菜單品項：{matched_del_dish['prod_name']} ({del_dish_id})")
                         trigger_toast(f"餐點【{matched_del_dish['prod_name']}】已成功下架！", icon="🗑️")
                         st.rerun()
 
@@ -1307,7 +1315,8 @@ def render_item_management_and_disable_zone():
                         cached_fetch_active_materials.clear()
                         cached_fetch_all_materials_raw.clear()
                         
-                        log_history(current_user, "修正餐點參數-物料恢復使用", f"重新啟用後台物料/用品：{matched_del_mat['prod_name']} ({del_mat_id})")
+                        # 改善處：將操作人參數直接改為呼叫 st.session_state.current_user
+                        log_history(st.session_state.current_user, "修正餐點參數-物料恢復使用", f"重新啟用後台物料/用品：{matched_del_mat['prod_name']} ({del_mat_id})")
                         trigger_toast(f"品項【{matched_del_mat['prod_name']}】已重新啟用！", icon="✅")
                         st.rerun()
                 else:
@@ -1322,7 +1331,8 @@ def render_item_management_and_disable_zone():
                         cached_fetch_active_materials.clear()
                         cached_fetch_all_materials_raw.clear()
                         
-                        log_history(current_user, "修正餐點參數-物料停用下架", f"停用並下架後台物料/用品：{matched_del_mat['prod_name']} ({del_mat_id})")
+                        # 改善處：將操作人參數直接改為呼叫 st.session_state.current_user
+                        log_history(st.session_state.current_user, "修正餐點參數-物料停用下架", f"停用並下架後台物料/用品：{matched_del_mat['prod_name']} ({del_mat_id})")
                         trigger_toast(f"品項【{matched_del_mat['prod_name']}】已成功停用！", icon="🗑️")
                         st.rerun()
 

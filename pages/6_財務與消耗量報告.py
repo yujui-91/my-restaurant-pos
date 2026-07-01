@@ -55,6 +55,8 @@ end_str = datetime.combine(end_date, datetime.max.time()).strftime("%Y-%m-%d %H:
 
 st.caption(f"📈 目前統計審計區間：{start_date} ～ {end_date}")
 
+# 改善處：已完全移除頂層的 current_user 區域變數，防止狀態干擾
+
 # 計算查詢區間內，每天分別落在哪個月份，用來做精確的天數均攤比對
 query_days_by_month = {}
 current_ptr = start_date
