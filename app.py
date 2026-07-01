@@ -47,10 +47,6 @@ show_pending_toast()
 
 st.title("🍳 赤山堡砂鍋 後台管理")
 
-# --- 修改處：設定預設操作人員為「老闆娘」 ---
-if 'current_user' not in st.session_state:
-    st.session_state.current_user = "老闆娘"
-
 setup_sidebar()
 init_db()
 

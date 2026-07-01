@@ -22,9 +22,6 @@ st.subheader("🛒 收銀結帳與出餐管理系統")
 
 use_mobile_view = st.toggle("📱 切換為手機/平板大按鈕專用排版", value=False, key="pos_mobile_toggle")
 
-if 'current_user' not in st.session_state:
-    st.session_state.current_user = "老闆娘"
-
 if 'pos_shopping_cart' not in st.session_state:
     st.session_state.pos_shopping_cart = []
 

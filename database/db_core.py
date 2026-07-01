@@ -703,6 +703,9 @@ def auto_recovery_monitor():
 
 def setup_sidebar():
     """全站共用的側邊欄設定，包含操作人員選單"""
+    if 'current_user' not in st.session_state:
+        st.session_state.current_user = "老闆娘"
+
     st.sidebar.markdown("---")
     st.sidebar.subheader("👤 當前操作人員")
     
