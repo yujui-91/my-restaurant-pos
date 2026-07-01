@@ -329,7 +329,7 @@ with po_tabs[1]:
             new_prod_name = st.text_input("更正品項/食材名稱", value=str(matched_batch_row['商品名稱'])).strip()
             col_edit1, col_edit2, col_edit3 = st.columns(3)
             with col_edit1:
-                new_p_unit = st.text_input("大包裝進貨單位 (如:台斤、箱)", value=str(matched_batch_row['進貨單位'])).strip()
+                new_p_unit = st.text_input("大包裝進貨單位 (如:包、箱、袋)", value=str(matched_batch_row['進貨單位'])).strip()
                 new_po_qty = st.number_input("新設定的進貨大包裝總數量", min_value=0.0, value=float(max(matched_batch_row['進貨大包裝數'], 0.0)), step=1.0)
             with col_edit2:
                 new_u_unit = st.text_input("廚房基本使用小單位 (如:g、個)", value=str(matched_batch_row['使用單位'])).strip()
