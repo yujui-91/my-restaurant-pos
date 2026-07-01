@@ -331,11 +331,11 @@ def render_pos_checkout_zone():
                             }
                             final_log_entry = details_log + " ||STRUCT_DATA||" + json.dumps(structured_payload, ensure_ascii=False)
                             
-                            hist_id = log_history(current_user, "多品項收銀結帳", final_log_entry, shared_cursor=cursor)
+                            hist_id = log_history(st.session_state.current_user, "多品項收銀結帳", final_log_entry, shared_cursor=cursor)
                             
                             cursor.execute('''INSERT INTO orders (timestamp, user, total_revenue, total_cost, status, history_id)
                                               VALUES (?, ?, ?, ?, 1, ?)''', 
-                                           (now_time_str, current_user, float(total_bill_amount), float(actual_total_cost), hist_id))
+                                           (now_time_str, st.session_state.current_user, float(total_bill_amount), float(actual_total_cost), hist_id))
                             new_order_id = cursor.lastrowid
                             
                             for d_item in st.session_state.pos_shopping_cart:
@@ -478,7 +478,7 @@ def render_modify_orders_tab():
                     cached_fetch_today_orders.clear()
                     
                     orig_brief = order_details_text.split("||STRUCT_DATA||")[0]
-                    log_history(current_user, "訂單作廢成功", f"操作人員執行整單作廢。被作廢單號: {target_hist_id} ｜ 原始交易時間: {orig_order_timestamp} ｜ 退回營業額: ${parsed_total_revenue} 元 ｜ 庫存原物料已完整回補。 原始單據內容為: [{orig_brief}]")
+                    log_history(st.session_state.current_user, "訂單作廢成功", f"操作人員執行整單作廢。被作廢單號: {target_hist_id} ｜ 原始交易時間: {orig_order_timestamp} ｜ 退回營業額: ${parsed_total_revenue} 元 ｜ 庫存原物料已完整回補。 原始單據內容為: [{orig_brief}]")
                     
                     trigger_toast(f"已成功作廢單號 {target_hist_id} 的點餐紀錄，庫存已同步回補！", icon="🗑️")
                     st.rerun() 
@@ -636,11 +636,11 @@ def render_modify_orders_tab():
                             }
                             updated_full_log = details_text_part + " ||STRUCT_DATA||" + json.dumps(new_payload_struct, ensure_ascii=False)
                             
-                            new_hist_id = log_history(current_user, "更正點餐數量", updated_full_log, shared_cursor=cursor)
+                            new_hist_id = log_history(st.session_state.current_user, "更正點餐數量", updated_full_log, shared_cursor=cursor)
                             
                             cursor.execute('''INSERT INTO orders (timestamp, user, total_revenue, total_cost, status, history_id)
                                               VALUES (?, ?, ?, ?, 1, ?)''', 
-                                           (orig_order_timestamp, current_user, float(new_total_bill), float(final_new_cost), new_hist_id))
+                                           (orig_order_timestamp, st.session_state.current_user, float(new_total_bill), float(final_new_cost), new_hist_id))
                             
                             conn.commit()
                             cursor.close()
