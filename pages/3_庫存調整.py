@@ -11,8 +11,7 @@ show_pending_toast()
 
 st.subheader("🔧 庫存管理面板")
 
-if 'current_user' not in st.session_state:
-    st.session_state.current_user = "老闆娘"
+
 current_user = st.session_state.current_user
 
 

@@ -11,8 +11,7 @@ from database.db_core import cached_fetch_existing_items_for_po, cached_fetch_hi
 show_pending_toast()
 
 st.subheader("📝 採購進貨與費用登記單")
-if 'current_user' not in st.session_state:
-    st.session_state.current_user = "老闆娘"
+
 current_user = st.session_state.current_user
 
 po_tabs = st.tabs(["📥 新進貨單登記", "✏️ 歷史採購單修正"])

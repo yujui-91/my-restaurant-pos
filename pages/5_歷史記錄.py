@@ -8,8 +8,7 @@ from database.db_core import get_db_conn, get_taiwan_now
 from database.db_core import cached_fetch_audit_history
 
 st.subheader("📜 歷史動作審計軌跡")
-if 'current_user' not in st.session_state:
-    st.session_state.current_user = "老闆娘"
+
 current_user = st.session_state.current_user
 col_f1, col_f2 = st.columns(2)
 
