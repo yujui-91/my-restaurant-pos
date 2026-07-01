@@ -12,7 +12,8 @@ show_pending_toast()
 
 st.subheader("📝 採購進貨與費用登記單")
 
-# 改善處：已完全移除 current_user = st.session_state.current_user 區域變數，防止狀態干擾
+if 'current_user' not in st.session_state:
+    st.session_state.current_user = "老闆娘"
 
 po_tabs = st.tabs(["📥 新進貨單登記", "✏️ 歷史採購單修正"])
 
