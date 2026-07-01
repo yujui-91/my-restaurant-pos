@@ -5,8 +5,8 @@ import sqlite3
 from datetime import datetime
 from database.db_core import log_history, trigger_toast, show_pending_toast, get_db_conn
 # 從 db_core 載入所需的快取函式
-from database.db_core import cached_fetch_products_in_stock_for_audit, cached_fetch_batch_details_for_audit
-
+from database.db_core import cached_fetch_products_in_stock_for_audit, cached_fetch_batch_details_for_audit,setup_sidebar
+setup_sidebar()
 show_pending_toast()
 
 st.subheader("📋 存貨盤點核實")
