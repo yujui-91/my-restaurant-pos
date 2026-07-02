@@ -87,17 +87,6 @@ def render_stock_adjustment_zone():
                     adj_type = st.radio("動作選擇", ["過期損耗/報廢 (扣減庫存)", "手動補正(增加庫存)"], horizontal=True, key="adj_action_type")
                     st.number_input(f"請輸入異動變更的數量 ({unit_label})  ", value=1.0, step=1.0, key="adjust_qty_input")
                     
-                    st.markdown("###### 📅 請指定此筆損耗歸屬之完整年份與月份（確保跨年財報精確）：")
-                    col_adj_y, col_adj_m = st.columns(2)
-                    with col_adj_y:
-                        this_year = datetime.now().year
-                        adj_year_options = [this_year, this_year - 1]
-                        selected_adj_year = st.selectbox("歸帳年份", adj_year_options, index=0, key="adj_year_select")
-                    with col_adj_m:
-                        bill_months_options = [f"{i}月" for i in range(1, 13)]
-                        current_month_idx = max(0, min(datetime.now().month - 1, 11))
-                        adj_month_str = st.selectbox("歸帳月份", bill_months_options, index=current_month_idx, key="adj_month_select")
-                    
                     reason_txt = st.text_input("請填寫微調/報廢原因說明 (選填)", value="", key="adj_reason_input")
                     submit_adj = st.form_submit_button("🔧 確認執行庫存異動")
                     
@@ -129,19 +118,17 @@ def render_stock_adjustment_zone():
                                 cached_fetch_unique_items_to_adjust.clear()
                                 cached_fetch_batches_by_prod.clear()
                                 
-                                month_digits = int(adj_month_str.replace("月", ""))
-                                formatted_target_month = f"{selected_adj_year}-{month_digits:02d}"
 
                                 log_details = (
                                     f"庫存微調【{item_name}】(批次編號 {batch_id_part}，進貨日: {orig_inbound_date})。"
                                     f"動作：{adj_type}，數量變動：{final_qty_change} {unit_label}，異動後現存：{new_total_qty} {unit_label}，"
-                                    f"總值變動: ${total_value_change:.2f}。原因：{final_reason}。 目標歸帳月份: {formatted_target_month}"
+                                    f"總值變動: ${total_value_change:.2f}。原因：{final_reason}。"
                                 )
                                 # 改善處：直接內部呼叫 st.session_state.current_user
                                 log_history(st.session_state.current_user, f"手動調整庫存-品項:{target_prod_id}", log_details)
                                 
                                 trigger_toast(f"🛠️ 批次庫存微調完畢！品項：{item_name}，變動量：{final_qty_change:+,.1f}", icon="🔧")
-                                st.success(f"🎉 批次庫存調整成功！已成功紀錄於歷史動作審計軌跡，並歸帳至 {formatted_target_month}。")
+                                st.success(f"🎉 批次庫存調整成功！已成功紀錄於歷史動作審計軌跡。")
                                 st.rerun()
             else:
                 st.stop()
