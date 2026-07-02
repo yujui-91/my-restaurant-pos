@@ -1049,6 +1049,13 @@ def render_dish_recipe_modification_zone():
                 st.session_state.editing_recipe_list = db_recipe.to_dict(orient='records')
                 st.session_state.editing_recipe_dish_id = td_id
 
+            st.markdown("###### ✏️ 調整餐點基本資訊：")
+            col_info_edit1, col_info_edit2 = st.columns(2)
+            with col_info_edit1:
+                new_dish_name_input = st.text_input("🏷️ 調整餐點名稱（欲修改再更動，維持原名不用動）", value=target_dish_name, key=f"edit_name_input_{td_id}").strip()
+            with col_info_edit2:
+                new_dish_price = st.number_input("💵 調整此餐點售價（欲修改再輸入，維持原販售價請留 0）", min_value=0, step=1, value=0, key=f"edit_price_input_{td_id}")
+
             st.markdown("###### ➕ 追加食材至此餐點中：")
             
             mat_filter_edit = st.radio("🔍 篩選原物料類別", ["顯示全部", "僅看食材 (R)", "僅看用品 (S)"], horizontal=True, key="mat_filter_edit")
@@ -1156,8 +1163,6 @@ def render_dish_recipe_modification_zone():
             else:
                 st.info("此餐點目前沒有任何配方物料，請利用上方追加。")
 
-            new_dish_price = st.number_input("💵 調整此餐點售價（欲修改再輸入，維持原販售價請留 0）", min_value=0, step=1, value=0, key=f"edit_price_input_{td_id}")
-            
             display_price = old_price if new_dish_price == 0 else new_dish_price
 
             current_editing_cost = 0.0
@@ -1171,6 +1176,7 @@ def render_dish_recipe_modification_zone():
 
             st.markdown(f"""
             > 💡 **此餐點配方與售價即時動態預估試算面板：**
+            > * 餐點名稱： **{new_dish_name_input}** {"*(維持原名稱)*" if new_dish_name_input == target_dish_name else "*(已修正名稱)*"}
             > * 調整後餐點售價： **{display_price} 元** {"*(維持原價)*" if new_dish_price == 0 else "*(已修正售價)*"}
             > * 依目前用量推算【**單份標準原物料成本**】： **${current_editing_cost:,.2f} 元**
             > * 預估修正後【**單份毛利**】： **${current_editing_profit:,.2f} 元** ｜ 預估毛利率: **{current_editing_margin:.1f}%**
@@ -1179,7 +1185,9 @@ def render_dish_recipe_modification_zone():
             recipe_has_negative = any(float(item["單位用量"]) <= 0 for item in st.session_state.editing_recipe_list)
             
             if st.button("💾 寫入變更", type="primary", use_container_width=True):
-                if display_price <= 0:
+                if not new_dish_name_input:
+                    st.error("❌ 錯誤變更：餐點名稱不能為空！儲存失敗。")
+                elif display_price <= 0:
                     st.error("❌ 錯誤變更：販售價格必須為大於 0 的整數！儲存失敗。")
                 elif recipe_has_negative:
                     st.error("❌ 錯誤變更：保留的配方用量必須大於 0！(若要刪除物料請勾選後方的「移除」並重試)。儲存失敗。")
@@ -1187,6 +1195,8 @@ def render_dish_recipe_modification_zone():
                     st.error("❌ 錯誤變更：修改後的配方清單不能為空！儲存失敗. ")
                 else:
                     change_details = f"修改餐點【{target_dish_name}({td_id})】配置：\n"
+                    if new_dish_name_input != target_dish_name:
+                        change_details += f" * 名稱：從 【{target_dish_name}】 改為 【{new_dish_name_input}】\n"
                     if display_price != old_price:
                         change_details += f" * 價格：從 ${old_price} 改為 ${display_price}\n"
                         
@@ -1202,7 +1212,7 @@ def render_dish_recipe_modification_zone():
                         
                     conn = get_db_conn()
                     cursor = conn.cursor()
-                    cursor.execute("UPDATE products SET price = ?, cost = ? WHERE prod_id = ?", (float(display_price), updated_dish_base_cost, td_id))
+                    cursor.execute("UPDATE products SET prod_name = ?, price = ?, cost = ? WHERE prod_id = ?", (new_dish_name_input, float(display_price), updated_dish_base_cost, td_id))
                     cursor.execute("DELETE FROM bom WHERE parent_id = ?", (td_id,))
                     for b_save in recipe_list_to_save:
                         cursor.execute("INSERT INTO bom VALUES (?, ?, ?)", (td_id, b_save['食材編號'], b_save['單位用量']))
@@ -1215,8 +1225,8 @@ def render_dish_recipe_modification_zone():
                     cached_fetch_all_dishes_raw.clear()
                     
                     # 改善處：將操作人參數直接改為呼叫 st.session_state.current_user
-                    log_history(st.session_state.current_user, f"修正餐點參數-{target_dish_name}", change_details + f" * 同步重算標準原物料配方成本為: ${updated_dish_base_cost:.2f}")
-                    trigger_toast(f"餐點【{target_dish_name}】售價與合併配方已成功覆蓋更新！", icon="⚙️")
+                    log_history(st.session_state.current_user, f"修正餐點參數-{new_dish_name_input}", change_details + f" * 同步重算標準原物料配方成本為: ${updated_dish_base_cost:.2f}")
+                    trigger_toast(f"餐點【{new_dish_name_input}】設定與合併配方已成功覆蓋更新！", icon="⚙️")
                     del st.session_state.editing_recipe_list
                     del st.session_state.editing_recipe_dish_id
                     st.rerun()
